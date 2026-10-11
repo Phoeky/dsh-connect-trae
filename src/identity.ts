@@ -1,9 +1,25 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { cpus, homedir, release } from 'node:os'
+import { cpus, homedir, release, userInfo } from 'node:os'
 import type { TraeEdition, TraeStorageCandidate } from './paths.ts'
 import { traeWindowsAppNames } from './paths.ts'
+import { parseTraeAuthValue } from './decrypt.ts'
+
+/**
+ * The per-install ECDSA P-256 keypair the official client registers with the
+ * device, and signs its token-refresh proof with.
+ *
+ * It lives in the same `storage.json` as the credential, under
+ * `iCubeAuthInfo://icube-dc:<deviceId>`, encrypted with the same codec — so the
+ * key that PROVES a device is the key stored beside the login it protects.
+ * Without it the new refresh contract cannot be satisfied at all (the server
+ * rejects a proof signed by any other key with `20403 Token device not match`).
+ */
+export interface TraeDeviceKeyPair {
+  privateKeyPEM: string
+  publicKeyPEM: string
+}
 
 export interface TraeIdentity {
   edition: TraeEdition
@@ -14,6 +30,15 @@ export interface TraeIdentity {
   deviceBrand?: string
   deviceCpu?: string
   osVersion?: string
+  /**
+   * Device display name; the official client sends the OS account's full name.
+   * Optional because the new refresh contract does not read it.
+   */
+  deviceName?: string
+  /** Device model, e.g. `MacBookPro18,2`. Optional; not required by the server. */
+  deviceModel?: string
+  /** The install's registered device keypair, when `storage.json` carries one. */
+  deviceKeyPair?: TraeDeviceKeyPair
   platform: NodeJS.Platform
 }
 
@@ -25,6 +50,33 @@ function deviceCenterId(storage: Record<string, unknown>): string | undefined {
   const prefix = 'iCubeAuthInfo://icube-dc:'
   const ids = Object.keys(storage).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)).filter(Boolean)
   return ids.length === 1 ? ids[0] : undefined
+}
+
+/**
+ * Read the install's device keypair out of `storage.json`.
+ *
+ * Tolerant on purpose: an older install (or one that has never refreshed on the
+ * new contract) simply has no keypair, and the caller must still be able to
+ * resolve an identity for the chat/usage paths — only a refresh then degrades.
+ * A malformed entry is treated as absent rather than failing the read.
+ */
+export function deviceKeyPairOf(storage: Record<string, unknown>): TraeDeviceKeyPair | undefined {
+  const key = Object.keys(storage).find(name => name.startsWith('iCubeAuthInfo://icube-dc:'))
+  if (key === undefined) return undefined
+  const encoded = storage[key]
+  if (typeof encoded !== 'string' || encoded.trim() === '') return undefined
+  try {
+    const plaintext = parseTraeAuthValue(encoded)
+    if (typeof plaintext !== 'object' || plaintext === null || Array.isArray(plaintext)) return undefined
+    const value = plaintext as Record<string, unknown>
+    const privateKeyPEM = nonEmpty(value['privateKeyPEM'])
+    const publicKeyPEM = nonEmpty(value['publicKeyPEM'])
+    // Both halves are required: the proof needs the private key to sign, and the
+    // public key is what the server bound the device to at registration.
+    return privateKeyPEM === undefined || publicKeyPEM === undefined ? undefined : { privateKeyPEM, publicKeyPEM }
+  } catch {
+    return undefined
+  }
 }
 
 export interface TraeIdentityReadOptions {
@@ -94,6 +146,15 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate, options:
   const deviceBrand = platform === 'darwin' ? nonEmpty(env['TRAE_DEVICE_BRAND']) : undefined
   const deviceCpu = cpus()[0]?.model.split(' ')[0]
   const osVersion = `${platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform} ${release()}`
+  // The OS account's full name is what the official client sends as DeviceName,
+  // and the host's hardware model is what it sends as DeviceModel. Both are
+  // best-effort: neither is read by the server, and an unreadable user record
+  // must not fail identity resolution.
+  const deviceName = ((): string | undefined => {
+    try { return nonEmpty(userInfo().username) } catch { return undefined }
+  })()
+  const deviceModel = nonEmpty(env['TRAE_DEVICE_MODEL'])
+  const deviceKeyPair = deviceKeyPairOf(storage)
   return {
     edition: candidate.edition,
     machineId,
@@ -102,6 +163,9 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate, options:
     ...buildVersion === undefined ? {} : { buildVersion },
     ...deviceBrand === undefined ? {} : { deviceBrand },
     ...deviceCpu === undefined ? {} : { deviceCpu },
+    ...deviceName === undefined ? {} : { deviceName },
+    ...deviceModel === undefined ? {} : { deviceModel },
+    ...deviceKeyPair === undefined ? {} : { deviceKeyPair },
     osVersion,
     platform,
   }

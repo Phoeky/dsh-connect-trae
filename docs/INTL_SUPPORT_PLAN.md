@@ -23,8 +23,13 @@ Trae 国内版与国际版账号在本插件中获得完全对等的支持：**�
 3. **region 判定用凭证字段，不用用户配置。** 权威来源 `userRegion.region`（`'CN'|'SG'`，
    大小写不敏感——日志中亦见小写 `'sg'`），host 后缀 `.trae.ai` 兜底，edition 兜底。
 4. **refresh 契约按 edition 分叉（4 套），是唯一不按 region 二分的点**：
-   `cn` / `sg` / `solo` 走 `/cloudide/api/v3/trae/oauth/ExchangeToken` + ClientID `ono9krqynydwx5`；
-   `solo-sg` 走 `/trae/api/v3/oauth/ExchangeToken` + ClientID `en1oxy7wnw8j9n` + DeviceInfo（`PlatformCode: "SOLO_PC"`）。
+   ⚠️ **已被 2026-10-11 的新契约取代**，见 INTL_SG_EVIDENCE.md §2.2.1：四版现均走
+   `/trae/api/v3/oauth/ExchangeToken`，ClientID 按「是否 SOLO 包」分叉（桌面 `ono9krqynydwx5` /
+   SOLO（CN + 国际）`en1oxy7wnw8j9n`），且**强制 `DeviceProof` 签名**（密钥取自 storage.json 的
+   `iCubeAuthInfo://icube-dc:`）。旧 `/cloudide` 契约今日对 cn/sg/solo 仍 200，降级为**回退**。
+   下段为原设计记录：`cn` / `sg` / `solo` 走 `/cloudide/api/v3/trae/oauth/ExchangeToken` +
+   ClientID `ono9krqynydwx5`；`solo-sg` 走 `/trae/api/v3/oauth/ExchangeToken` + ClientID
+   `en1oxy7wnw8j9n` + DeviceInfo（`PlatformCode: "SOLO_PC"`）。
    证据见 INTL_SG_EVIDENCE.md §2.2（桌面版 `userJwt` 直证同 CN；SOLO 国际版官方日志直证新契约）。
 5. **请求头与解密器两侧通用（实测）**：`buildTraeCnHeaders` 的整套头（`x-app-id` `6eefa01c-…`、
    identity 头、`Cloud-IDE-JWT`）被 SG 网关原样接受；`decryptTraeStorageValue` 四版通吃。
@@ -143,8 +148,10 @@ export interface Config {
 - `region.spec.ts`（新）：`regionOfUserRegion`（`'SG'`/`'sg'`/缺失）、`regionOfHost`（`.trae.ai`
   / `.trae.cn` / 空）、`regionOfEdition` 四映射、`regionOfCredential` 三级兜底。
 - `auth.spec.ts`：四 edition 的 `candidates()` 全收；own 副本收 sg/solo-sg；account 列表带 region。
-- `refresh.spec.ts`（新或扩展）：四 edition 断言路径与 ClientID（`solo-sg` → `/trae/api/v3/oauth/`
-  + `en1oxy7wnw8j9n`；其余 → `/cloudide/api/v3/trae/oauth/` + `ono9krqynydwx5`）；solo-sg 带 DeviceInfo。
+- `refresh.spec.ts`（已重写）：四 edition 断言走当前契约 `/trae/api/v3/oauth/` 且 ClientID 按
+  「是否 SOLO 包」分叉（solo、solo-sg → `en1oxy7wnw8j9n` + `SOLO_PC`；cn、sg → `ono9krqynydwx5`
+  + `IDE_PC`）；proof 用真实 P-256 密钥签发并按**换行**连接的消息验证（空格连接必须验签失败）；
+  无 keypair 时降级旧 `/cloudide` 契约；当前契约被拒时回退；两条路径的失败都写进错误信息。
 - `catalog.spec.ts`：`regionStateOf` 迁移语义（旧扁平读作 cn、ai 绝不继承、显式槽优先）；
   `fallbackModelsFor` 隔离（ai 清单无 GLM/DeepSeek，cn 清单无 Gemini/GPT）。
 - `solo-remote.spec.ts` / `solo.spec.ts`：stub 凭据断言 cn → `solo.trae.cn`、ai → `coresg-normal.trae.ai`。

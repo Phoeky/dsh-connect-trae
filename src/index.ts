@@ -567,14 +567,28 @@ export function apply(ctx: Context, config: Config): void {
       return resolveTraeIdentity(candidates, cliEdition)
     }
     /**
-     * Resolution failures degrade to omitting DeviceInfo (its being required
-     * is unverified, docs/INTL_SG_EVIDENCE.md §5) rather than failing the
-     * refresh.
+     * The current refresh contract signs a DeviceProof with the install's own
+     * registered keypair, so every field the server reads must come from the
+     * SAME installation the credential belongs to.
+     *
+     * Resolution failures leave `deviceKeyPair` absent, and the refresh then
+     * degrades to the superseded contract instead of sending an unsigned
+     * request the server answers with `20405 Device proof required`.
      */
     const refreshDeviceSafe = async (): Promise<TraeRefreshDevice | undefined> => {
       try {
         const value = await identity()
-        return { deviceId: value.deviceId, machineId: value.machineId }
+        return {
+          deviceId: value.deviceId,
+          machineId: value.machineId,
+          ...value.deviceName === undefined ? {} : { deviceName: value.deviceName },
+          ...value.deviceModel === undefined ? {} : { deviceModel: value.deviceModel },
+          ...value.deviceBrand === undefined ? {} : { deviceBrand: value.deviceBrand },
+          ...value.deviceCpu === undefined ? {} : { deviceCpu: value.deviceCpu },
+          ...value.osVersion === undefined ? {} : { osVersion: value.osVersion },
+          ...value.appVersion === undefined ? {} : { appVersion: value.appVersion },
+          ...value.deviceKeyPair === undefined ? {} : { deviceKeyPair: value.deviceKeyPair },
+        }
       } catch {
         return undefined
       }

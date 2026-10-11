@@ -51,6 +51,10 @@ mchost 在 SG 侧也存在分片（`api5/api16/api22-normal-alisg.mchost.guru`�
 
 ### 2.2 Refresh 契约（等级 A；**按 App 分叉，不按 region 统一**）
 
+## 2.2 Refresh 契约（等级 A；**按 App 分叉，不按 region 统一**）
+
+> **2026-10-11 更新（当前客户端已换契约，见 §2.2.1）。** 下面的 §2.2 描述的是**旧契约**，它今天对 `cn` / `sg` / `solo` **仍然返回 200**，因此插件把它保留为**回退**；但当前客户端（Trae CN 3.4.2 / Trae 国际 3.6.2）已经改走 `/trae/api/v3/oauth/ExchangeToken` 并**强制要求 `DeviceProof`**。以 §2.2.1 为准。
+
 TRAE SOLO 国际版 2026-09-15 日志记录了官方 App 自己的刷新调用（`RefreshToken` 值在日志中已被 App 脱敏为 `******`）：
 
 - 端点：`https://growsg-normal.trae.ai/trae/api/v3/oauth/ExchangeToken`
@@ -63,7 +67,7 @@ TRAE SOLO 国际版 2026-09-15 日志记录了官方 App 自己的刷新调用�
 - 登录 URL（`www.trae.ai/authorization?...client_id=ono9krqynydwx5`）与 `revokeToken`（`grow-normal.trae.ai/cloudide/api/v3/trae/oauth/ClearRefreshToken`）佐证同一 OAuth client，路径前缀 `/cloudide/api/v3/trae/oauth/` 与 CN 相同。
 - 其 `PlatformCode` 为 `"TRAE"`（SOLO 为 `"SOLO_PC"`）。
 
-四个 edition 的 refresh 契约汇总：
+四个 edition 的**旧** refresh 契约汇总：
 
 | edition | 路径前缀（挂在凭证 host 上） | ClientID | body 特点 | 证据 |
 |---|---|---|---|---|
@@ -77,6 +81,69 @@ TRAE SOLO 国际版 2026-09-15 日志记录了官方 App 自己的刷新调用�
 - **ClientSecret**：SOLO 国际版官方发空字符串（CN 版插件发 `"-"` 也能通过）。
 - **DeviceInfo**：SOLO 国际版官方带（是否必填未实测）；桌面版 revoke body 也带 `DeviceID/MachineID/PlatformCode`。实现按官方形态带上最稳。
 - 日志中 `updateLocalCredential` 的 `userRegion` 为**小写** `"sg"`，而 storage.json 解密后 `userRegion.region` 为大写 `"SG"` —— 判定函数必须大小写不敏感。
+
+### 2.2.1 当前契约（2026-10-11 实测，等级 A+；**实现以此为准**）
+
+四个 edition 全部改为 **`/trae/api/v3/oauth/ExchangeToken`**，并**强制要求 `DeviceProof`**。证据有两条独立来源：
+
+1. **官方客户端自己的请求日志**（Trae CN 3.4.2 的 `logs/<ts>/main.log`、Trae 国际 3.6.2 同）
+   ——`[exchangeTokenByRefreshToken] request …` 与随后的 `[exchangeToken] response success`。
+2. **本机受控实测**：用每个安装**自己的** `storage.json` 凭证 + 该安装的 device keypair 签名，四个 edition **全部 HTTP 200**。
+
+| edition | ClientID | PlatformCode | 实测 |
+|---|---|---|---|
+| cn | `ono9krqynydwx5` | `IDE_PC` | 200 |
+| sg | `ono9krqynydwx5` | `IDE_PC` | 200 |
+| solo | `en1oxy7wnw8j9n` | `SOLO_PC` | 200 |
+| solo-sg | `en1oxy7wnw8j9n` | `SOLO_PC` | 200 |
+
+**ClientID 按「是否 SOLO 包」分叉，不按 region**——官方客户端的分支是 `packageType ∈ {SOLO_CN, SOLO_I18N, SOLO_CN_ENTERPRISE}` → SOLO ClientID，其余 → 桌面 ClientID。所以 **`solo`（SOLO CN）必须用 `en1oxy7wnw8j9n`**，这正是 §2.2 旧表「SOLO CN 用桌面 ClientID」在新契约下失效的地方（用桌面的 id 会得到 `10101 无效参数`）。
+
+**`DeviceProof` 的签名细节（全部实测确认，缺一不可）**：
+
+- 算法：**ECDSA P-256 / SHA-256**，输出 base64。
+- 签名消息：`["POST", 路径, ClientID, RefreshToken, String(时间戳秒), nonce].join("\n")`
+  —— 分隔符是**换行符**。官方 bundle 写作 `.join("\n")`（模板字面量跨行），**不是空格**；同样的字段用空格连接会被拒为 `20403`，与「密钥不对」的表现**完全一致**，极易误诊。
+- 私钥来源：`storage.json` 的 `iCubeAuthInfo://icube-dc:<deviceId>`，值与凭证同样加密，用**同一个** `decryptTraeStorageValue` 即可解出
+  `{"privateKeyPEM":"-----BEGIN PRIVATE KEY-----…","publicKeyPEM":"-----BEGIN PUBLIC KEY-----…"}`（已实测四版通吃）。
+  ⇒ **证明设备的密钥就存在它守护的那份登录旁边**，无需 keychain。
+- `nonce` = 16 字节随机 hex；`Timestamp` = 整秒。
+
+**`DeviceInfo` 字段的必填性（实测梯度）**：
+
+| 字段 | 必填 | 证据 |
+|---|---|---|
+| `DeviceID` | ✅ | 见下 `DeviceType`/`PlatformCode` 同组 |
+| `PlatformCode` + `DeviceType` | ✅ | 二者**同时**存在才通过；去掉任一 → `20403` |
+| `MachineID` | ❌ | 去掉仍 200 |
+| `ClientVersion`(=`IDEVersion`) | ❌ | 去掉仍 200 |
+| `DevicePublicKey` | ❌ | 去掉仍 200（签名已证明身份）——但实现仍带上，与官方同形 |
+
+**错误码语义**（决定回退策略）：
+
+| 码 | 文案 | 含义 |
+|---|---|---|
+| `20405` | Device proof required. | 新路径**完全没带** proof（`DeviceProof` 缺失或 `Signature` 为空） |
+| `20403` | Token device not match. | 带了 proof 但**签名/公钥/绑定**对不上（含空格分隔、随机密钥、无绑定 token） |
+| `10101` | 无效参数：{__Message.field}. | **ClientID 用错**（如 solo CN 用了桌面 id） |
+| `20101` | refresh token is invalid. | refresh token 本身失效（需重新登录） |
+
+成功响应除 `Token` / `TokenExpireAt` / `RefreshToken` 外还有 **`RefreshExpireAt`**、`BoundDeviceID`、`DeviceBindStatus:"BOUND"`、`UserJwt`。
+
+**ClientID 分叉同样适用于旧契约（2026-10-11 实测）**。旧 `/cloudide` 路径**今天对四个 edition 全部返回 200**，但**必须用各自对应的 ClientID**——用错会得到 `10101 refresh token is not matched to the client`：
+
+| edition | 旧 `/cloudide` + 桌面 id | 旧 `/cloudide` + SOLO id |
+|---|---|---|
+| cn | **200** | 400 |
+| sg | **200** | 400 |
+| solo | 400 | **200** |
+| solo-sg | 400 | **200** |
+
+说明这个分叉**属于 OAuth client，不属于 endpoint**：两条路径上是同一个 client 在换 token。3.1.0 之前的插件在旧路径上写死桌面 id，因此 **solo-sg 从来没有可用的刷新路径**——这也解释了为什么国际 SOLO 账号一旦过期就再也刷不回来。
+
+**回退策略**：实现**先试新契约（带 `DeviceProof`）、失败再试旧契约**，**两条路径都用各自 edition 的 ClientID**。新契约需要 device keypair，**没有 keypair 时（CLI-only / 旧安装）直接走旧契约**，不发送注定被 `20405` 拒绝的请求。实测四个 edition 在**两条路径上都能刷新成功**，所以回退是真正的兜底而非摆设。
+
+> 复现脚本：旧 `scripts/probe-intl*.mjs` 仍是 §2.2/§2.3 的；本次 §2.2.1 的结论由「读客户端 bundle 的 `NPe()`/`$v()`/`m(t)` 三个函数 + 读 App 自写日志 + 四 edition 实测」三方交叉得到，未新增脚本。
 
 ### 2.3 受控只读探测（等级 A+，2026-09-15 实测）
 
@@ -149,7 +216,7 @@ CN 版 `web_user_ent_usage`（积分包明细）在 SG 日志中**未出现**；
 | 项 | 风险 | 建议取证方式 |
 |---|---|---|
 | ~~`llm_utils_chat`（SOLO 主聊天路径）在 SG 的端到端可用性~~ | **已验证（2026-09-15，等级 A+）**：用 SOLO 国际版有效凭证 + 本项目正式代码路径（`prepareSoloBody` + `buildTraeCnHeaders` + `REGION_GATEWAYS.ai.chat`）发最小 `solo_work_lite` 请求，`gpt-5.4` 经 `coresg-normal.trae.ai` 返回 HTTP 200 + 完整 SSE（`metadata → timing_cost → output("OK") → extra_info → usage → done`，`provider_model_name: gpt-5.4-2026-03-05`）。`SseDecoder`/`decodeTraeEvent` 原样可用。脚本：`scripts/probe-intl-chat.mjs` | — |
-| SG refresh 的 `DeviceInfo` 是否必填 | 官方 App 带、CN 版插件不带也能过（CN 侧）；SG 侧未实测 | TRAE SOLO 国际版 token 2026-09-28 过期后自然触发；或实现时先带官方形态 |
+| ~~SG refresh 的 `DeviceInfo` 是否必填~~ | **已结清（2026-10-11，§2.2.1）**：新契约下 `DeviceID`/`PlatformCode`/`DeviceType` 必填，`MachineID`/`ClientVersion`/`DevicePublicKey` 可省；且真正的门槛不是 `DeviceInfo` 而是 **`DeviceProof` 签名** | — |
 | Trae 国际桌面版（App 已卸载）的 SG 网关是否同 SOLO | 其 5 月日志与 SOLO 今日日志 host 一致（coresg-normal） | 无需额外取证，按同网关实现 |
 | `custom_model_*` BYOK 条目是否应进目录 | display 名为空、可能只是模板 | 实现阶段在 merge 时按「display 名非空才收」或用户勾选控制 |
 | SG 分区 host 的稳定性（coresg-normal 之外还有无分区） | 分区由配置服务下发，理论上可能变化 | 凭证 host（`growsg-normal` 等）与 `coresg-normal` 均为 `-normal` 池，实现时可把网关 host 做成可配置的常量表，出问题只需改常量 |
@@ -162,9 +229,9 @@ CN 版 `web_user_ent_usage`（积分包明细）在 SG 日志中**未出现**；
 | region 判定 | `userRegion.region === 'CN'` | `'SG'`（host 后缀 `.trae.ai` 兜底；日志中亦见小写 `'sg'`，判定需大小写不敏感） |
 | 聊天网关 base | `https://trae-api-cn.mchost.guru` | `https://coresg-normal.trae.ai` |
 | remote 目录 base | `https://solo.trae.cn/api/remote/v1` | `https://coresg-normal.trae.ai/api/remote/v1` |
-| refresh 路径 | `/cloudide/api/v3/trae/oauth/ExchangeToken`（桌面 + SOLO 相同） | 桌面版 `/cloudide/api/v3/trae/oauth/ExchangeToken`；**SOLO `/trae/api/v3/oauth/ExchangeToken`** |
-| refresh ClientID | `ono9krqynydwx5`（桌面 + SOLO 相同） | 桌面版 `ono9krqynydwx5`（同 CN）；**SOLO `en1oxy7wnw8j9n`** |
-| refresh body | 无 DeviceInfo | SOLO 官方带 DeviceInfo（`SOLO_PC`） |
+| refresh 路径 | ~~`/cloudide/…`（CN/SG 旧）~~ | **两者现均为 `/trae/api/v3/oauth/ExchangeToken`**（旧 `/cloudide` 仍 200，降级为回退） |
+| refresh ClientID | ~~桌面统一 `ono9krqynydwx5`~~ | **按「是否 SOLO 包」分叉**：桌面 `ono9krqynydwx5`；SOLO（CN + 国际）`en1oxy7wnw8j9n` |
+| refresh body | 无 DeviceInfo | **`DeviceProof`（ECDSA P-256 签名，必填）** + `DeviceInfo`（`IDE_PC`/`SOLO_PC`）；`ClientSecret:""`、无 `UserID` |
 | usage 端点 | `/trae/api/v2/pay/web_user_ent_usage`（积分包） | `/trae/api/v1/pay/ide_user_pay_status`（订阅状态） |
 | 模型目录 | GLM/Kimi/DeepSeek 等 | Gemini/GPT/MiniMax/Kimi 等（互不重叠为主） |
 | 积分倍率 | `consumption_rate` 存在 | 未见（订阅制） |

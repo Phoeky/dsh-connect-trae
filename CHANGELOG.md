@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.1.0 (2026-10-11)
+
+### 修复
+
+- **适配 Trae 新版刷新契约（`DeviceProof` 签名），国内版与国际版一并支持**。原报告「国际版 token 获取不到」的表象是国际版 tab 恒报 `trae: token refresh failed … (http 401); sign in again in Trae`，根因有**两层**：
+
+  1. **表层——绑定了失效账号。** `accounts.ai` 指向的账号来自本机已卸载的 **TRAE SOLO 国际版**，其 access token 已于 2026-10-09 过期；同区域另一个有效账号（Trae 国际桌面版）就在旁边，但 `current()` 刻意不回退（避免静默换人计费），于是整个区域显示未登录。用配置里的账号下拉切一次即可恢复。
+
+  2. **深层——刷新契约已换代（本次修复的主体）。** 官方客户端（Trae CN 3.4.2 / Trae 国际 3.6.2）已从 `/cloudide/api/v3/trae/oauth/ExchangeToken` 换到 **`/trae/api/v3/oauth/ExchangeToken`**，并**强制要求 `DeviceProof`**：
+
+     - `DeviceProof.Signature` = 用**本机 ECDSA P-256 私钥**对 `["POST", 路径, ClientID, RefreshToken, 时间戳秒, nonce]` 做 SHA-256 签名（base64）。**六个字段用换行符连接**——官方 bundle 是 `.join("\n")`，用空格连接会被拒为 `20403 Token device not match`，表现与「密钥不对」**完全一致**，极易误诊。
+     - 私钥就存在 `storage.json` 的 `iCubeAuthInfo://icube-dc:<deviceId>` 里，与凭证同一套 AES 加密，**用现有的 `decryptTraeStorageValue` 即可解出**（四版通吃）——不需要 keychain。
+     - ClientID **按「是否 SOLO 包」分叉，不按 region**：桌面（cn/sg）→ `ono9krqynydwx5` + `IDE_PC`；SOLO（**solo 与 solo-sg**）→ `en1oxy7wnw8j9n` + `SOLO_PC`。**旧的「SOLO CN 用桌面 ClientID」在新契约下会得到 `10101 无效参数`**——这正是旧 `REFRESH_CONTRACT` 表的失效点。
+
+  实现：`src/refresh.ts` 重写为「当前契约（带签名）优先、旧契约回退」，`src/identity.ts` 新增 `deviceKeyPairOf()` 读出 keypair 并补 `DeviceName`/`DeviceModel`，宿主把 keypair 随 DeviceInfo 传入。**没有 keypair 时（CLI-only 或旧安装）直接走旧契约**，不发送注定被 `20405 Device proof required` 拒绝的请求。
+
+- **顺带修掉一个更隐蔽的老 bug：旧契约的 ClientID 一直用错。** 实测四个 edition 在旧 `/cloudide` 路径上**都能刷新成功**，但**必须用各自对应的 ClientID**（用错 → `10101 refresh token is not matched to the client`）。这说明该分叉**属于 OAuth client，不属于 endpoint**，而 3.1.0 之前插件在旧路径上**写死桌面 ClientID**，所以 **`solo` 与 `solo-sg` 的旧路径一直是 400**——国际 SOLO 账号一旦过期就再也刷不回来，正是本次报告的现象。现在两条路径共用同一张按 edition 分叉的 ClientID 表，四个 edition 在**两条路径上均实测 200**。
+
+- 错误码语义已实测归档（`docs/INTL_SG_EVIDENCE.md` §2.2.1）：`20405` 完全没带 proof、`20403` proof 对不上、`10101` ClientID 用错、`20101` refresh token 本身失效。
+
+### 证据
+
+- 两条独立来源交叉：**读客户端 bundle**（`NPe()` 签名函数、`$v()` ClientID 分支、`m(t)` 请求头）+ **读 App 自己写的请求日志**（`[exchangeTokenByRefreshToken] request …` / `[exchangeToken] response success`），再用**四个 edition 实测**验证：cn / sg / solo / solo-sg **全部 HTTP 200**。
+- `DeviceInfo` 必填梯度实测：`DeviceID` + `PlatformCode` + `DeviceType` 必填（去掉 `DeviceType` → `20403`），`MachineID` / `ClientVersion` / `DevicePublicKey` 可省（实现仍带全，与官方同形）。
+- 成功响应新增记录 `RefreshExpireAt`（此前被丢弃）。
+
+### 测试
+
+- `tests/refresh.spec.ts` 重写：四 edition 的路径/ClientID/PlatformCode、proof 用**真实 P-256 密钥**签发并按换行消息验签（并断言空格连接必然验签失败）、无 keypair 降级、当前契约被拒后回退、两条路径失败都进错误信息。
+- 全量 `pnpm run check`（typecheck × 2 + 495 测试 + build）通过；并用**构建产物 `lib/index.js`** 对四个 edition 做了端到端实测。
+
 ## 3.0.1 (2026-10-10)
 
 ### 修复
