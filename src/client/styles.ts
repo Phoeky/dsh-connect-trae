@@ -42,9 +42,10 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
 .dsm-trae-tab-active{color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-2,#232529);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2,#3a3d45)}
 .dsm-trae-tab-off{opacity:.55}
-.dsm-trae-tab-switch{display:inline-flex;align-items:center;flex:none;padding:0 8px 0 2px;cursor:pointer}
-.dsm-trae-tab-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
-.dsm-trae-tab-switch input:disabled{cursor:not-allowed}
+/* The tab switch borrows .dsm-trae-switch wholesale (see the knob rules above);
+   only the padding differs, so the tab bar reads as the same product as the
+   settings block instead of showing a raw accent checkbox beside it. */
+.dsm-trae-tab-switch{flex:none;padding:0 8px 0 2px}
 .dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:baseline}
 .dsm-trae-tab-hint{margin:0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
 .dsm-trae-tab-off-notice{margin:0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
@@ -70,40 +71,57 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-switch-track{position:relative;display:inline-block;width:34px;height:20px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45);transition:background .15s,border-color .15s}
 .dsm-trae-switch-track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-secondary,#c6c9d0);transition:transform .15s,background .15s}
 .dsm-trae-switch input:checked+.dsm-trae-switch-track{background:var(--dsw-alias-brand-primary,#5686fe);border-color:var(--dsw-alias-brand-primary,#5686fe)}
-.dsm-trae-switch input:checked+.dsm-trae-switch-track::after{transform:translateX(14px);background:#fff}
+.dsm-trae-switch input:checked+.dsm-trae-switch-track::after{transform:translateX(14px);background:var(--dsw-alias-bg-layer-1,#fff)}
 .dsm-trae-switch input:focus-visible+.dsm-trae-switch-track{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
 .dsm-trae-switch input:disabled+.dsm-trae-switch-track{opacity:.5}
 .dsm-trae-switch:has(input:disabled){cursor:default}
 .dsm-trae-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
-.dsm-trae-set-dirty{margin-right:auto;font-size:12px;line-height:18px;color:var(--dsw-state-warning,#d98f00)}
+.dsm-trae-set-dirty{margin-right:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dsm-trae-set-buttons{display:flex;gap:8px}
 /* The account block is a real table: the question it answers is "which of these
    accounts, and what is the action on each one" — a dropdown can only ever show
    the one already chosen. */
 .dsm-trae-accounts{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-accounts-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+/* The refresh button must not be squeezed into two lines by a long hint. */
+.dsm-trae-accounts-head>button{flex:none;white-space:nowrap}
 .dsm-trae-accounts-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-accounts-hint{margin:3px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-.dsm-trae-accounts-table{width:100%;border-collapse:collapse;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
-.dsm-trae-accounts-table th,.dsm-trae-accounts-table td{text-align:left;vertical-align:top;padding:8px 8px 8px 0;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
-.dsm-trae-accounts-table thead th{padding-top:0;border-top:0;font-weight:500;color:var(--dsw-alias-label-tertiary,#9aa0a8);white-space:nowrap}
-.dsm-trae-accounts-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.dsm-trae-accounts-account{display:flex;flex-direction:column;gap:3px;font-weight:400;min-width:0}
-.dsm-trae-accounts-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.dsm-trae-accounts-line .dsm-trae-usage-dot{margin-right:0;flex:none}
-.dsm-trae-accounts-name{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-accounts-badge{display:inline-flex;align-items:center;padding:0 6px;border-radius:6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45)}
-.dsm-trae-accounts-meta{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:16px}
-.dsm-trae-accounts-expiry{white-space:nowrap;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-.dsm-trae-accounts-row-current .dsm-trae-accounts-expiry,.dsm-trae-accounts-row-current .dsm-trae-accounts-meta{color:var(--dsw-alias-label-secondary,#c6c9d0)}
-.dsm-trae-accounts-switch{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:8px;padding:3px 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:transparent;white-space:nowrap}
-.dsm-trae-accounts-switch:hover:not(:disabled){color:var(--dsw-alias-label-primary,#e6e6e6);background:rgba(255,255,255,.04)}
-.dsm-trae-accounts-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
-.dsm-trae-accounts-switch:disabled{opacity:.5;cursor:default}
-.dsm-trae-accounts-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.dsm-trae-accounts-read{appearance:none;font:inherit;cursor:pointer;border:0;padding:0;background:transparent;font-size:12px;line-height:18px;color:var(--dsw-alias-brand-primary,#5686fe);text-decoration:underline}
-.dsm-trae-accounts-read:disabled{opacity:.5;cursor:default;text-decoration:none}
-.dsm-trae-accounts-read:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
+/* The account rows: two lines each — who the account is, then what it is worth
+   — with the one action that applies to THAT row on the right. A four-column
+   table was the wrong instrument here: every field demanded its own header, the
+   columns drifted with the content ("LaoDing" vs a full expiry stamp), and the
+   bound row repeated its "in use" badge in two different columns. */
+.dsm-trae-account-list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+.dsm-trae-account{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-account:first-child{border-top:0;padding-top:0}
+.dsm-trae-account-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}
+.dsm-trae-account-line{display:flex;align-items:center;gap:6px;min-width:0}
+.dsm-trae-account-line .dsm-trae-usage-dot{margin-right:0;flex:none}
+.dsm-trae-account-name{font-size:13px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-trae-account-current .dsm-trae-account-name{font-weight:600}
+.dsm-trae-account-badge{flex:none;padding:0 6px;border-radius:5px;font-size:10px;line-height:15px;font-weight:500;color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.12)}
+.dsm-trae-account-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8);min-width:0}
+.dsm-trae-account-meta i{font-style:normal;opacity:.4}
+.dsm-trae-account-value{color:var(--dsw-alias-label-secondary,#c6c9d0);font-variant-numeric:tabular-nums}
+.dsm-trae-account-value-on{color:#3f8d60;font-weight:500}
+.dsm-trae-account-note{margin:1px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-state-error-primary,#ef4444)}
+.dsm-trae-account-actions{display:flex;align-items:center;gap:6px;flex:none}
+/* The check-in is the only action on this card that reaches upstream account
+   state, so it is the one button allowed a colour. Everything else in the row
+   defers to it. */
+.dsm-trae-account-checkin{appearance:none;font:inherit;cursor:pointer;white-space:nowrap;border:1px solid rgba(86,134,254,.4);border-radius:7px;padding:2px 9px;font-size:12px;line-height:18px;font-weight:500;color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.08)}
+.dsm-trae-account-checkin:hover:not(:disabled){background:rgba(86,134,254,.16)}
+.dsm-trae-account-checkin:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
+/* A disabled check-in still STATES something ("claimed", "device used"), so it
+   stays readable — clearly inactive, not invisible. */
+.dsm-trae-account-checkin:disabled{opacity:.55;cursor:default;border-color:transparent;color:var(--dsw-alias-label-tertiary,#9aa0a8);background:transparent}
+/* The switch is the row's LIVE control, so it is brighter than the inert
+   check-in labels beside it: same shape, different weight. */
+.dsm-trae-account-switch{appearance:none;font:inherit;cursor:pointer;white-space:nowrap;border:0;border-radius:7px;padding:3px 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:transparent}
+.dsm-trae-account-switch:hover:not(:disabled){color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.12)}
+.dsm-trae-account-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
+.dsm-trae-account-switch:disabled{opacity:.45;cursor:default}
 .dsm-trae-mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:11px;font-weight:700;color:#111;background:linear-gradient(135deg,#ffd36e,#ffb84d);margin-right:6px}
 .dsm-trae-usage-list{display:flex;flex-direction:column;gap:10px}
 .dsm-trae-usage-text{margin:0;font-size:14px;line-height:22px;color:var(--dsw-alias-label-secondary,#b8b8b8)}
@@ -146,11 +164,10 @@ export const TRAE_CARD_CSS = `
    checkbox rendered unstyled and read as absent — the whole reason the switch
    looked missing. */
 .dsm-trae-models-actions{display:flex;align-items:center;gap:8px;flex:none}
-}
-.dsm-trae-usage-alternative{display:flex;align-items:flex-start;gap:10px;margin-top:10px;padding:10px 12px;border:1px solid var(--dsw-alias-state-warning-border,#7a5b12);border-radius:10px;background:var(--dsw-alias-state-warning-bg,#2a2313)}
+.dsm-trae-usage-alternative{display:flex;align-items:flex-start;gap:10px;margin-top:10px;padding:10px 12px;border:1px solid var(--dsw-alias-state-warn-secondary,#fbbf24);border-radius:10px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7)}
 .dsm-trae-usage-alternative-text{margin:0;flex:1 1 auto;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-usage-switch-button{flex:0 0 auto;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:8px;background:var(--dsw-alias-bg-layer-3,#2c2f36);color:var(--dsw-alias-label-primary,#e6e6e6);font-size:12px;line-height:16px;cursor:pointer}
-.dsm-trae-usage-switch-button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-4,#333740)}
+.dsm-trae-usage-switch-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
 .dsm-trae-usage-switch-button:disabled{opacity:.5;cursor:not-allowed}
 .dsm-trae-usage-note{margin:8px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
 .dsm-trae-models-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
@@ -159,7 +176,7 @@ export const TRAE_CARD_CSS = `
    the model. */
 .dsm-trae-model-probe{flex:none;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:500;line-height:15px;white-space:nowrap}
 .dsm-trae-model-probe-available{color:var(--dsw-alias-state-success-primary,#22a06b);border:1px solid color-mix(in srgb,var(--dsw-alias-state-success-primary,#22a06b) 40%,transparent)}
-.dsm-trae-model-probe-gated,.dsm-trae-model-probe-unsupported{color:var(--dsw-alias-state-warning-primary,#d98f20);border:1px solid color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d98f20) 40%,transparent)}
+.dsm-trae-model-probe-gated,.dsm-trae-model-probe-unsupported{color:var(--dsw-alias-state-warn-primary,#f59e0b);border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary,#f59e0b) 40%,transparent)}
 .dsm-trae-model-probe-auth{color:var(--dsw-alias-state-error-primary,#d92d20);border:1px solid color-mix(in srgb,var(--dsw-alias-state-error-primary,#d92d20) 40%,transparent)}
 .dsm-trae-model-probe-rate-limited,.dsm-trae-model-probe-unknown{color:var(--dsw-alias-label-tertiary,#999);border:1px solid color-mix(in srgb,var(--dsw-alias-label-tertiary,#999) 35%,transparent)}
 .dsm-trae-model-meta{display:flex;align-items:center;gap:7px 12px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
@@ -307,7 +324,7 @@ export const COMPOSER_POINTS_CSS = `
   background:var(--dsw-alias-label-dimmed,rgba(127,127,127,.5));
 }
 .dsm-trae-composer-panel-table tr.dsm-trae-composer-panel-row-current .dsm-trae-composer-panel-dot{
-  background:var(--dsw-state-success,#22a06b);
+  background:var(--dsw-alias-state-success-primary,#22c55e);
 }
 .dsm-trae-composer-panel-foot{
   display:flex;justify-content:space-between;gap:8px;

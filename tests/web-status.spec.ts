@@ -5,7 +5,7 @@ import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
 import type { TraeRegion } from '../src/region.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
 import { traeAccountCredits, traeWebUsage } from '../src/web-status.ts'
-import { TRAE_CHECKIN_PATH, TRAE_MODELS_TEST_PATH, TRAE_USAGE_PATH } from '../src/status-paths.ts'
+import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_MODELS_TEST_PATH, TRAE_USAGE_PATH } from '../src/status-paths.ts'
 
 const expiresAtMs = Date.now() + 60_000
 const credential: TraeCredential = {
@@ -611,6 +611,98 @@ describe('registerTraeUsageRoute region dispatch', () => {
       await route.handler(request({ ids: Array.from({ length: 65 }, (_, i) => `m${String(i)}`) }), tooMany.res)
       expect(tooMany.status()).toBe(400)
       expect(spent).toBe(0)
+    })
+  })
+
+  describe('per-account row state (account-status + per-account claim)', () => {
+    /** A GET request for the account-status route. */
+    function statusRequest(url = TRAE_ACCOUNT_STATUS_PATH): unknown {
+      return { method: 'GET', url, headers: {} }
+    }
+
+    /** A POST whose body streams JSON, exactly like the real claim POST. */
+    function claimRequest(body: unknown, url = `${TRAE_CHECKIN_PATH}?region=cn`): unknown {
+      return {
+        method: 'POST',
+        url,
+        headers: {},
+        async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body), 'utf8') },
+      }
+    }
+
+    it('serves one account row its CN check-in + balance state through accountStateOf', async () => {
+      const seen: { region: string; accountId: string }[] = []
+      const captured = await mountRoutes({
+        accountStateOf: async (region, accountId) => {
+          seen.push({ region, accountId })
+          return { id: accountId, credits: { total: 100, consumed: 0, available: 100, workAvailable: 0, generalAvailable: 50, accounts: [] } }
+        },
+      })
+      const route = captured.find(entry => entry.path === TRAE_ACCOUNT_STATUS_PATH)
+      if (route === undefined) throw new Error('account-status route was not registered')
+
+      const { res, status, body } = response()
+      await route.handler(statusRequest(`${TRAE_ACCOUNT_STATUS_PATH}?region=cn&accountId=account-1`), res)
+
+      expect(status()).toBe(200)
+      expect(seen).toEqual([{ region: 'cn', accountId: 'account-1' }])
+      expect(body()).toMatchObject({ id: 'account-1', credits: { generalAvailable: 50 } })
+    })
+
+    it('routes the account-status read to its own region', async () => {
+      const regions: string[] = []
+      const captured = await mountRoutes({
+        accountStateOf: async (region) => { regions.push(region); return { id: 'x' } },
+      })
+      const route = captured.find(entry => entry.path === TRAE_ACCOUNT_STATUS_PATH)
+      if (route === undefined) throw new Error('account-status route was not registered')
+
+      const { res, status } = response()
+      await route.handler(statusRequest(`${TRAE_ACCOUNT_STATUS_PATH}?region=ai&accountId=account-1`), res)
+      expect(status()).toBe(200)
+      expect(regions).toEqual(['ai'])
+    })
+
+    it('answers 503 when the host exposes no per-account status', async () => {
+      const captured = await mountRoutes() // no accountStateOf dependency
+      const route = captured.find(entry => entry.path === TRAE_ACCOUNT_STATUS_PATH)
+      if (route === undefined) throw new Error('account-status route was not registered')
+      const { res, status } = response()
+      await route.handler(statusRequest(`${TRAE_ACCOUNT_STATUS_PATH}?region=cn&accountId=account-1`), res)
+      expect(status()).toBe(503)
+    })
+
+    it('claims FOR a named account, never moving the binding', async () => {
+      const claimed: { region: string; accountId: string }[] = []
+      const captured = await mountRoutes({
+        claimCheckinOf: async (region, accountId) => {
+          claimed.push({ region, accountId })
+          return {
+            claim: { claimed: true, code: 0, message: 'success' },
+            checkin: { checkedIn: true, didCheckedIn: true, credits: 150, enabled: true, extraCredits: 50 },
+          }
+        },
+      })
+      const route = captured.find(entry => entry.path === TRAE_CHECKIN_PATH)
+      if (route === undefined) throw new Error('check-in route was not registered')
+
+      const { res, status, body } = response()
+      await route.handler(claimRequest({ accountId: 'account-2' }), res)
+
+      expect(status()).toBe(200)
+      expect(claimed).toEqual([{ region: 'cn', accountId: 'account-2' }])
+      expect(body()).toMatchObject({ claimed: true, alreadyCheckedIn: true, checkin: { checkedIn: true } })
+    })
+
+    it('reports an unknown account on the per-account claim', async () => {
+      const captured = await mountRoutes({
+        claimCheckinOf: async () => undefined,
+      })
+      const route = captured.find(entry => entry.path === TRAE_CHECKIN_PATH)
+      if (route === undefined) throw new Error('check-in route was not registered')
+      const { res, status } = response()
+      await route.handler(claimRequest({ accountId: 'nope' }), res)
+      expect(status()).toBe(404)
     })
   })
 })

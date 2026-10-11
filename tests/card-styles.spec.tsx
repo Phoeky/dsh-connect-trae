@@ -115,8 +115,8 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
     // "nothing is missing" assertion below pass for the wrong reason).
     expect(rendered).toContain('dsm-trae-set-row')
     expect(rendered).toContain('dsm-trae-switch-track')
-    expect(rendered).toContain('dsm-trae-accounts-table')
-    expect(rendered).toContain('dsm-trae-accounts-badge')
+    expect(rendered).toContain('dsm-trae-account-list')
+    expect(rendered).toContain('dsm-trae-account-checkin')
     expect(rendered.length).toBeGreaterThan(15)
 
     expect(rendered.filter(name => !defined.has(name) && !UNSTYLED_BY_DESIGN.has(name))).toEqual([])
@@ -132,6 +132,73 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
   it('gives the two new blocks a titled container, not a bare checkbox row', () => {
     expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-set\{/)
     expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-accounts\{/)
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-accounts-table\{/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-account-list\{/)
+  })
+})
+
+/**
+ * Two ways the stylesheet can be silently dead, both of which shipped once and
+ * neither of which any behavioural test can see (jsdom does no cascade, and an
+ * unstyled element still has the right classes and text).
+ *
+ * 1. A STRAY `}`. One orphan brace after `.dsm-trae-models-actions` closed the
+ *    block early and took out the very next rule — the credit-exhausted notice,
+ *    which is exactly the panel the user pointed at: it rendered as bare text
+ *    with the button pushed underneath instead of beside it, and every test
+ *    stayed green. Brace balance is the whole check.
+ * 2. A TOKEN DSH DOES NOT DEFINE. `var(--nope, #333740)` is valid CSS, so it
+ *    LOOKS handled, but the fallback then wins in BOTH themes. That is how the
+ *    notice button's hover became a dark slab with near-black text on it in the
+ *    light theme, while in the dark theme it barely changed at all: the rule
+ *    asked for `--dsw-alias-bg-layer-4`, which does not exist.
+ *
+ * The allowlist below is deliberately explicit. A new token has to be added by
+ * hand, which is the moment to check it against the DSH tokens (`grep` the app
+ * bundle) instead of inventing a plausible-looking name.
+ */
+const TOKENS_VERIFIED_AGAINST_DSH = new Set([
+  '--dsw-alias-bg-layer-1',
+  '--dsw-alias-bg-layer-2',
+  '--dsw-alias-bg-layer-3',
+  '--dsw-alias-border-l1',
+  '--dsw-alias-border-l2',
+  '--dsw-alias-brand-primary',
+  '--dsw-alias-interactive-bg-hover',
+  '--dsw-alias-label-dimmed',
+  '--dsw-alias-label-primary',
+  '--dsw-alias-label-secondary',
+  '--dsw-alias-label-tertiary',
+  '--dsw-alias-state-error-primary',
+  '--dsw-alias-state-success-primary',
+  '--dsw-alias-state-warn-primary',
+  '--dsw-alias-state-warn-secondary',
+  '--dsw-alias-state-warn-tertiary',
+])
+
+describe('the stylesheet cannot be silently dead', () => {
+  it('has balanced braces, so no rule is skipped as malformed', () => {
+    let depth = 0
+    let firstStray = -1
+    for (let index = 0; index < TRAE_CARD_CSS.length; index += 1) {
+      const char = TRAE_CARD_CSS[index]
+      if (char === '{') depth += 1
+      else if (char === '}') {
+        depth -= 1
+        if (depth < 0 && firstStray === -1) firstStray = index
+      }
+    }
+    // Report the offset, because "expected -1 to be 1" says nothing useful.
+    expect({ firstStray, depth }).toEqual({ firstStray: -1, depth: 0 })
+  })
+
+  it('only asks DSH for tokens that actually exist', () => {
+    const used = new Set<string>()
+    for (const match of TRAE_CARD_CSS.matchAll(/var\((--dsw-[a-z0-9-]+)/gi)) {
+      if (match[1] !== undefined) used.add(match[1])
+    }
+    // Nothing may be invented: a name DSH does not define silently falls back.
+    expect([...used].filter(name => !TOKENS_VERIFIED_AGAINST_DSH.has(name)).sort()).toEqual([])
+    // ...and the list must not rot into a superset nobody prunes.
+    expect(TOKENS_VERIFIED_AGAINST_DSH.size).toBe(used.size)
   })
 })

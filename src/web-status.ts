@@ -20,13 +20,15 @@ import type { TraeRegion } from './region.ts'
 import {
   regionOfTraeStatusUrl,
   TRAE_ACCOUNT_CREDITS_PATH,
+  TRAE_ACCOUNT_STATUS_PATH,
   TRAE_ACCOUNTS_REFRESH_PATH,
   TRAE_CHECKIN_PATH,
   TRAE_MODELS_REFRESH_PATH,
   TRAE_MODELS_TEST_PATH,
   TRAE_USAGE_PATH,
 } from './status-paths.ts'
-import type { TraeWebAccount, TraeWebAccountCredit, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCredits, TraeWebUsage } from './status-paths.ts'
+import type { TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCredits, TraeWebUsage, TraeWebPayStatus } from './status-paths.ts'
+import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 
 export { TRAE_USAGE_PATH, TRAE_ACCOUNT_CREDITS_PATH } from './status-paths.ts'
 export type { TraeWebUsage } from './status-paths.ts'
@@ -59,6 +61,19 @@ export interface TraeUsageRouteOptions {
    * exhausted-account hint is simply not offered.
    */
   creditsOfAccount?(region: TraeRegion, accountId: string): Promise<TraeWebCredits | undefined>
+  /**
+   * Per-account status for one row of the card's account table: CN → check-in
+   * + balances, ai → subscription. Read without changing which account is
+   * bound. Optional: when absent the account rows show no check-in/credits/
+   * subscription figures (the table still lists each account and its switch).
+   */
+  accountStateOf?(region: TraeRegion, accountId: string): Promise<TraeWebAccountState | undefined>
+  /**
+   * Claim today's check-in reward for ONE named account, without moving the
+   * binding. Optional: absent means the per-row claim button is disabled (the
+   * check-in surface simply is not offered).
+   */
+  claimCheckinOf?(region: TraeRegion, accountId: string): Promise<{ claim: TraeCheckinClaim; checkin: TraeCheckinStatus } | undefined>
   /**
    * The account the Trae app is signed in to right now, when it differs from
    * the bound one (issue #29). Optional: absent means the card's follow hint
@@ -145,6 +160,33 @@ async function readModelTestBody(req: IncomingMessage): Promise<string[]> {
   return ids
 }
 
+/**
+ * Read the accountId a per-account route needs from a POST body. A bounded,
+ * single-string reader — the same families of guards the model-test body uses,
+ * because the claim route here is a state-changing endpoint.
+ */
+async function readAccountBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer
+    size += buffer.byteLength
+    if (size > 16 * 1024) throw new Error('request body too large')
+    chunks.push(buffer)
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim()
+  if (text === '') throw new Error('empty body')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text) as unknown
+  } catch {
+    throw new Error('invalid JSON body')
+  }
+  const accountId = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>)['accountId'] : undefined
+  if (typeof accountId !== 'string' || accountId.trim() === '') throw new Error('body must carry an accountId string')
+  return accountId.trim()
+}
+
 /** Loopback browser origins only; other devices are refused until trusted origins exist. */
 function loopbackOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin
@@ -189,7 +231,7 @@ export function toCredits(snapshot: { summary: { totalAmount: number; consumedAm
 }
 
 /** Map the check-in answer to the card's compact document. */
-function toCheckin(status: {
+export function toCheckin(status: {
   checkedIn: boolean
   credits: number
   enabled: boolean
@@ -444,6 +486,33 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
       },
     })
+    /**
+     * Per-account status for one row of the card's account table (CN:
+     * check-in + balances; ai: subscription). Read-only, one upstream call per
+     * account, fetched once per table render. `accountId` rides in the query
+     * (a GET, like every other read-only sibling). Absent `accountStateOf`
+     * the route answers 503 so the table degrades to bare rows.
+     */
+    const disposeAccountStatus = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_ACCOUNT_STATUS_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
+        if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        if (deps.accountStateOf === undefined) return json(res, 503, { error: 'account status unavailable' })
+        const region = requestRegion(req, res)
+        if (region === undefined) return
+        const accountId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('accountId')
+        if (accountId === null || accountId.trim() === '') return json(res, 400, { error: 'missing accountId' })
+        try {
+          const state = await deps.accountStateOf(region, accountId)
+          if (state === undefined) return json(res, 404, { error: 'unknown account' })
+          json(res, 200, state)
+        } catch (error: unknown) {
+          json(res, 500, { error: safeMessage(error) })
+        }
+      },
+    })
     const disposeAccounts = ctx.webServer.register({
       kind: 'exact',
       path: TRAE_ACCOUNTS_REFRESH_PATH,
@@ -547,6 +616,34 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           return json(res, 404, { error: 'check-in is not available for the international region' })
         }
         try {
+          // The route now claims FOR a named account (the row's button), so the
+          // accountId travels in the body instead of always targeting the bound
+          // account. The per-account path uses `claimCheckinOf`, which reaches
+          // the account's own credential without moving the binding; absent
+          // that dependency the route degrades to the bound client (tests,
+          // hosts without the per-account seam).
+          let accountId: string | undefined
+          try {
+            accountId = await readAccountBody(req)
+          } catch {
+            // A bodyless call is the legacy bound-account behaviour.
+            accountId = undefined
+          }
+          if (accountId !== undefined) {
+            if (deps.claimCheckinOf === undefined) return json(res, 503, { error: 'check-in by account unavailable' })
+            const outcome = await deps.claimCheckinOf(region, accountId)
+            if (outcome === undefined) return json(res, 404, { error: 'unknown account' })
+            const { claim, checkin: after } = outcome
+            const deviceClaimed = claim.code === CHECKIN_DEVICE_ALREADY_CLAIMED
+            return json(res, 200, {
+              claimed: claim.claimed,
+              alreadyCheckedIn: after.checkedIn,
+              ...deviceClaimed ? { deviceCheckedIn: true } : {},
+              code: claim.code,
+              message: claim.message,
+              checkin: toCheckin(after),
+            })
+          }
           const client = deps.client(region)
           const current = await client.checkinStatus()
           if (!current.enabled) {
@@ -601,6 +698,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       disposeModelsTest()
       disposeAccounts()
       disposeAccountCredits()
+      disposeAccountStatus()
       disposeUsage()
     }
   }, 'dsh-connect-trae: Web usage route')

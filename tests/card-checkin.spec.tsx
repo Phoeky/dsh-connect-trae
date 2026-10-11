@@ -1,24 +1,27 @@
 // @vitest-environment jsdom
 /**
- * The card's daily check-in button, driven through a REAL click.
+ * The card's per-account daily check-in button, driven through a REAL click.
  *
  * WHY THIS FILE EXISTS — read before deleting or weakening it:
  * the claim route is the only place in this plugin that changes upstream
  * account state, so the card's side of it has to be verified against the
- * SHIPPED component rather than reasoned about. Three things must hold, and
- * each has a way of silently breaking:
+ * SHIPPED component rather than reasoned about. The check-in control now lives
+ * in EACH CN account row (it claims for THAT account without moving the whole
+ * binding), reading its state from the per-account status route. Three things
+ * must hold, and each has a way of silently breaking:
  *
- *  1. the button is offered only when the Host says the activity is enabled;
- *  2. it is disabled once today is claimed — off `checkedIn` OR `didCheckedIn`,
- *     because the upstream reports them separately and the official app treats
- *     either as done;
+ *  1. each row claims for ITSELF: the POST carries the row's `accountId`, and
+ *     per-row state powers the button — not one shared bound-account block;
+ *  2. a row's button is disabled once today is claimed — off `checkedIn` OR
+ *     `didCheckedIn`, because the upstream reports them separately and the
+ *     official app treats either as done;
  *  3. clicking it POSTs the region-scoped claim path, and a refusal that comes
  *     back as HTTP 200 with `claimed: false` is SHOWN, not swallowed.
  *
  * The component is rendered from `src/client/TraeUsageCard.tsx`; assertions are
  * on the rendered state and on the requests that actually went out.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Primitives ships browser-only CSS modules (shiki, `anser`, `*.module.css`) that
@@ -29,7 +32,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 }))
 
 import { TraeUsageCard } from '../src/client/TraeUsageCard.tsx'
-import { TRAE_CHECKIN_PATH, TRAE_USAGE_PATH, withTraeRegion } from '../src/status-paths.ts'
+import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_USAGE_PATH, withTraeRegion } from '../src/status-paths.ts'
 import type { TraeSettingsKey } from '../src/client/locales.ts'
 
 afterEach(() => {
@@ -57,8 +60,14 @@ function makeScope(initial: Record<string, unknown> = {}, writable = true) {
   }
 }
 
-/** One signed-in card document, with the check-in block under test. */
-function usageDocument(checkin: Record<string, unknown> | undefined, overrides: Record<string, unknown> = {}) {
+const ACCOUNT = { id: 'account-1', accountName: 'LaoDing', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true }
+
+/**
+ * One signed-in CN document carrying the roster whose row holds the check-in
+ * control under test. The check-in state itself comes from the per-account
+ * status route (`accountStatus`), not from the usage document.
+ */
+function usageDocument(overrides: Record<string, unknown> = {}) {
   return {
     status: 'signed-in',
     accountId: 'account-1',
@@ -66,32 +75,35 @@ function usageDocument(checkin: Record<string, unknown> | undefined, overrides: 
     tokenExpiresAtMs: Date.now() + 3_600_000,
     region: 'cn',
     enabled: true,
-    accounts: [],
+    accounts: [ACCOUNT],
     models: [],
     enabledModelIds: [],
     credits: { total: 7500, consumed: 5879.63, available: 1620.37, workAvailable: 0, generalAvailable: 20.37, accounts: [] },
-    ...checkin === undefined ? {} : { checkin },
     ...overrides,
   }
 }
 
 /**
- * Stub fetch for the card's two route families and record what was requested.
- * The usage route answers the given document; the claim route answers
- * `claimAnswer`.
+ * Stub fetch for the card's three route families and record what was requested.
+ * `accountStatus` is the per-account status route's answer for the row;
+ * `claimAnswer` is the claim route's answer.
  */
 function stubFetch(
   document: Record<string, unknown>,
+  accountStatus?: Record<string, unknown>,
   claimAnswer: { status?: number; body?: unknown } = {},
-): { calls: { url: string; method: string }[] } {
-  const calls: { url: string; method: string }[] = []
+): { calls: { url: string; method: string; body?: string }[] } {
+  const calls: { url: string; method: string; body?: string }[] = []
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
-    calls.push({ url, method: init?.method ?? 'GET' })
+    calls.push({ url, method: init?.method ?? 'GET', ...init?.method === 'POST' ? { body: String(init.body ?? '') } : {} })
     if (url.startsWith(TRAE_CHECKIN_PATH)) {
       return new Response(JSON.stringify(claimAnswer.body ?? { claimed: true, alreadyCheckedIn: false, code: 0, checkin: {} }), {
         status: claimAnswer.status ?? 200,
       })
+    }
+    if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) {
+      return new Response(JSON.stringify(accountStatus ?? { id: 'account-1' }), { status: 200 })
     }
     if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(document), { status: 200 })
     throw new Error(`unexpected fetch: ${url}`)
@@ -103,48 +115,61 @@ function stubFetch(
 async function renderOpen(scope: unknown): Promise<void> {
   render(<TraeUsageCard t={t} settingsScope={scope as never} />)
   fireEvent.click(screen.getByRole('button', { name: /row\.title/ }))
-  await waitFor(() => { expect(screen.getByText(/row\.checkinLabel/)).toBeTruthy() })
+  await waitFor(() => { expect(screen.getByText('LaoDing')).toBeTruthy() })
 }
 
-/** The check-in button, or a failure naming what the card actually rendered. */
-function checkinButton(): HTMLButtonElement {
-  return screen.getByRole('button', { name: /row\.checkin/ }) as HTMLButtonElement
+/** The account block, so its buttons are never confused with the model block's. */
+function accountBlock(): HTMLElement {
+  return screen.getByRole('region', { name: 'row.accountsTitle' })
+}
+
+/** One account row, by the account name it renders. */
+function accountRow(name: string): HTMLLIElement {
+  return within(accountBlock()).getByText(name).closest('li') as HTMLLIElement
+}
+
+/** A row's check-in button, or a failure naming what the card actually rendered. */
+function rowCheckin(row: string): HTMLButtonElement {
+  return within(accountRow(row)).getByRole('button', { name: /row\.checkin(ClaimWith|Claim|Claiming|Claimed|DeviceSpentShort)/ }) as HTMLButtonElement
 }
 
 describe('TraeUsageCard daily check-in', () => {
-  it('offers the claim button and labels the daily reward', async () => {
-    stubFetch(usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true, extraCredits: 50 }))
+  it('offers a check-in button in the account row, naming the payout on the button', async () => {
+    stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true, extraCredits: 50 } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const button = checkinButton()
-    expect(button.textContent).toBe('row.checkinClaim')
+    const button = rowCheckin('LaoDing')
+    // The day's base reward rides ON the button: the row states the payout
+    // without a second line of caption text beside it.
+    expect(button.textContent).toBe('row.checkinClaimWith:{"reward":"150"}')
     expect(button.disabled).toBe(false)
-    // The base reward AND the bonus are both shown, so the day's payout is not
-    // understated as 150 when the upstream actually grants 200.
-    expect(screen.getByText(/row\.checkinReward:.*150 \+ 50/)).toBeTruthy()
   })
 
-  it('POSTs the region-scoped claim path on a real click', async () => {
-    const document = usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true })
-    const { calls } = stubFetch(document)
+  it('POSTs the region-scoped claim path carrying the row account on a real click', async () => {
+    const { calls } = stubFetch(
+      usageDocument(),
+      { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } },
+    )
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(checkinButton())
+    fireEvent.click(rowCheckin('LaoDing'))
 
     await waitFor(() => { expect(calls.some(call => call.url === withTraeRegion(TRAE_CHECKIN_PATH, 'cn'))).toBe(true) })
     const claim = calls.find(call => call.url.startsWith(TRAE_CHECKIN_PATH))
     expect(claim?.method).toBe('POST')
     expect(claim?.url).toBe('/plugins/dsh-connect-trae/checkin?region=cn')
+    // The claim is FOR this row's account — the binding is never moved.
+    expect(claim?.body).toContain('account-1')
   })
 
   it('disables the button once today is claimed', async () => {
-    stubFetch(usageDocument({ checkedIn: true, didCheckedIn: true, credits: 150, enabled: true }))
+    stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: true, didCheckedIn: true, credits: 150, enabled: true } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const button = checkinButton()
+    const button = rowCheckin('LaoDing')
     expect(button.disabled).toBe(true)
     expect(button.textContent).toBe('row.checkinClaimed')
   })
@@ -153,29 +178,31 @@ describe('TraeUsageCard daily check-in', () => {
     // Measured 2026-09-26: `did_checked_in` is keyed on the DEVICE
     // (`x-device-id`), not on the account. After switching accounts on one
     // machine the status reads `checked_in: false, did_checked_in: true`: the
-    // machine's daily check-in is spent, but the newly selected account was
-    // never rewarded. The card must keep the button disabled (a claim could
-    // only be refused with 9095) while saying what actually happened — the old
-    // copy said "今日已领取", which was the reported bug.
-    stubFetch(usageDocument({ checkedIn: false, didCheckedIn: true, credits: 150, enabled: true }))
+    // machine's daily check-in is spent, but this account was never rewarded.
+    // The row must keep the button disabled (a claim could only be refused with
+    // 9095) while saying what actually happened — the old copy said "今日已领取",
+    // which was the reported bug.
+    stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: true, credits: 150, enabled: true } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const button = checkinButton()
+    const button = rowCheckin('LaoDing')
     expect(button.disabled).toBe(true)
-    expect(button.textContent).toBe('row.checkinClaim')
-    expect(screen.getByText('row.checkinDeviceSpent')).toBeTruthy()
-    expect(screen.queryByText(/row\.checkinDoneHint/)).toBeNull()
+    expect(button.textContent).toBe('row.checkinDeviceSpentShort')
+    // The full rule is the button's tooltip. Rendered as a paragraph it swamped
+    // the row and drowned out the account it belongs to.
+    expect(button.title).toBe('row.checkinDeviceSpent')
   })
 
   it('shows "claimed today" only when the ACCOUNT was paid', async () => {
-    stubFetch(usageDocument({ checkedIn: true, didCheckedIn: true, credits: 150, enabled: true }))
+    stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: true, didCheckedIn: true, credits: 150, enabled: true } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    expect(checkinButton().disabled).toBe(true)
-    expect(checkinButton().textContent).toBe('row.checkinClaimed')
-    expect(screen.queryByText('row.checkinDeviceSpent')).toBeNull()
+    expect(rowCheckin('LaoDing').disabled).toBe(true)
+    expect(rowCheckin('LaoDing').textContent).toBe('row.checkinClaimed')
+    // A paid account must never carry the device-spent explanation.
+    expect(rowCheckin('LaoDing').title).not.toBe('row.checkinDeviceSpent')
   })
 
   it('explains a device-spent refusal from the route instead of "failed"', async () => {
@@ -183,37 +210,38 @@ describe('TraeUsageCard daily check-in', () => {
     // the card must render the device explanation and NOT the generic
     // "签到失败" line — otherwise a rule of the upstream reads as a plugin bug.
     stubFetch(
-      usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true }),
+      usageDocument(),
+      { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } },
       { body: { claimed: false, alreadyCheckedIn: false, deviceCheckedIn: true, code: 9095, message: '当前设备今日已经签到，请明日再来哦～' } },
     )
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(checkinButton())
+    fireEvent.click(rowCheckin('LaoDing'))
 
-    await waitFor(() => { expect(screen.getByText('row.checkinDeviceSpent')).toBeTruthy() })
-    expect(screen.queryByText(/row\.checkinError/)).toBeNull()
+    await waitFor(() => { expect(rowCheckin('LaoDing').textContent).toBe('row.checkinDeviceSpentShort') })
+    expect(rowCheckin('LaoDing').title).toBe('row.checkinDeviceSpent')
+    expect(within(accountBlock()).queryByText(/row\.checkinError/)).toBeNull()
   })
 
-  it('hides the button and explains itself when the activity is disabled', async () => {
-    stubFetch(usageDocument({ checkedIn: false, didCheckedIn: false, credits: 0, enabled: false }))
+  it('disables the button and notes itself when the activity is disabled', async () => {
+    stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 0, enabled: false } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    expect(checkinButton().disabled).toBe(true)
-    expect(screen.getByText('row.checkinDisabled')).toBeTruthy()
+    expect(rowCheckin('LaoDing').disabled).toBe(true)
   })
 
-  it('renders no check-in block at all when the Host sends none', async () => {
-    // The international region has no check-in surface, so the Host omits the
-    // block; the card must not invent a button that cannot work.
-    stubFetch(usageDocument(undefined, { region: 'ai', credits: undefined, payStatus: { hasPackage: true, inTrial: false, trialEndTimeMs: 0, isDollarUsageBilling: false, isPayFreshman: false, enableSoloLite: false, enableSoloBuilder: false, enableSoloCoder: false, enableSoloWeb: false } }))
+  it('shows no check-in button when the roster is empty', async () => {
+    // With no account rows there is no check-in control (it lives per account),
+    // matching the old behaviour for a region whose Host omits the surface.
+    stubFetch(usageDocument({ accounts: [] }))
     const { scope } = makeScope()
     render(<TraeUsageCard t={t} settingsScope={scope as never} />)
     fireEvent.click(screen.getByRole('button', { name: /row\.title/ }))
-    await waitFor(() => { expect(screen.getByText(/row\.subscriptionLabel/)).toBeTruthy() })
+    await waitFor(() => { expect(accountBlock()).toBeTruthy() })
 
-    expect(screen.queryByText(/row\.checkinLabel/)).toBeNull()
+    expect(within(accountBlock()).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
   })
 
   it('shows a business refusal instead of swallowing it', async () => {
@@ -221,58 +249,98 @@ describe('TraeUsageCard daily check-in', () => {
     // code (9004 = the request was rejected). Rendering nothing there would
     // leave the user clicking a button that silently does nothing.
     stubFetch(
-      usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true }),
+      usageDocument(),
+      { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } },
       { body: { claimed: false, alreadyCheckedIn: false, code: 9004, message: 'The submitted order parameters are incorrect.' } },
     )
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(checkinButton())
+    fireEvent.click(rowCheckin('LaoDing'))
 
-    await waitFor(() => { expect(screen.getByText(/row\.checkinError:.*9004/)).toBeTruthy() })
+    await waitFor(() => { expect(within(accountBlock()).getByText(/row\.checkinError:.*9004/)).toBeTruthy() })
   })
 
-  it('claims for the ONE bound account only — never a per-account sweep', async () => {
-    // The account dropdown exists so a multi-account machine can switch who the
-    // card bills and signs in as (the WorkBuddy-style switch, issues #25/#29).
-    // That must NOT turn the single check-in button into a fan-out: Trae
-    // allows ONE claim per device per day (verified 2026-10-11 on a live CN
-    // account: `did_checked_in` flipped true→false with the `x-device-id`
-    // header dropped, same account, same day), so sweeping every account would
-    // only produce a 9095 refusal for each account after the first. The claim
-    // stays bound to the selected account and is sent exactly once.
-    const document = usageDocument(
-      { checkedIn: false, didCheckedIn: false, credits: 100, enabled: true },
+  it('claims for the ONE row clicked only — never a per-account sweep', async () => {
+    // Trae allows ONE claim per device per day (verified 2026-10-11 on a live
+    // CN account), so sweeping every account would only produce a 9095 refusal
+    // after the first. Each row therefore has its OWN claim button, but a click
+    // sends exactly one POST for that row's account and never fans out.
+    const document = usageDocument({
+      accounts: [
+        ACCOUNT,
+        { id: 'account-2', accountName: 'SecondCN', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: false },
+      ],
+    })
+    const { calls } = stubFetch(
+      document,
       {
-        accounts: [
-          { id: 'account-1', accountName: 'LaoDing', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true },
-          { id: 'account-2', accountName: 'SecondCN', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: false },
-          { id: 'account-3', accountName: 'SgAcc', edition: 'sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: false },
-        ],
+        id: 'account-1',
+        checkin: { checkedIn: false, didCheckedIn: false, credits: 100, enabled: true },
       },
     )
-    const { calls } = stubFetch(document)
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(checkinButton())
+    fireEvent.click(rowCheckin('LaoDing'))
 
     await waitFor(() => { expect(calls.some(call => call.url.startsWith(TRAE_CHECKIN_PATH))).toBe(true) })
     const claims = calls.filter(call => call.url.startsWith(TRAE_CHECKIN_PATH))
     expect(claims).toHaveLength(1)
     expect(claims[0]).toMatchObject({ method: 'POST', url: withTraeRegion(TRAE_CHECKIN_PATH, 'cn') })
+    expect(claims[0]?.body).toContain('account-1')
   })
 
   it('reports a transport failure on the claim route', async () => {
     stubFetch(
-      usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true }),
+      usageDocument(),
+      { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } },
       { status: 500, body: { error: 'upstream exploded' } },
     )
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(checkinButton())
+    fireEvent.click(rowCheckin('LaoDing'))
 
-    await waitFor(() => { expect(screen.getByText(/row\.checkinError:.*upstream exploded/)).toBeTruthy() })
+    await waitFor(() => { expect(within(accountBlock()).getByText(/row\.checkinError:.*upstream exploded/)).toBeTruthy() })
+  })
+
+  /**
+   * Trae spends the DEVICE's daily check-in, so one claim changes what every
+   * other row may do: the siblings go from "check in" to "device already used".
+   * Refreshing only the claimed row left them advertising a claim that could
+   * only come back 9095 — a roster of live buttons of which exactly one could
+   * work. This pins the sweep: the claim must re-read the siblings too, so the
+   * server's own `didCheckedIn` decides rather than the card guessing.
+   */
+  it('re-reads the OTHER rows after a claim, not just the one clicked', async () => {
+    const roster = [
+      { id: 'account-1', accountName: 'LaoDing', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true },
+      { id: 'account-2', accountName: 'SecondCN', edition: 'cn', region: 'cn', source: 'cli', tokenExpiresAtMs: Date.now() + 7_200_000, selected: false },
+    ]
+    const statusReads: string[] = []
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.startsWith(TRAE_CHECKIN_PATH)) {
+        return new Response(JSON.stringify({ claimed: true, alreadyCheckedIn: false, code: 0, checkin: {} }), { status: 200 })
+      }
+      if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) {
+        const id = new URL(url, 'http://localhost').searchParams.get('accountId') ?? ''
+        statusReads.push(id)
+        return new Response(JSON.stringify({ id, checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } }), { status: 200 })
+      }
+      if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(usageDocument({ accounts: roster })), { status: 200 })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { scope } = makeScope()
+    await renderOpen(scope)
+    await waitFor(() => { expect(statusReads).toContain('account-2') })
+
+    // Count only what the claim itself triggers.
+    statusReads.length = 0
+    fireEvent.click(rowCheckin('LaoDing'))
+
+    await waitFor(() => { expect(statusReads).toContain('account-2') })
+    expect(statusReads).toContain('account-1')
   })
 })

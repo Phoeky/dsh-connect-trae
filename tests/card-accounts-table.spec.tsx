@@ -13,15 +13,16 @@
  *  2. switching writes ONLY that region's slot: the sibling region's pick is
  *     carried through, so switching the CN account never rebinds the
  *     international one (this plugin serves both at once — issue #11);
- *  3. balances are read ON DEMAND and never on open. The route pays one
- *     upstream read PER ACCOUNT, so a card that is merely being looked at must
- *     not bill the whole roster.
+ *  3. each row carries its OWN account status — the CN check-in button / reward
+ *     and the balances it needs, and (on ai) the subscription verdict. These
+ *     are fetched per account from the status route, so one account's read
+ *     failure never takes the roster (or another row) down.
  *
- * It also pins the DELIBERATE absence of any bulk check-in: Trae allows one
+ * It also pins that check-in lives PER ROW, never as a sweep: Trae allows one
  * check-in per DEVICE per day, so a "do it for every account" sweep could only
- * ever produce a refusal per account after the first. The check-in control stays
- * a single-account button, and this spec fails if a per-row or bulk claim
- * appears beside the table.
+ * ever produce a refusal per account after the first. Each row gets its own
+ * claim button (which claims for THAT account only), but there is no bulk
+ * "claim for every account" control anywhere.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -33,7 +34,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 }))
 
 import { TraeUsageCard } from '../src/client/TraeUsageCard.tsx'
-import { TRAE_ACCOUNT_CREDITS_PATH, TRAE_CHECKIN_PATH, TRAE_USAGE_PATH, withTraeRegion } from '../src/status-paths.ts'
+import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_USAGE_PATH, withTraeRegion } from '../src/status-paths.ts'
 import type { TraeSettingsKey } from '../src/client/locales.ts'
 
 afterEach(() => {
@@ -86,22 +87,28 @@ function usageDocument(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** Map account id → per-account status for the status route. */
+type StatusCatalog = Record<string, Record<string, unknown>>
+
 /**
- * Stub the card's routes and record what was requested.
- *
- * `creditsAnswer` is what the per-account balance route answers; a non-200 is
- * how the failure path is exercised.
+ * Stub the card's routes and record what was requested. `statusCatalog` is what
+ * the per-account status route answers per account; `statusStatus` lets a test
+ * make the route fail for every account.
  */
 function stubFetch(
   document: Record<string, unknown>,
-  creditsAnswer: { status?: number; body?: unknown } = {},
+  statusCatalog?: StatusCatalog,
+  statusStatus = 200,
 ): { calls: { url: string; method: string }[] } {
   const calls: { url: string; method: string }[] = []
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, method: init?.method ?? 'GET' })
-    if (url.startsWith(TRAE_ACCOUNT_CREDITS_PATH)) {
-      return new Response(JSON.stringify(creditsAnswer.body ?? { accounts: [] }), { status: creditsAnswer.status ?? 200 })
+    if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) {
+      if (statusStatus !== 200) return new Response(JSON.stringify({ error: 'gateway' }), { status: statusStatus })
+      const id = new URL(url, 'http://localhost').searchParams.get('accountId')
+      const state = statusCatalog?.[id ?? ''] ?? { id }
+      return new Response(JSON.stringify(state), { status: 200 })
     }
     if (url.startsWith(TRAE_CHECKIN_PATH)) {
       return new Response(JSON.stringify({ claimed: true, alreadyCheckedIn: false, code: 0, checkin: {} }), { status: 200 })
@@ -125,25 +132,27 @@ function accountBlock(): HTMLElement {
 }
 
 /** One account row, by the account name it renders. */
-function accountRow(name: string): HTMLTableRowElement {
-  return within(accountBlock()).getByText(name).closest('tr') as HTMLTableRowElement
+function accountRow(name: string): HTMLLIElement {
+  return within(accountBlock()).getByText(name).closest('li') as HTMLLIElement
 }
 
-describe('the account table in the card', () => {
-  it('lists every detected account with its product, source and expiry', async () => {
+describe('the account rows in the card', () => {
+  it('lists every detected account with its product and source', async () => {
     stubFetch(usageDocument())
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const rows = within(accountBlock()).getAllByRole('row')
-    // Two accounts plus the header row.
-    expect(rows).toHaveLength(3)
+    const rows = within(accountBlock()).getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
 
     // The raw `edition` token used to be all the user got: "solo" told them
     // nothing about which product the credential came from (issue #25).
     expect(accountRow('SecondCN').textContent).toContain('row.editionSolo')
     expect(accountRow('SecondCN').textContent).toContain('row.sourceCli')
     expect(accountRow('LaoDing').textContent).toContain('row.sourceDesktop')
+    // The region is NOT repeated beside the edition: "国内版 · 国内 · 桌面端"
+    // said the same thing twice, which is exactly the noise that was removed.
+    expect(accountRow('LaoDing').textContent).not.toContain('row.regionCn')
   })
 
   it('marks the bound account and does not offer it an action', async () => {
@@ -152,17 +161,16 @@ describe('the account table in the card', () => {
     await renderOpen(scope)
 
     const current = accountRow('LaoDing')
-    expect(current.className).toContain('dsm-trae-accounts-row-current')
+    expect(current.className).toContain('dsm-trae-account-current')
     expect(current.textContent).toContain('row.accountCurrentBadge')
 
     const other = accountRow('SecondCN')
-    expect(other.className).not.toContain('dsm-trae-accounts-row-current')
+    expect(other.className).not.toContain('dsm-trae-account-current')
 
-    const [currentAction, otherAction] = within(accountBlock()).getAllByRole('button').filter(
-      button => /row\.accountCurrentBadge|row\.accountSwitch/.test(button.textContent ?? ''),
-    ) as HTMLButtonElement[]
-    expect(currentAction?.disabled).toBe(true)
-    expect(otherAction?.disabled).toBe(false)
+    // The bound row offers NO switch: it is already the one in use, and a
+    // disabled copy of the badge sitting next to the badge said nothing.
+    expect(within(current).queryByRole('button', { name: 'row.accountSwitch' })).toBeNull()
+    expect((within(other).getByRole('button', { name: 'row.accountSwitch' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('switches to a clicked account, writing only its own region slot', async () => {
@@ -179,70 +187,96 @@ describe('the account table in the card', () => {
     expect(holder.writes[0]).toEqual({ field: 'accounts', value: { ai: 'account-sg', cn: 'account-2' } })
   })
 
-  it('shows the bound account balance from the usage document without any extra read', async () => {
-    // The bound account's figure is already in the document the card fetched:
-    // paying a per-account read for it would be a charge for nothing.
-    const { calls } = stubFetch(usageDocument())
-    const { scope } = makeScope()
-    await renderOpen(scope)
-
-    expect(accountRow('LaoDing').textContent).toMatch(/20/)
-    // The unknown account stays unknown — and the column is honest about it.
-    expect(accountRow('SecondCN').textContent).toContain('—')
-    expect(calls.filter(call => call.url.startsWith(TRAE_ACCOUNT_CREDITS_PATH))).toEqual([])
-  })
-
-  it('reads every balance only when asked, and fills the column', async () => {
+  it('loads a per-account status (including balance) for each row, one read per account', async () => {
+    // Balances (and the CN check-in state) now arrive per row from the status
+    // route when the table shows, and each account is read exactly once.
     const { calls } = stubFetch(usageDocument(), {
-      body: {
-        accounts: [
-          { id: 'account-1', accountName: 'LaoDing', selected: true, generalAvailable: 20.37 },
-          { id: 'account-2', accountName: 'SecondCN', selected: false, generalAvailable: 1_234.56 },
-        ],
-      },
+      'account-1': { id: 'account-1', credits: { total: 7500, consumed: 5879.63, available: 1620.37, workAvailable: 0, generalAvailable: 20.37 } },
+      'account-2': { id: 'account-2', credits: { total: 2000, consumed: 0, available: 2000, workAvailable: 0, generalAvailable: 1_234.56 } },
     })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    expect(calls.filter(call => call.url.startsWith(TRAE_ACCOUNT_CREDITS_PATH))).toEqual([])
-
-    fireEvent.click(within(accountBlock()).getByRole('button', { name: 'row.accountsReadCredits' }))
-
-    await vi.waitFor(() => { expect(accountRow('SecondCN').textContent).toMatch(/1,?23[45]/) })
-    const reads = calls.filter(call => call.url.startsWith(TRAE_ACCOUNT_CREDITS_PATH))
-    expect(reads).toHaveLength(1)
-    // Region-scoped like every other route on this card.
-    expect(reads[0]?.url).toBe(withTraeRegion(TRAE_ACCOUNT_CREDITS_PATH, 'cn'))
+    await vi.waitFor(() => { expect(accountRow('SecondCN').textContent).toMatch(/1,235/) })
+    expect(accountRow('LaoDing').textContent).toMatch(/row\.accountBalance:.*20/)
+    const reads = calls.filter(call => call.url.startsWith(TRAE_ACCOUNT_STATUS_PATH))
+    // Two accounts → two per-account status reads, region-scoped like the rest.
+    expect(reads).toHaveLength(2)
+    for (const read of reads) expect(read.url).toContain(withTraeRegion(TRAE_ACCOUNT_STATUS_PATH, 'cn') + '&accountId=')
   })
 
-  it('reports a failed balance read instead of pretending the accounts are empty', async () => {
-    stubFetch(usageDocument(), { status: 502, body: { message: 'gateway' } })
+  it('keeps a row visible without a figure when its status read fails', async () => {
+    stubFetch(usageDocument(), undefined, 502)
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    fireEvent.click(within(accountBlock()).getByRole('button', { name: 'row.accountsReadCredits' }))
-
-    await waitFor(() => {
-      expect(within(accountBlock()).getByRole('alert').textContent).toContain('row.accountsCreditsFailed')
-    })
-    // The roster itself is untouched by a failed figure.
+    // The roster is untouched by a failed per-account status: the row stays and
+    // both accounts are still switchable — no error banner, no empty table.
     expect(accountRow('SecondCN')).toBeTruthy()
+    expect(accountRow('LaoDing')).toBeTruthy()
   })
 
-  it('offers exactly ONE check-in control for the whole roster — never a per-account sweep', async () => {
+  it('gives every CN account row its OWN claim button, and none to a bulk sweep', async () => {
     // Trae's rule, verified live 2026-10-11: `did_checked_in` is keyed on the
     // DEVICE, so after the first account claims, every further account on this
     // machine answers 9095. A "check in every account" button could therefore
-    // only ever fail after the first one, which is why the card offers none.
+    // only ever fail after the first one — so there is deliberately none. Each
+    // row instead carries its own button that claims for THAT account only.
+    stubFetch(usageDocument(), {
+      'account-1': { id: 'account-1', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true, extraCredits: 50 } },
+      'account-2': { id: 'account-2', checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true, extraCredits: 50 } },
+    })
+    const { scope } = makeScope()
+    await renderOpen(scope)
+
+    await waitFor(() => { expect(screen.getAllByRole('button', { name: /row\.checkinClaimWith/ })).toHaveLength(2) })
+    // They live INSIDE their own rows — never a single control for the roster.
+    expect(within(accountRow('LaoDing')).getByRole('button', { name: /row\.checkinClaimWith/ })).toBeTruthy()
+    expect(within(accountRow('SecondCN')).getByRole('button', { name: /row\.checkinClaimWith/ })).toBeTruthy()
+  })
+})
+
+describe('the stale-binding hint', () => {
+  /**
+   * The hint fires when Trae itself signed in somewhere else and the plugin's
+   * binding did not follow (issue #29). It has two ways of being useless, and it
+   * shipped with both:
+   *
+   *  - it named only the APP's account and called the other one "the previous
+   *    account", so the reader still had to go hunting the roster to learn which
+   *    account the plugin was on — the exact errand the hint exists to save;
+   *  - it said "Trae is CURRENTLY signed in to X" while the roster badges a
+   *    different row "in use", so the two "current" claims read as a
+   *    contradiction and the sentence looked meaningless.
+   *
+   * Naming both accounts fixes both: the sentence is self-contained, and
+   * "in use" (the plugin's binding) no longer competes with "signed in" (the
+   * app's login) because each is attached to a named account.
+   */
+  it('names BOTH accounts, so the sentence is not a riddle', async () => {
     stubFetch(usageDocument({
-      checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true, extraCredits: 50 },
+      accountName: 'LaoDing',
+      appLogin: { id: 'account-2', accountName: 'SecondCN', edition: 'solo', region: 'cn' },
     }))
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    await waitFor(() => { expect(screen.getByText(/row\.checkinLabel/)).toBeTruthy() })
-    expect(screen.getAllByRole('button', { name: /row\.checkinClaim/ })).toHaveLength(1)
-    // ...and it lives OUTSIDE the account table, so no row can carry its own.
-    expect(within(accountBlock()).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
+    const hint = screen.getByText(/^row\.appLoginMismatch/)
+    // The bound one is the fact the old copy left out.
+    expect(hint.textContent).toContain('LaoDing')
+    expect(hint.textContent).toContain('SecondCN')
+  })
+
+  it('points its button at the account it switches to', async () => {
+    stubFetch(usageDocument({
+      accountName: 'LaoDing',
+      appLogin: { id: 'account-2', accountName: 'SecondCN', edition: 'solo', region: 'cn' },
+    }))
+    const { scope } = makeScope()
+    await renderOpen(scope)
+
+    // "Switch over" had no referent once the sentence named two accounts.
+    const button = screen.getByRole('button', { name: /^row\.appLoginFollow/ })
+    expect(button.textContent).toContain('SecondCN')
   })
 })

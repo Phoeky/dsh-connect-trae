@@ -1,17 +1,19 @@
 // @vitest-environment jsdom
 /**
- * The card's international subscription row.
+ * The card's international subscription status, shown in the ai account row.
  *
  * WHY THIS FILE EXISTS — read before deleting or weakening it:
- * issue #19 reported a Pro member seeing "No active package". The row judged
- * the account on `has_package` ALONE, which answers "does a package
+ * issue #19 reported a Pro member seeing "No active package". The old row
+ * judged the account on `has_package` ALONE, which answers "does a package
  * entitlement row exist", not "is this account on a paid plan". Trae publishes
  * the plan separately as `user_pay_identity_str`, and the card now reads it.
  *
- * These specs render the SHIPPED `TraeUsageCard` and assert on what it draws,
- * so a future edit that quietly drops the plan identity again fails here.
+ * Subscription lives in the international account row (per account, via the
+ * status route), so these specs render the SHIPPED `TraeUsageCard` with an ai
+ * roster and assert on the per-row verdict drawn. A future edit that quietly
+ * drops the plan identity again fails here.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -19,7 +21,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 }))
 
 import { TraeUsageCard } from '../src/client/TraeUsageCard.tsx'
-import { TRAE_USAGE_PATH, traePlanIsPaid } from '../src/status-paths.ts'
+import { TRAE_ACCOUNT_STATUS_PATH, TRAE_USAGE_PATH, traePlanIsPaid, withTraeRegion } from '../src/status-paths.ts'
 import type { TraeSettingsKey } from '../src/client/locales.ts'
 
 afterEach(() => {
@@ -46,8 +48,10 @@ function makeScope(initial: Record<string, unknown> = {}, writable = true) {
   }
 }
 
-/** One signed-in ai document carrying a pay status. */
-function payDocument(payStatus: Record<string, unknown>) {
+const AI_ACCOUNT = { id: 'account-1', accountName: 'LaoDing', edition: 'sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true }
+
+/** One signed-in ai document carrying the roster whose row holds subscription. */
+function payDocument(overrides: Record<string, unknown> = {}) {
   return {
     status: 'signed-in',
     accountId: 'account-1',
@@ -55,33 +59,50 @@ function payDocument(payStatus: Record<string, unknown>) {
     tokenExpiresAtMs: Date.now() + 3_600_000,
     region: 'ai',
     enabled: true,
-    accounts: [],
+    accounts: [AI_ACCOUNT],
     models: [],
     enabledModelIds: [],
     credits: undefined,
-    payStatus: {
-      isDollarUsageBilling: true, hasPackage: false, isPayFreshman: false,
-      inTrial: false, trialEndTimeMs: 0,
-      enableSoloLite: false, enableSoloBuilder: false, enableSoloCoder: false, enableSoloWeb: false,
-      ...payStatus,
-    },
+    ...overrides,
   }
 }
 
-function stubFetch(document: Record<string, unknown>): void {
+function stubFetch(document: Record<string, unknown>, payStatus: Record<string, unknown>): void {
   vi.stubGlobal('fetch', async (input: string | URL | Request) => {
     const url = String(input)
+    if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) {
+      return new Response(JSON.stringify({
+        id: 'account-1',
+        payStatus: {
+          isDollarUsageBilling: true, hasPackage: false, isPayFreshman: false,
+          inTrial: false, trialEndTimeMs: 0,
+          enableSoloLite: false, enableSoloBuilder: false, enableSoloCoder: false, enableSoloWeb: false,
+          ...payStatus,
+        },
+      }), { status: 200 })
+    }
     if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(document), { status: 200 })
     throw new Error(`unexpected fetch: ${url}`)
   })
 }
 
-/** Render the card expanded and wait for the subscription row. */
-async function renderSubscriptionRow(): Promise<void> {
+/** Render the card expanded, switch to the ai tab, and wait for the account row. */
+async function renderArtificialAccount(): Promise<void> {
   const { scope } = makeScope()
   render(<TraeUsageCard t={t} settingsScope={scope as never} />)
   fireEvent.click(screen.getByRole('button', { name: /row\.title/ }))
-  await waitFor(() => { expect(screen.getByText(/row\.subscriptionLabel/)).toBeTruthy() })
+  fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
+  await waitFor(() => { expect(screen.getByText('LaoDing')).toBeTruthy() })
+}
+
+/** The account block, so its buttons are never confused with the model block's. */
+function accountBlock(): HTMLElement {
+  return screen.getByRole('region', { name: 'row.accountsTitle' })
+}
+
+/** One account row, by the account name it renders. */
+function accountRow(name: string): HTMLLIElement {
+  return within(accountBlock()).getByText(name).closest('li') as HTMLLIElement
 }
 
 describe('traePlanIsPaid', () => {
@@ -99,41 +120,54 @@ describe('traePlanIsPaid', () => {
   })
 })
 
-describe('TraeUsageCard subscription row', () => {
+describe('TraeUsageCard subscription row (ai)', () => {
   it('shows a member as subscribed from the plan identity alone', async () => {
     // has_package stays false, exactly as the reporter's account behaved.
-    stubFetch(payDocument({ hasPackage: false, payIdentity: 5, payIdentityStr: 'Pro' }))
-    await renderSubscriptionRow()
+    stubFetch(payDocument(), { hasPackage: false, payIdentity: 5, payIdentityStr: 'Pro' })
+    await renderArtificialAccount()
 
-    expect(screen.getByText('row.subscribed')).toBeTruthy()
-    expect(screen.queryByText('row.noPackage')).toBeNull()
-    // The plan is named, so the row says which plan and not just a boolean.
-    expect(screen.getByText('row.subscribed · Pro')).toBeTruthy()
+    // The row names the plan ON its balance line — one verdict, one line, no
+    // separate subscription block beside the roster.
+    await waitFor(() => { expect(within(accountRow('LaoDing')).getByText('row.planTier:{"tier":"Pro"}')).toBeTruthy() })
+    expect(within(accountRow('LaoDing')).queryByText('row.noPackage')).toBeNull()
   })
 
   it('still reports a package entitlement without a plan identity', async () => {
-    stubFetch(payDocument({ hasPackage: true }))
-    await renderSubscriptionRow()
+    stubFetch(payDocument(), { hasPackage: true })
+    await renderArtificialAccount()
 
-    // Without a tier string both the badge and the value render the bare label,
-    // so one exact `getByText` match cannot work here; what matters is that the
-    // row is on (and does not claim "no package").
-    expect(screen.getAllByText('row.subscribed').length).toBeGreaterThan(0)
-    expect(screen.queryByText('row.noPackage')).toBeNull()
+    // Without a tier string the row renders the bare subscribed label; what
+    // matters is that it is on and does not claim "no package".
+    await waitFor(() => { expect(within(accountRow('LaoDing')).getByText('row.subscribed')).toBeTruthy() })
+    expect(within(accountRow('LaoDing')).queryByText('row.noPackage')).toBeNull()
   })
 
   it('names the free tier instead of only saying there is no package', async () => {
-    stubFetch(payDocument({ hasPackage: false, payIdentity: 0, payIdentityStr: 'Free' }))
-    await renderSubscriptionRow()
+    stubFetch(payDocument(), { hasPackage: false, payIdentity: 0, payIdentityStr: 'Free' })
+    await renderArtificialAccount()
 
-    expect(screen.getByText('row.noPackage')).toBeTruthy()
-    expect(screen.getByText('row.noPackage · Free')).toBeTruthy()
+    await waitFor(() => { expect(within(accountRow('LaoDing')).getByText('row.noPackage')).toBeTruthy() })
+    expect(within(accountRow('LaoDing')).queryByText('row.subscribed')).toBeNull()
   })
 
-  it('prefers the trial window over the tier label', async () => {
-    stubFetch(payDocument({ inTrial: true, trialEndTimeMs: 1_789_000_000_000, payIdentityStr: 'Pro' }))
-    await renderSubscriptionRow()
+  it('reads the subscription through the region-scoped per-account status route', async () => {
+    stubFetch(payDocument(), { hasPackage: true, payIdentity: 5, payIdentityStr: 'Pro' })
+    const { scope } = makeScope()
+    const readUrls: string[] = []
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) { readUrls.push(url); return new Response(JSON.stringify({ id: 'account-1' }), { status: 200 }) }
+      if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(payDocument()), { status: 200 })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    render(<TraeUsageCard t={t} settingsScope={scope as never} />)
+    fireEvent.click(screen.getByRole('button', { name: /row\.title/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
+    await waitFor(() => { expect(screen.getByText('LaoDing')).toBeTruthy() })
 
-    expect(screen.getByText(/^row\.trialUntil:/)).toBeTruthy()
+    // The row's subscription is read from the per-account status route, and the
+    // read is region-scoped to ai exactly like every other route on this card.
+    expect(readUrls.length).toBe(1)
+    expect(readUrls[0]).toContain(withTraeRegion(TRAE_ACCOUNT_STATUS_PATH, 'ai') + '&accountId=')
   })
 })

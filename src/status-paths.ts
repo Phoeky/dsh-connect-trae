@@ -31,8 +31,19 @@ export const TRAE_ACCOUNTS_REFRESH_PATH = '/plugins/dsh-connect-trae/accounts/re
  */
 export const TRAE_ACCOUNT_CREDITS_PATH = '/plugins/dsh-connect-trae/account-credits'
 /**
+ * Per-account status (check-in / credits / subscription) for the account table.
+ *
+ * Each row of the account table reads its OWN state through this route — a CN
+ * row carries its check-in state and balance, an ai row its subscription.
+ * POST with the accountId in the body: one upstream read per account, paid
+ * only when the table is actually shown.
+ */
+export const TRAE_ACCOUNT_STATUS_PATH = '/plugins/dsh-connect-trae/account-status'
+/**
  * Plugin-owned daily check-in claim endpoint. POST, loopback-only, and the only
- * route in this plugin that changes upstream account state.
+ * route in this plugin that changes upstream account state. The accountId in
+ * the body names WHICH account to claim for, so the button can sit in each
+ * account row.
  */
 export const TRAE_CHECKIN_PATH = '/plugins/dsh-connect-trae/checkin'
 
@@ -246,6 +257,32 @@ export interface TraeWebAccountCredit {
   accountName: string
   selected: boolean
   generalAvailable?: number
+}
+
+/**
+ * The per-account state shown inside an account row of the card's table.
+ *
+ * Every locally detected account in a region is rendered as a row; the
+ * interesting per-account facts differ by region, which is why this is a union
+ * of the three surfaces the card previously showed only for the BOUND account:
+ *
+ *  - CN rows carry their own check-in state (Trae keys the daily reward per
+ *    ACCOUNT, and the one-per-device tally per DEVICE, see {@link TraeWebCheckin})
+ *    and their Work/General balances.
+ *  - ai rows carry their own subscription / trial status.
+ *
+ * Each field is optional: a read that fails keeps the row visible (perhaps
+ * without a figure) rather than dropping the account and its switch.
+ */
+export interface TraeWebAccountState {
+  /** The account this state belongs to. */
+  id: string
+  /** CN: today's check-in state of this account (absent for ai rows). */
+  checkin?: TraeWebCheckin
+  /** CN: this account's Work/General balances (absent for ai rows). */
+  credits?: TraeWebCredits
+  /** ai: this account's subscription / trial status (absent for CN rows). */
+  payStatus?: TraeWebPayStatus
 }
 
 export interface TraeWebCreditAlternative {

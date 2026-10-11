@@ -12,10 +12,11 @@ import {
   TRAE_PROVIDER_DISPLAY_NAMES,
   TRAE_PROVIDERS,
 } from './adapter.ts'
-import type { TraeWebAppLogin, TraeWebCredits } from './status-paths.ts'
+import type { TraeWebAccountState, TraeWebAppLogin, TraeWebCredits } from './status-paths.ts'
+import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 import { configuredAccountsOf, followAppLoginEnabled, unwrapVolatile } from './status-paths.ts'
 import type { TraeAdapter } from './adapter.ts'
-import { TraeCredentialStore } from './auth.ts'
+import { traeAccountId, TraeCredentialStore } from './auth.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
@@ -34,7 +35,7 @@ import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 import { probeModelsSequentially } from './model-probe.ts'
 import { TraeUsageClient } from './usage.ts'
-import { registerTraeUsageRoute, toCredits } from './web-status.ts'
+import { registerTraeUsageRoute, toCheckin, toCredits } from './web-status.ts'
 
 export {
   createTraeAdapter,
@@ -100,6 +101,7 @@ export {
   regionEnabledOf,
   nextRegionEnabled,
   nextRegionSlots,
+  TRAE_ACCOUNT_STATUS_PATH,
   TRAE_CHECKIN_PATH,
   TRAE_REGION_PARAM,
   TRAE_REGIONS,
@@ -107,6 +109,7 @@ export {
   unwrapVolatile,
   unwrapVolatileDeep,
   withTraeRegion,
+  type TraeWebAccountState,
   type TraeWebActivity,
   type TraeWebAppLogin,
   type TraeWebCheckin,
@@ -398,6 +401,23 @@ interface TraeRegionStack {
    * unusable; callers treat a throw as "no answer for this account".
    */
   creditsOfAccount(accountId: string): Promise<TraeWebCredits | undefined>
+  /**
+   * Per-account status for one account row of the card's table: CN → check-in
+   * + balances, ai → subscription. Read through a throwaway client bound to
+   * that account, so the store's selection (and every in-flight chat request)
+   * is never disturbed. Throwing is treated by callers as "no status for this
+   * account", which keeps the row visible without a figure.
+   */
+  accountStateOf(accountId: string): Promise<TraeWebAccountState | undefined>
+  /**
+   * Claim today's check-in reward FOR ONE NAMED ACCOUNT through a throwaway
+   * client bound to that account (same shared device id), so the row's own
+   * button can claim without first switching the whole binding — and without
+   * moving billing, which stays wherever the user put it. Undefined when that
+   * account's token cannot be read; otherwise the upstream claim + the
+   * refreshed check-in state.
+   */
+  claimCheckinOf(accountId: string): Promise<{ claim: TraeCheckinClaim; checkin: TraeCheckinStatus } | undefined>
   /** Re-read this region's live directory from the upstream. */
   discoverModels(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
   /** Test the given model ids for availability (one real minimal call each). */
@@ -706,6 +726,53 @@ export function apply(ctx: Context, config: Config): void {
         const snapshot = await new TraeUsageClient({ credential: async () => credential }).snapshot()
         return toCredits(snapshot)
       },
+      accountStateOf: async (accountId: string) => {
+        const state: TraeWebAccountState = { id: accountId }
+        // The BOUND account's stored token is normally expired and `resolve()`
+        // refreshes it on read, so its row reads through the SHARED client. Any
+        // other account goes through a throwaway client so the binding (and
+        // every in-flight chat request sharing it) is never disturbed — the
+        // same rule `traeAccountCredits` already follows.
+        const selectedCredential = await store.current()
+        const bound = selectedCredential !== undefined && traeAccountId(selectedCredential) === accountId
+        const client = bound
+          ? usageClient
+          : (() => {
+            const credential = store.credentialOf(accountId)
+            return new TraeUsageClient({
+              credential: async () => credential,
+              deviceId: async () => (await identity()).deviceId,
+            })
+          })()
+        if (region === 'ai') {
+          // International accounts are subscription-based: read their pay
+          // status; a failure keeps the row without a subscription figure.
+          state.payStatus = await client.payStatus()
+          return state
+        }
+        // CN accounts carry check-in + balances, settled independently so one
+        // failure does not take the whole row down.
+        const [snapshot, checkin] = await Promise.allSettled([client.snapshot(), client.checkinStatus()])
+        if (snapshot.status === 'fulfilled') state.credits = toCredits(snapshot.value)
+        if (checkin.status === 'fulfilled') state.checkin = toCheckin(checkin.value)
+        return state
+      },
+      claimCheckinOf: async (accountId: string) => {
+        const selectedCredential = await store.current()
+        const bound = selectedCredential !== undefined && traeAccountId(selectedCredential) === accountId
+        const client = bound
+          ? usageClient
+          : (() => {
+            const credential = store.credentialOf(accountId)
+            return new TraeUsageClient({
+              credential: async () => credential,
+              deviceId: async () => (await identity()).deviceId,
+            })
+          })()
+        const claim = await client.claimCheckin()
+        const checkin = await client.checkinStatus()
+        return { claim, checkin }
+      },
       discoverModels: async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
         // The Remote /models directory is the model skeleton (display id, name,
         // context, credit, reasoning). get_detail_param only supplies the real
@@ -845,6 +912,11 @@ export function apply(ctx: Context, config: Config): void {
     // throwaway client so the store's selection (and every in-flight chat
     // request using it) is left alone (issue #25).
     creditsOfAccount: (region, accountId) => stacks[region].creditsOfAccount(accountId),
+    // Per-account status for one row of the card's account table (check-in /
+    // balances / subscription), read without disturbing which account is bound.
+    accountStateOf: (region, accountId) => stacks[region].accountStateOf(accountId),
+    // Claim today's check-in FOR one named account, leaving the binding alone.
+    claimCheckinOf: (region, accountId) => stacks[region].claimCheckinOf(accountId),
     // The follow hint's read half (issue #29): a pure report the usage
     // document carries when the app's sign-in differs. Degrades to `undefined`
     // (no hint) rather than failing a status read.
