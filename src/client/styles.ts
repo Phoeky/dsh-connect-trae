@@ -52,11 +52,58 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-usage-account-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dsm-trae-usage-expiry{padding-left:19px;color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:18px}
 .dsm-trae-account-picker{display:block}
-.dsm-trae-usage-select-wrap{position:relative}
-.dsm-trae-usage-select{appearance:none;width:100%;font:inherit;padding:10px 34px 10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-3,#2a2c33);cursor:pointer;transition:border-color .15s,box-shadow .15s}
-.dsm-trae-usage-select:focus-visible{outline:none;border-color:var(--dsw-alias-brand-primary,#5686fe);box-shadow:0 0 0 3px rgba(86,134,254,.22)}
-.dsm-trae-usage-select:disabled{opacity:.6;cursor:default}
-.dsm-trae-usage-select-wrap::after{content:"";position:absolute;top:50%;right:12px;width:7px;height:7px;transform:translateY(-65%) rotate(45deg);border-right:1.6px solid var(--dsw-alias-label-secondary,#c6c9d0);border-bottom:1.6px solid var(--dsw-alias-label-secondary,#c6c9d0);pointer-events:none}
+/* The 设置 block: label + hint on the left, control on the right, one save for
+   the whole block. It replaces the bare checkbox rows that used to write on
+   every click — a draft needs a visible way back out, so each row carries its
+   own explanation and the footer carries the buttons. */
+.dsm-trae-set{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-set-head{display:flex;flex-direction:column;gap:3px}
+.dsm-trae-set-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-set-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-set-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
+.dsm-trae-set-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dsm-trae-set-copy b{font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-set-copy span{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-set-ctl{flex:none;padding-top:1px}
+.dsm-trae-switch{display:inline-flex;align-items:center;cursor:pointer}
+.dsm-trae-switch input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.dsm-trae-switch-track{position:relative;display:inline-block;width:34px;height:20px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45);transition:background .15s,border-color .15s}
+.dsm-trae-switch-track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-secondary,#c6c9d0);transition:transform .15s,background .15s}
+.dsm-trae-switch input:checked+.dsm-trae-switch-track{background:var(--dsw-alias-brand-primary,#5686fe);border-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-switch input:checked+.dsm-trae-switch-track::after{transform:translateX(14px);background:#fff}
+.dsm-trae-switch input:focus-visible+.dsm-trae-switch-track{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
+.dsm-trae-switch input:disabled+.dsm-trae-switch-track{opacity:.5}
+.dsm-trae-switch:has(input:disabled){cursor:default}
+.dsm-trae-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
+.dsm-trae-set-dirty{margin-right:auto;font-size:12px;line-height:18px;color:var(--dsw-state-warning,#d98f00)}
+.dsm-trae-set-buttons{display:flex;gap:8px}
+/* The account block is a real table: the question it answers is "which of these
+   accounts, and what is the action on each one" — a dropdown can only ever show
+   the one already chosen. */
+.dsm-trae-accounts{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-accounts-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dsm-trae-accounts-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-accounts-hint{margin:3px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-accounts-table{width:100%;border-collapse:collapse;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-accounts-table th,.dsm-trae-accounts-table td{text-align:left;vertical-align:top;padding:8px 8px 8px 0;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
+.dsm-trae-accounts-table thead th{padding-top:0;border-top:0;font-weight:500;color:var(--dsw-alias-label-tertiary,#9aa0a8);white-space:nowrap}
+.dsm-trae-accounts-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dsm-trae-accounts-account{display:flex;flex-direction:column;gap:3px;font-weight:400;min-width:0}
+.dsm-trae-accounts-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dsm-trae-accounts-line .dsm-trae-usage-dot{margin-right:0;flex:none}
+.dsm-trae-accounts-name{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-accounts-badge{display:inline-flex;align-items:center;padding:0 6px;border-radius:6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45)}
+.dsm-trae-accounts-meta{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:16px}
+.dsm-trae-accounts-expiry{white-space:nowrap;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-accounts-row-current .dsm-trae-accounts-expiry,.dsm-trae-accounts-row-current .dsm-trae-accounts-meta{color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-accounts-switch{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:8px;padding:3px 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:transparent;white-space:nowrap}
+.dsm-trae-accounts-switch:hover:not(:disabled){color:var(--dsw-alias-label-primary,#e6e6e6);background:rgba(255,255,255,.04)}
+.dsm-trae-accounts-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
+.dsm-trae-accounts-switch:disabled{opacity:.5;cursor:default}
+.dsm-trae-accounts-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dsm-trae-accounts-read{appearance:none;font:inherit;cursor:pointer;border:0;padding:0;background:transparent;font-size:12px;line-height:18px;color:var(--dsw-alias-brand-primary,#5686fe);text-decoration:underline}
+.dsm-trae-accounts-read:disabled{opacity:.5;cursor:default;text-decoration:none}
+.dsm-trae-accounts-read:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
 .dsm-trae-mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:11px;font-weight:700;color:#111;background:linear-gradient(135deg,#ffd36e,#ffb84d);margin-right:6px}
 .dsm-trae-usage-list{display:flex;flex-direction:column;gap:10px}
 .dsm-trae-usage-text{margin:0;font-size:14px;line-height:22px;color:var(--dsw-alias-label-secondary,#b8b8b8)}

@@ -5,7 +5,7 @@
  * `SubagentModelCard` so the two plugins share one external-presentation language.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import {
@@ -14,6 +14,7 @@ import {
   nextRegionEnabled,
   nextRegionSlots,
   regionEnabledOf,
+  TRAE_ACCOUNT_CREDITS_PATH,
   TRAE_ACCOUNTS_REFRESH_PATH,
   TRAE_CHECKIN_PATH,
   TRAE_MODELS_REFRESH_PATH,
@@ -24,7 +25,7 @@ import {
   unwrapVolatileDeep,
   withTraeRegion,
 } from '../status-paths.ts'
-import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebCheckinClaim, TraeWebModel, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
+import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountCredit, TraeWebCheckinClaim, TraeWebModel, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -255,6 +256,31 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
 
   const [rescanNote, setRescanNote] = useState<string | undefined>(undefined)
   /**
+   * The 设置 block's draft: its two preference switches, staged locally and
+   * written only by 「保存」.
+   *
+   * The sibling plugin's card set this pattern for its preference block, and it
+   * is what makes 「放弃」 mean anything for a control that used to write on
+   * every click. `undefined` is "no draft": the block then renders the committed
+   * values, so a write made elsewhere (the DSH settings form, another window)
+   * shows through instead of being shadowed by a stale local copy.
+   */
+  const [settingsDraft, setSettingsDraft] = useState<{ followAppLogin: boolean; showPointsInMainUi: boolean } | undefined>(undefined)
+  /** True while the draft is crossing the wire. */
+  const [savingSettings, setSavingSettings] = useState(false)
+  /**
+   * Every account's general balance in the active region, read ON DEMAND by the
+   * account table's own button.
+   *
+   * Deliberately not fetched when the card opens: the route pays one upstream
+   * read PER ACCOUNT, and a card that is merely being looked at should not bill
+   * the whole roster. The bound account's figure is already in the usage
+   * document, so the row that matters shows a number without any extra read.
+   */
+  const [accountCredits, setAccountCredits] = useState<TraeWebAccountCredit[] | undefined>(undefined)
+  const [readingCredits, setReadingCredits] = useState(false)
+  const [accountCreditsError, setAccountCreditsError] = useState<string | undefined>(undefined)
+  /**
    * Whether this MACHINE has spent today's check-in while the selected account
    * has not been paid — the "switched account" state. Kept separate from
    * `claimError` because it is not a failure: it is the upstream's one-per-
@@ -268,8 +294,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * the control would flip and then quietly snap back on the next snapshot.
    */
   const [writeError, setWriteError] = useState<string | undefined>(undefined)
-  /** True while the composer-credit switch write is in flight. */
-  const [togglingCredits, setTogglingCredits] = useState(false)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -278,22 +302,71 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   }, [])
 
   /**
-   * Toggle the composer credit readout (`showPointsInMainUi`). The card's
-   * checkbox is the ONLY writer of this field — the readout itself carries no
-   * control — so there is exactly one path that can change it, and the write is
-   * read-back-checked like every other settings write in this card.
+   * The 设置 block: its committed values, its draft, and the ONE write path.
+   *
+   * The block commits on 「保存」 rather than on every click, so 「放弃」 has a
+   * meaning and a half-finished edit cannot land in the settings document. Both
+   * fields are written through `writeSettingsField`, which read-back checks the
+   * document — `set()` resolving has never been proof a value landed on this
+   * Host, so a saved-looking switch that silently reverted is exactly the
+   * failure that guard exists for.
+   *
+   * Committed values are read from the settings document, never echoed from
+   * local state: a write made elsewhere (the DSH settings form, another window)
+   * then shows up here instead of being shadowed by a stale copy.
    */
-  const toggleShowPointsInMainUi = async (enabled: boolean): Promise<void> => {
-    if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
-    setTogglingCredits(true)
+  const committedSettings = {
+    followAppLogin: followAppLoginEnabled(settingsScope?.getSnapshot().value),
+    showPointsInMainUi: (unwrapVolatileDeep(settingsScope?.getSnapshot().value) as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === true,
+  }
+  /**
+   * Ids for the block's label/hint wiring. `useId`, not constants: DSH can mount
+   * this card twice at once (the settings ROW and the expanded PAGE), and two
+   * copies sharing an id would leave the second switch labelled by the first
+   * card's element.
+   */
+  const settingsIds = useId()
+  const followLabelId = `${settingsIds}-follow`
+  const followHintId = `${settingsIds}-follow-hint`
+  const creditsLabelId = `${settingsIds}-credits`
+  const creditsHintId = `${settingsIds}-credits-hint`
+
+  const settingsEdits = settingsDraft ?? committedSettings
+  const settingsDirty = settingsDraft !== undefined
+    && (settingsDraft.followAppLogin !== committedSettings.followAppLogin
+      || settingsDraft.showPointsInMainUi !== committedSettings.showPointsInMainUi)
+
+  const editSettings = (patch: Partial<{ followAppLogin: boolean; showPointsInMainUi: boolean }>): void => {
+    setSettingsDraft(current => ({ ...(current ?? committedSettings), ...patch }))
+  }
+
+  /** Drop the draft, so the block renders the stored values again. */
+  const discardSettings = (): void => { setSettingsDraft(undefined) }
+
+  /**
+   * Write the staged switches. Only fields the draft actually moved are sent, so
+   * a save on a block whose other switch was changed elsewhere never rewrites
+   * (and never reverts) that sibling with a stale value.
+   */
+  const saveSettings = async (): Promise<void> => {
+    if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true || !settingsDirty) return
+    setSavingSettings(true)
     setWriteError(undefined)
     try {
-      await writeSettingsField(settingsScope, 'showPointsInMainUi', enabled,
-        readBack => (unwrapVolatileDeep(readBack) as { showPointsInMainUi?: unknown })?.showPointsInMainUi === enabled)
+      const next = settingsEdits
+      if (next.followAppLogin !== committedSettings.followAppLogin) {
+        await writeSettingsField(settingsScope, 'followAppLogin', next.followAppLogin,
+          readBack => followAppLoginEnabled(readBack) === next.followAppLogin)
+      }
+      if (next.showPointsInMainUi !== committedSettings.showPointsInMainUi) {
+        await writeSettingsField(settingsScope, 'showPointsInMainUi', next.showPointsInMainUi,
+          readBack => (unwrapVolatileDeep(readBack) as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === next.showPointsInMainUi)
+      }
+      if (mounted.current) setSettingsDraft(undefined)
     } catch (error: unknown) {
       if (mounted.current) setWriteError(error instanceof Error ? error.message : t('row.requestFailed'))
     } finally {
-      if (mounted.current) setTogglingCredits(false)
+      if (mounted.current) setSavingSettings(false)
     }
   }
 
@@ -358,10 +431,16 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * Drop a claim refusal when the tab changes. The error belongs to the region
    * it came from — carrying it onto the other tab would attribute an
    * international account's problem to the CN one (or the reverse).
+   *
+   * The per-account balances go with it: they belong to the region they were
+   * read from, and showing the CN roster's figures under the international tab
+   * would be a number attached to the wrong accounts.
    */
   useEffect(() => {
     setClaimError(undefined)
     setDeviceSpentNotice(false)
+    setAccountCredits(undefined)
+    setAccountCreditsError(undefined)
   }, [activeRegion])
 
   useEffect(() => {
@@ -422,10 +501,50 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
         { ...configured, [activeRegion]: accountId },
         readBack => configuredAccountsOf(readBack)[activeRegion] === accountId)
       await refreshUsage(activeRegion)
+      // Figures already on screen belong to the PREVIOUS binding's table view:
+      // re-read them when they were paid for, so the "in use" badge and the
+      // balances move together instead of disagreeing in front of the user.
+      if (accountCredits !== undefined) await readCreditsInto(activeRegion)
     } catch (error: unknown) {
       if (mounted.current) setWriteError(error instanceof Error ? error.message : t('row.requestFailed'))
     } finally {
       if (mounted.current) setSwitchingAccount(false)
+    }
+  }
+
+  /**
+   * Read every account's general balance in one region — the account table's
+   * 「读取各账号余额」 action.
+   *
+   * ON DEMAND, never on open: the Host pays one upstream read per account, and a
+   * card that is merely being looked at must not bill the whole roster. A
+   * failure keeps whatever rows were already loaded (the table's list is the
+   * usage document's, so no switch ever disappears because a figure failed).
+   */
+  const readCreditsInto = async (region: TraeRegion): Promise<void> => {
+    const response = await fetch(withTraeRegion(TRAE_ACCOUNT_CREDITS_PATH, region), {
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+    const body: unknown = await response.json().catch(() => undefined)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const accounts = (body as { accounts?: unknown } | undefined)?.accounts
+    if (!Array.isArray(accounts)) throw new Error('malformed answer')
+    if (mounted.current) setAccountCredits(accounts as TraeWebAccountCredit[])
+  }
+
+  const readAccountCredits = async (): Promise<void> => {
+    if (readingCredits) return
+    setReadingCredits(true)
+    setAccountCreditsError(undefined)
+    try {
+      await readCreditsInto(activeRegion)
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setAccountCreditsError(error instanceof Error ? error.message : t('row.requestFailed'))
+      }
+    } finally {
+      if (mounted.current) setReadingCredits(false)
     }
   }
 
@@ -443,23 +562,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   const followAppLogin = async (): Promise<void> => {
     if (status.status !== 'signed-in' || status.appLogin === undefined) return
     await switchAccount(status.appLogin.id)
-  }
-
-  /**
-   * Toggle the follow-the-app switch (`followAppLogin`, issue #29): the Host's
-   * automatic rebind follows this field, so the card only commits it. OFF by
-   * default in the schema; an existing config keeps the strict bind it shipped
-   * with until the user ticks this.
-   */
-  const toggleFollowAppLogin = async (enabled: boolean): Promise<void> => {
-    if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
-    setWriteError(undefined)
-    try {
-      await writeSettingsField(settingsScope, 'followAppLogin', enabled,
-        readBack => followAppLoginEnabled(readBack) === enabled)
-    } catch (error: unknown) {
-      if (mounted.current) setWriteError(error instanceof Error ? error.message : t('row.requestFailed'))
-    }
   }
 
   /**
@@ -792,6 +894,30 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   }
 
   const title = t('row.title')
+  /**
+   * Row labels for the account table.
+   *
+   * The raw `edition` token ("solo") told the user nothing about WHICH product a
+   * credential came from, which is exactly what made a leftover TRAE SOLO login
+   * indistinguishable from the Trae CN one they thought they were bound to
+   * (issue #25). Spell the product out, and keep the region as the second axis.
+   */
+  const editionLabel = (edition: TraeWebAccount['edition']): string =>
+    t(`row.edition${edition === 'cn' ? 'Cn' : edition === 'sg' ? 'Sg' : edition === 'solo' ? 'Solo' : 'SoloSg'}`)
+  const sourceLabel = (source: TraeWebAccount['source']): string =>
+    source === 'desktop' ? t('row.sourceDesktop') : source === 'cli' ? t('row.sourceCli') : t('row.sourceDsh')
+  /**
+   * One account's general balance for the table. The on-demand read is
+   * authoritative; before it lands, the BOUND account still has a figure in the
+   * usage document, and showing that beats a dash beside the account the card
+   * itself names as current.
+   */
+  const figureOf = (accountId: string, current: boolean): number | undefined => {
+    const read = accountCredits?.find(entry => entry.id === accountId)?.generalAvailable
+    if (read !== undefined) return read
+    if (!current || status.status !== 'signed-in') return undefined
+    return status.credits?.generalAvailable
+  }
   const label = status.status === 'signed-in'
     ? t('row.signedIn', { accountName: status.accountName })
     : status.status === 'error'
@@ -864,132 +990,238 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
               {regionOn(activeRegion)
                 ? null
                 : <p className="dsm-trae-tab-off-notice" role="status">{t('row.tabOffNotice')}</p>}
-              {/* CN ONLY, and deliberately OUTSIDE the signed-in subtree: the
-                  international region is subscription-based and its usage
-                  document carries no `credits` at all (`webStatusFor` returns
-                  `payStatus` for `region === 'ai'`), so there is no balance to
-                  mirror; and the credit stats this switch relates to only exist
-                  while signed in, so nesting it there would hide the control
-                  exactly when a signed-out user goes looking for it. */}
-              {activeRegion !== 'cn'
-                ? null
-                : <div className="dsm-trae-mainui-switch">
-                    <label className="dsm-trae-mainui-switch-label" title={t('row.showPointsInMainUiHint')}>
+              {/* The 设置 block. Everything it holds commits on 「保存」, so a
+                  half-finished edit cannot reach the settings document and
+                  「放弃」 has something to undo. The sibling plugin's card uses
+                  this shape for its preference block; the region on/off boxes
+                  above stay immediate because they belong to the tab bar, not
+                  to a preference draft. */}
+              <section className="dsm-trae-set" aria-label={t('row.settingsTitle')}>
+                <div className="dsm-trae-set-head">
+                  <h3 className="dsm-trae-set-title">{t('row.settingsTitle')}</h3>
+                  <p className="dsm-trae-set-hint">{t('row.settingsHint')}</p>
+                </div>
+                {/* Follow the Trae app's sign-in (issue #29). Region-agnostic:
+                    both tabs bind an account of their own, so this row applies
+                    to whichever tab it is ticked on. Same opt-in semantics as
+                    the schema: OFF for an existing config, because an automatic
+                    rebind of the billing account is something a user must ask
+                    for. */}
+                <div className="dsm-trae-set-row">
+                  <span className="dsm-trae-set-copy">
+                    <b id={followLabelId}>{t('row.followAppLogin')}</b>
+                    <span id={followHintId}>{t('row.followAppLoginHint')}</span>
+                  </span>
+                  <span className="dsm-trae-set-ctl">
+                    <label className="dsm-trae-switch">
                       <input
                         type="checkbox"
-                        checked={(settingsValue as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === true}
-                        disabled={settingsScope?.getSnapshot().writable !== true || togglingCredits}
-                        onChange={event => { void toggleShowPointsInMainUi(event.currentTarget.checked) }}
+                        checked={settingsEdits.followAppLogin}
+                        disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
+                        aria-labelledby={followLabelId}
+                        aria-describedby={followHintId}
+                        onChange={event => { editSettings({ followAppLogin: event.currentTarget.checked }) }}
                       />
-                      <span>{t('row.showPointsInMainUi')}</span>
+                      <span className="dsm-trae-switch-track" aria-hidden="true" />
                     </label>
-                  </div>}
-              {/* Follow the Trae app's sign-in (issue #29). Region-agnostic:
-                  both tabs bind an account of their own, so the switch sits
-                  outside the CN-only block above and applies to whichever tab
-                  it is ticked on. Same opt-in semantics as the schema: OFF for
-                  an existing config, because an automatic rebind of the billing
-                  account is the kind of thing a user must ask for. */}
-              <div className="dsm-trae-mainui-switch">
-                <label className="dsm-trae-mainui-switch-label" title={t('row.followAppLoginHint')}>
-                  <input
-                    type="checkbox"
-                    checked={followAppLoginEnabled(settingsValue)}
-                    disabled={settingsScope?.getSnapshot().writable !== true}
-                    onChange={event => { void toggleFollowAppLogin(event.currentTarget.checked) }}
-                  />
-                  <span>{t('row.followAppLogin')}</span>
-                </label>
-              </div>
-              <div className="dsm-trae-usage-account">
-                <div className="dsm-trae-usage-account-copy" role="status">
-                  <div className="dsm-trae-usage-status">
-                    <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(status.status)} />
-                    <span>{label}</span>
-                  </div>
-                  {status.status === 'signed-in'
-                    ? <span className="dsm-trae-usage-expiry">
-                        {t('row.tokenExpiry', { expiresAt: formatDateTime(status.tokenExpiresAtMs) })}
-                      </span>
-                    : null}
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  className="dsm-btn dsm-btn-outline"
-                  disabled={busy}
-                  onClick={() => { void rescanAccounts() }}
-                >
-                  {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
-                </button>
-              </div>
-              {status.status !== 'error' && status.accounts.length > 0
-                ? <section className="dsm-trae-account-picker" aria-label={t('row.accountsTitle')}>
-                    <div className="dsm-trae-usage-select-wrap">
-                      <select
-                        className="dsm-trae-usage-select"
-                        value={status.status === 'signed-in' ? status.accountId : ''}
-                        disabled={switchingAccount || settingsScope?.getSnapshot().writable !== true}
-                        onChange={event => { void switchAccount(event.currentTarget.value) }}
-                      >
-                        {/* The raw `edition` token ("solo") told the user nothing
-                            about WHICH product the credential came from, which is
-                            exactly what made a leftover TRAE SOLO CN login
-                            indistinguishable from the Trae CN one they thought
-                            they were bound to (issue #25). Spell the product out
-                            and keep the region as the second axis. */}
-                        {status.accounts.map(account => <option key={account.id} value={account.id}>{account.accountName} · {account.region === 'ai' ? t('row.regionAi') : t('row.regionCn')} · {t(`row.edition${account.edition === 'cn' ? 'Cn' : account.edition === 'sg' ? 'Sg' : account.edition === 'solo' ? 'Solo' : 'SoloSg'}`)}</option>)}
-                      </select>
+                {/* CN ONLY: this readout mirrors a CN balance, and the
+                    international region's usage document carries no `credits` at
+                    all (`webStatusFor` returns `payStatus` for `region === 'ai'`),
+                    so there is no number for it to show. */}
+                {activeRegion !== 'cn'
+                  ? null
+                  : <div className="dsm-trae-set-row">
+                      <span className="dsm-trae-set-copy">
+                        <b id={creditsLabelId}>{t('row.showPointsInMainUi')}</b>
+                        <span id={creditsHintId}>{t('row.showPointsInMainUiHint')}</span>
+                      </span>
+                      <span className="dsm-trae-set-ctl">
+                        <label className="dsm-trae-switch">
+                          <input
+                            type="checkbox"
+                            checked={settingsEdits.showPointsInMainUi}
+                            disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
+                            aria-labelledby={creditsLabelId}
+                            aria-describedby={creditsHintId}
+                            onChange={event => { editSettings({ showPointsInMainUi: event.currentTarget.checked }) }}
+                          />
+                          <span className="dsm-trae-switch-track" aria-hidden="true" />
+                        </label>
+                      </span>
+                    </div>}
+                <div className="dsm-trae-set-actions">
+                  {settingsDirty ? <span className="dsm-trae-set-dirty" role="status">{t('row.settingsDirty')}</span> : null}
+                  <div className="dsm-trae-set-buttons">
+                    <button
+                      type="button"
+                      className="dsm-btn dsm-btn-outline"
+                      disabled={!settingsDirty || savingSettings}
+                      onClick={discardSettings}
+                    >
+                      {t('row.discard')}
+                    </button>
+                    <button
+                      type="button"
+                      className="dsm-btn dsm-btn-primary"
+                      disabled={!settingsDirty || savingSettings || settingsScope?.getSnapshot().writable !== true}
+                      onClick={() => { void saveSettings() }}
+                    >
+                      {savingSettings ? t('row.saving') : t('row.save')}
+                    </button>
+                  </div>
+                </div>
+              </section>
+              {/* The account table: one row per locally detected sign-in, with
+                  the action that matters on a multi-account machine — bind this
+                  one — at its end. The switch is per ACCOUNT and never a sweep:
+                  Trae spends one check-in per DEVICE per day, so there is
+                  deliberately no "for every account" control anywhere in this
+                  block (the check-in button below stays a single-account click). */}
+              <section className="dsm-trae-accounts" aria-label={t('row.accountsTitle')}>
+                <div className="dsm-trae-accounts-head">
+                  <div>
+                    <h3 className="dsm-trae-accounts-title">{t('row.accountsTitle')}</h3>
+                    <p className="dsm-trae-accounts-hint">{t('row.accountsHint')}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="dsm-btn dsm-btn-outline"
+                    disabled={busy}
+                    onClick={() => { void rescanAccounts() }}
+                  >
+                    {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
+                  </button>
+                </div>
+                {status.status !== 'signed-in' || status.accounts.length === 0
+                  ? <div className="dsm-trae-usage-account" role="status">
+                      <div className="dsm-trae-usage-account-copy">
+                        <div className="dsm-trae-usage-status">
+                          <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(status.status)} />
+                          <span>{label}</span>
+                        </div>
+                        {status.status === 'signed-in'
+                          ? <span className="dsm-trae-usage-expiry">
+                              {t('row.tokenExpiry', { expiresAt: formatDateTime(status.tokenExpiresAtMs) })}
+                            </span>
+                          : null}
+                      </div>
                     </div>
-                    {status.status === 'signed-in' && status.alternatives !== undefined && status.alternatives.length > 0
-                      ? <div className="dsm-trae-usage-alternative" role="status">
-                        <p className="dsm-trae-usage-alternative-text">
-                          {t('row.creditsExhausted', { account: status.accountName })}
-                          {' '}
-                          {t('row.creditsAlternative', {
-                            accounts: status.alternatives
-                              .map(alt => `${alt.accountName}（${t(`row.edition${alt.edition === 'cn' ? 'Cn' : alt.edition === 'sg' ? 'Sg' : alt.edition === 'solo' ? 'Solo' : 'SoloSg'}`)}：${formatNumber(alt.workAvailable + alt.generalAvailable)}）`)
-                              .join('、'),
-                          })}
-                        </p>
-                        <button
-                          type="button"
-                          className="dsm-trae-usage-switch-button"
-                          disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
-                          onClick={() => {
-                            const target = status.alternatives?.[0]
-                            if (target !== undefined) void switchAccount(target.id)
-                          }}
-                        >
-                          {t('row.creditsAlternativeSwitch')}
-                        </button>
-                      </div>
-                      : null}
-                    {/* The app signed in to a DIFFERENT account than this
-                        plugin is bound to (issue #29). Reported by the Host only
-                        on that mismatch, so the row exists exactly when the
-                        binding is stale — the failure that used to require
-                        opening the dropdown after every Trae sign-out. Reuses
-                        the alternatives row's styling (same class of "your
-                        binding is wrong, one click fixes it") and goes through
-                        the same `switchAccount` write as the dropdown. */}
-                    {status.status === 'signed-in' && status.appLogin !== undefined
-                      ? <div className="dsm-trae-usage-alternative" role="status">
-                        <p className="dsm-trae-usage-alternative-text">
-                          {t('row.appLoginMismatch', { account: status.appLogin.accountName })}
-                        </p>
-                        <button
-                          type="button"
-                          className="dsm-trae-usage-switch-button"
-                          disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
-                          onClick={() => { void followAppLogin() }}
-                        >
-                          {t('row.appLoginFollow')}
-                        </button>
-                      </div>
-                      : null}
-                    {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
-                  </section>
-                : null}
+                  : <table className="dsm-trae-accounts-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">{t('row.accountColumnAccount')}</th>
+                          <th scope="col" className="dsm-trae-accounts-num">{t('row.accountColumnCredits')}</th>
+                          <th scope="col">{t('row.accountColumnExpiry')}</th>
+                          <th scope="col">{t('row.accountColumnAction')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {status.accounts.map(account => {
+                          const current = status.status === 'signed-in' && account.id === status.accountId
+                          const figure = figureOf(account.id, current)
+                          return (
+                            <tr key={account.id} className={current ? 'dsm-trae-accounts-row-current' : undefined}>
+                              <th scope="row">
+                                {/* The flex column lives on a SPAN inside the
+                                    cell: `display:flex` on the `<th>` itself
+                                    would take the cell out of the table layout
+                                    and let the columns drift apart. */}
+                                <span className="dsm-trae-accounts-account">
+                                  <span className="dsm-trae-accounts-line">
+                                    <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(account.selected ? 'signed-in' : 'signed-out')} />
+                                    <span className="dsm-trae-accounts-name">{account.accountName}</span>
+                                    {current ? <span className="dsm-trae-accounts-badge">{t('row.accountCurrentBadge')}</span> : null}
+                                  </span>
+                                  <span className="dsm-trae-accounts-meta">
+                                    {editionLabel(account.edition)}
+                                    {' · '}
+                                    {account.region === 'ai' ? t('row.regionAi') : t('row.regionCn')}
+                                    {' · '}
+                                    {sourceLabel(account.source)}
+                                  </span>
+                                </span>
+                              </th>
+                              <td className="dsm-trae-accounts-num">{figure === undefined ? '—' : formatNumber(figure)}</td>
+                              <td className="dsm-trae-accounts-expiry">{formatDateTime(account.tokenExpiresAtMs)}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="dsm-trae-accounts-switch"
+                                  disabled={current || switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
+                                  onClick={() => { void switchAccount(account.id) }}
+                                >
+                                  {current
+                                    ? t('row.accountCurrentBadge')
+                                    : switchingAccount ? t('row.accountSwitching') : t('row.accountSwitch')}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>}
+                <div className="dsm-trae-accounts-foot">
+                  <button
+                    type="button"
+                    className="dsm-trae-accounts-read"
+                    disabled={readingCredits || status.status !== 'signed-in'}
+                    onClick={() => { void readAccountCredits() }}
+                  >
+                    {readingCredits ? t('row.accountsReadingCredits') : t('row.accountsReadCredits')}
+                  </button>
+                  {accountCreditsError === undefined
+                    ? null
+                    : <p className="dsm-trae-usage-error" role="alert">{t('row.accountsCreditsFailed', { message: accountCreditsError })}</p>}
+                </div>
+                {status.status === 'signed-in' && status.alternatives !== undefined && status.alternatives.length > 0
+                  ? <div className="dsm-trae-usage-alternative" role="status">
+                    <p className="dsm-trae-usage-alternative-text">
+                      {t('row.creditsExhausted', { account: status.accountName })}
+                      {' '}
+                      {t('row.creditsAlternative', {
+                        accounts: status.alternatives
+                          .map(alt => `${alt.accountName}（${t(`row.edition${alt.edition === 'cn' ? 'Cn' : alt.edition === 'sg' ? 'Sg' : alt.edition === 'solo' ? 'Solo' : 'SoloSg'}`)}：${formatNumber(alt.workAvailable + alt.generalAvailable)}）`)
+                          .join('、'),
+                      })}
+                    </p>
+                    <button
+                      type="button"
+                      className="dsm-trae-usage-switch-button"
+                      disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
+                      onClick={() => {
+                        const target = status.alternatives?.[0]
+                        if (target !== undefined) void switchAccount(target.id)
+                      }}
+                    >
+                      {t('row.creditsAlternativeSwitch')}
+                    </button>
+                  </div>
+                  : null}
+                {/* The app signed in to a DIFFERENT account than this plugin is
+                    bound to (issue #29). Reported by the Host only on that
+                    mismatch, so the row exists exactly when the binding is stale
+                    — the failure that used to require hunting the account list
+                    after every Trae sign-out. Goes through the same
+                    `switchAccount` write as the table's own buttons. */}
+                {status.status === 'signed-in' && status.appLogin !== undefined
+                  ? <div className="dsm-trae-usage-alternative" role="status">
+                    <p className="dsm-trae-usage-alternative-text">
+                      {t('row.appLoginMismatch', { account: status.appLogin.accountName })}
+                    </p>
+                    <button
+                      type="button"
+                      className="dsm-trae-usage-switch-button"
+                      disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
+                      onClick={() => { void followAppLogin() }}
+                    >
+                      {t('row.appLoginFollow')}
+                    </button>
+                  </div>
+                  : null}
+                {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
+              </section>
               {status.status === 'signed-in'
                 ? <>
                     {status.payStatus === undefined || payPlan === undefined ? null : (
