@@ -78,6 +78,12 @@ export interface TraeWebCreditAccount {
   displayDesc: string
   remain: number
   size: number
+  /**
+   * When this pack lapses, in epoch milliseconds, taken from the upstream's own
+   * `end_time`. Absent when the upstream reported no usable time (0 / missing),
+   * so a consumer can tell "no date" apart from "1970".
+   */
+  expiresAtMs?: number
 }
 
 /** Aggregated usage/credit answer rendered by the plugin card. */

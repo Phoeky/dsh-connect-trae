@@ -159,6 +159,22 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+/**
+ * Normalize an upstream epoch to milliseconds.
+ *
+ * The pack's `end_time` arrives in SECONDS while {@link TraeUsagePack.endTimeMs}
+ * names milliseconds. Measured against a live CN account: `1788340660` is
+ * 2026-09-02, and reading it as milliseconds would place the pack in 1970 — a
+ * date that sorts ahead of every real one and reads as "long expired". The
+ * magnitude test is the same one `auth.ts` applies to stored expiry fields, so
+ * an upstream that ever switches to milliseconds is passed through instead of
+ * being multiplied into the year 57000.
+ */
+function epochToMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return 0
+  return value > 1e12 ? value : value * 1000
+}
+
 function parseUsageSnapshot(payload: Record<string, unknown>): TraeUsageSnapshot {
   const summaryRaw = payload['usage_summary'] as Record<string, unknown> | undefined
   const summary: TraeUsageSummary = {
@@ -184,7 +200,7 @@ function parseUsageSnapshot(payload: Record<string, unknown>): TraeUsageSnapshot
     packs.push({
       displayDesc: typeof pack['display_desc'] === 'string' ? pack['display_desc'] : '',
       entitlementId: typeof base?.['entitlement_id'] === 'string' ? base['entitlement_id'] : '',
-      endTimeMs: asNumber(base?.['end_time']) ?? 0,
+      endTimeMs: epochToMs(asNumber(base?.['end_time'])),
       currency: asNumber(base?.['currency']) ?? 0,
       ...availableEndpoint === undefined ? {} : { availableEndpoint },
       ...creditsLimit === undefined ? {} : { creditsLimit },

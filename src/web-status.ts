@@ -207,13 +207,21 @@ function loopbackOrigin(req: IncomingMessage): boolean {
  * — a second implementation of the Work/general split would be free to disagree
  * with the number shown next to it.
  */
-export function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: number }; packs: { displayDesc: string; availableEndpoint?: number; consumedCredits?: number; creditsLimit?: number }[] }): TraeWebCredits {
+export function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: number }; packs: { displayDesc: string; availableEndpoint?: number; consumedCredits?: number; creditsLimit?: number; endTimeMs?: number }[] }): TraeWebCredits {
   const { totalAmount, consumedAmount } = snapshot.summary
   const credit = (value: number): number => Math.round(value * 10_000) / 10_000
   const accounts = snapshot.packs.map(pack => ({
     displayDesc: pack.displayDesc,
     remain: credit(Math.max(0, (pack.creditsLimit ?? 0) - (pack.consumedCredits ?? 0))),
     size: pack.creditsLimit ?? 0,
+    // Carried through because the pack's own expiry is what answers "which pack
+    // lapses first" — the one question the remaining balance alone cannot. The
+    // upstream already reports it per pack (`end_time`), so this is projection,
+    // not a new read. Omitted rather than zeroed when there is no usable time:
+    // a `0` here would read as 1970 and sort ahead of every real date.
+    ...(typeof pack.endTimeMs === 'number' && Number.isFinite(pack.endTimeMs) && pack.endTimeMs > 0
+      ? { expiresAtMs: pack.endTimeMs }
+      : {}),
   }))
   // `usage.credits_amount` is consumed credit, not remaining balance. Derive
   // each bucket's balance from its quota, matching total - consumed upstream.
