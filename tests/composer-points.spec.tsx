@@ -170,27 +170,46 @@ describe('ComposerPointsGate provider scoping', () => {
     expect(calls[0]).toBe(withTraeRegion(TRAE_USAGE_PATH, 'cn'))
   })
 
-  it('renders nothing for the INTERNATIONAL provider, and fetches nothing', async () => {
-    // Not a provider-scoping choice but a data one: the Host builds the `ai`
-    // usage document from `payStatus` and never sets `credits` on it, because
-    // that side is subscription-based. Rendering here would put the hardcoded
-    // "Trae CN" label beside a dash. The switch being ON proves this is the
-    // region rule deciding, not the switch.
-    const { calls } = stubRoute()
+  it('shows the PLAN for the INTERNATIONAL provider, not a balance', async () => {
+    // The ai side is subscription-based: its usage document carries `payStatus`
+    // and never `credits`. The readout used to render NOTHING here, which is the
+    // asymmetry a user reported — while an international model was selected the
+    // whole readout vanished. It now shows what that side actually has.
+    const calls: string[] = []
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+      const url = String(input)
+      calls.push(url)
+      return new Response(JSON.stringify({
+        status: 'signed-in',
+        accountId: 'ai-1',
+        accountName: 'LaoDing',
+        tokenExpiresAtMs: Date.now() + 3_600_000,
+        region: 'ai',
+        accounts: [
+          { id: 'ai-1', accountName: 'LaoDing', edition: 'sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true },
+        ],
+        models: [],
+        enabledModelIds: [],
+        payStatus: { isDollarUsageBilling: true, hasPackage: false, inTrial: false, trialEndTimeMs: 0, payIdentity: 5, payIdentityStr: 'Pro' },
+      }), { status: 200 })
+    })
     const { scope } = makeScope(true)
-    const { container } = render(
+    render(
       <ComposerPointsGate
         t={t}
         settingsScope={scope as never}
         useProjection={() => ({ lastUsed: { provider: 'trae-global' } })}
       />,
     )
-    expect(container.innerHTML).toBe('')
-    expect(calls).toHaveLength(0)
+    // The plan name, under the INTERNATIONAL product label — not "Trae CN".
+    await waitFor(() => { expect(screen.getByText(/composer\.pointsGlobal/)).toBeTruthy() })
+    expect(screen.getByText(/Pro/)).toBeTruthy()
+    // And it read the AI region's document, not the CN one.
+    expect(calls[0]).toBe(withTraeRegion(TRAE_USAGE_PATH, 'ai'))
   })
 
-  it('owns exactly the ONE provider route that has a balance to show', () => {
-    expect(TRAE_COMPOSER_PROVIDERS).toEqual({ 'trae': 'cn' })
+  it('owns BOTH provider routes, one per region', () => {
+    expect(TRAE_COMPOSER_PROVIDERS).toEqual({ 'trae': 'cn', 'trae-global': 'ai' })
   })
 })
 

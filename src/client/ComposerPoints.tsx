@@ -34,12 +34,14 @@ import { createPortal } from 'react-dom'
 import { useAnchoredPosition, useDismissOnOutsidePointer } from './popover.ts'
 import {
   TRAE_ACCOUNT_CREDITS_PATH,
+  TRAE_ACCOUNT_STATUS_PATH,
   TRAE_USAGE_PATH,
   configuredAccountsOf,
   withTraeRegion,
 } from '../status-paths.ts'
 import { COMPOSER_POINTS_CSS } from './styles.ts'
-import type { TraeWebAccountCredit, TraeWebUsage } from '../status-paths.ts'
+import { planText } from './plan-text.ts'
+import type { TraeWebAccountCredit, TraeWebAccountState, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import type { TraeSettingsKey } from './locales.ts'
 import type { TraeUsageCardInjected } from './TraeUsageCard.tsx'
@@ -95,21 +97,29 @@ export interface ComposerPointsProps extends Partial<ComposerPointsInjected> {
 }
 
 /**
- * Provider routes whose credit balance this readout can show, mapped to the
- * region to read it from.
+ * Provider routes this readout serves, mapped to the region to read from.
  *
- * CN ONLY, and the restriction is the data's, not a preference: the Host builds
- * the international region's usage document from `payStatus` and never sets
- * `credits` on it (`webStatusFor` returns early for `region === 'ai'`), because
- * that side is subscription-based and has no comparable balance. Mapping
- * `trae-global` here would render the hardcoded "Trae CN" label next to a dash
- * — a number-slot with no number — while an international model is selected.
+ * BOTH regions, but they do not show the same KIND of number, and that is the
+ * data's doing rather than a preference:
  *
- * Mirrors the CN half of `TRAE_PROVIDERS` on the host side; duplicated here
- * because the client bundle must not import the host entry.
+ *  - `cn` is credit-based, so the readout shows the account's general balance.
+ *  - `ai` is subscription-based. The Host builds its usage document from
+ *    `payStatus` and never sets `credits` on it (`webStatusFor` returns early
+ *    for `region === 'ai'`), so there is no balance to show. What it does carry
+ *    is the PLAN, so the readout names the plan (`Pro` / `Free`) instead.
+ *
+ * The international route was previously omitted entirely, which meant the
+ * readout vanished while an international model was selected — the asymmetry a
+ * user reported. Omitting it was the safer half of a real problem (a plan-shaped
+ * document templated into a number slot renders a dash), but the fix is to
+ * render what that side actually has, not to render nothing.
+ *
+ * Mirrors `TRAE_PROVIDERS` on the host side; duplicated here because the client
+ * bundle must not import the host entry.
  */
 export const TRAE_COMPOSER_PROVIDERS: Readonly<Record<string, TraeRegion>> = {
   'trae': 'cn',
+  'trae-global': 'ai',
 }
 
 /** The general credit balance out of one usage document, or undefined. */
@@ -135,6 +145,16 @@ export function ComposerPoints(props: ComposerPointsProps) {
 
   const [usage, setUsage] = useState<TraeWebUsage | undefined>(undefined)
   const [accountCredits, setAccountCredits] = useState<TraeWebAccountCredit[] | undefined>(undefined)
+  /**
+   * Per-account PLANS, international region only.
+   *
+   * The CN panel reads the credit route; that route is CN-shaped (it calls the
+   * credit snapshot, which the ai document does not carry), so the international
+   * panel reads the per-account STATUS route instead — the same one the card's
+   * roster uses, which answers `payStatus` for ai. Reads only while the panel is
+   * open, for the same reason the credit route does.
+   */
+  const [accountPlans, setAccountPlans] = useState<Record<string, TraeWebPayStatus | undefined> | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [switchingId, setSwitchingId] = useState<string | undefined>(undefined)
   const [failed, setFailed] = useState(false)
@@ -228,13 +248,45 @@ export function ComposerPoints(props: ComposerPointsProps) {
     }
   }, [owned, fetchUsage])
 
+  /**
+   * Every account's PLAN, one status read per account — ai only.
+   *
+   * Costs one upstream call per account, paid only while the panel is open (the
+   * same rule the credit route follows). A failed read leaves that account's plan
+   * undefined, which the row renders as a dash: the row still switches accounts,
+   * which is the panel's primary job.
+   */
+  const fetchAccountPlans = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    if (activeRegion !== 'ai') return
+    const roster = usage?.status === 'signed-in'
+      ? usage.accounts.filter(account => account.region === 'ai')
+      : []
+    if (roster.length === 0) { setAccountPlans({}); return }
+    const entries = await Promise.all(roster.map(async account => {
+      try {
+        const response = await fetch(
+          `${withTraeRegion(TRAE_ACCOUNT_STATUS_PATH, 'ai')}&accountId=${encodeURIComponent(account.id)}`,
+          { headers: { accept: 'application/json' }, credentials: 'same-origin', ...signal === undefined ? {} : { signal } },
+        )
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const state = await response.json() as TraeWebAccountState
+        return [account.id, state.payStatus] as const
+      } catch {
+        return [account.id, undefined] as const
+      }
+    }))
+    if (!mounted.current || signal?.aborted === true) return
+    setAccountPlans(Object.fromEntries(entries))
+  }, [activeRegion, usage])
+
   // Per-account figures are read on OPEN, not on the 5-minute cycle.
   useEffect(() => {
     if (!open || activeRegion === undefined) return undefined
     const controller = new AbortController()
-    void fetchAccountCredits(controller.signal)
+    if (activeRegion === 'ai') void fetchAccountPlans(controller.signal)
+    else void fetchAccountCredits(controller.signal)
     return () => { controller.abort() }
-  }, [open, activeRegion, fetchAccountCredits])
+  }, [open, activeRegion, fetchAccountCredits, fetchAccountPlans])
 
   // Escape closes the panel, matching the neighbouring popovers.
   useEffect(() => {
@@ -272,7 +324,8 @@ export function ComposerPoints(props: ComposerPointsProps) {
         throw new Error('the Host did not persist the switch')
       }
       await fetchUsage()
-      await fetchAccountCredits()
+      if (activeRegion === 'ai') await fetchAccountPlans()
+      else await fetchAccountCredits()
     } catch {
       if (mounted.current) setFailed(true)
     } finally {
@@ -293,10 +346,25 @@ export function ComposerPoints(props: ComposerPointsProps) {
   // them off the union would be a type error and a runtime `undefined` for a
   // genuinely signed-out account.
   const signedIn = usage?.status === 'signed-in' ? usage : undefined
-  const general = signedIn === undefined ? undefined : generalCreditsOf(signedIn)
   const signedOut = usage !== undefined && usage.status === 'signed-out'
-  const valueText = general === undefined ? '—' : formatCredits(general)
-  const label = t('composer.points')
+  const general = signedIn === undefined ? undefined : generalCreditsOf(signedIn)
+  /**
+   * What the readout shows after the separator.
+   *
+   * Region-dependent because the two sides answer different questions: CN has a
+   * spendable balance, ai has a plan. Reading the credit field on an ai document
+   * would always be `undefined` and print the dash this change exists to remove.
+   */
+  const valueText = activeRegion === 'ai'
+    ? (signedIn?.payStatus === undefined
+        ? '—'
+        : planText(signedIn.payStatus, t))
+    : general === undefined ? '—' : formatCredits(general)
+  /**
+   * The label before the separator. Per REGION, not one hardcoded 'Trae CN':
+   * the international readout sat next to the wrong product name otherwise.
+   */
+  const label = activeRegion === 'ai' ? t('composer.pointsGlobal') : t('composer.points')
 
   /**
    * The table's rows: every account in this region, with its general balance.
@@ -308,12 +376,27 @@ export function ComposerPoints(props: ComposerPointsProps) {
    */
   const selectedId = accountCredits?.find(account => account.selected)?.id
     ?? (signedIn === undefined ? undefined : signedIn.accountId)
-  const sourceRows: TraeWebAccountCredit[] = accountCredits
-    ?? (signedIn === undefined
-      ? []
-      : signedIn.accounts
-        .filter(account => account.region === activeRegion)
-        .map(account => ({ id: account.id, accountName: account.accountName, selected: account.selected })))
+  /**
+   * The panel's rows.
+   *
+   * On ai the credit route is never read (it is CN-shaped), so the roster comes
+   * from the usage document alone — which already lists every account in the
+   * region with its selection, and is exactly what the panel needs to offer the
+   * switch. On cn the credit route's answer is authoritative because it carries
+   * the figures.
+   */
+  const sourceRows: TraeWebAccountCredit[] = activeRegion === 'ai'
+    ? (signedIn === undefined
+        ? []
+        : signedIn.accounts
+          .filter(account => account.region === 'ai')
+          .map(account => ({ id: account.id, accountName: account.accountName, selected: account.selected })))
+    : accountCredits
+      ?? (signedIn === undefined
+        ? []
+        : signedIn.accounts
+          .filter(account => account.region === activeRegion)
+          .map(account => ({ id: account.id, accountName: account.accountName, selected: account.selected })))
   const rows: TraeWebAccountCredit[] = sourceRows.map(row => {
     // The bound account's balance is already in the usage document the readout
     // rendered, so fall back to it when the table request carried no figure.
@@ -341,10 +424,12 @@ export function ComposerPoints(props: ComposerPointsProps) {
           className="dsm-trae-composer-panel"
           style={position ?? { visibility: 'hidden', left: 0, top: 0 }}
           role="dialog"
-          aria-label={t('composer.panelTitle')}
+          aria-label={activeRegion === 'ai' ? t('composer.panelTitleGlobal') : t('composer.panelTitle')}
         >
           <div className="dsm-trae-composer-panel-head">
-            <span className="dsm-trae-composer-panel-title">{t('composer.panelTitle')}</span>
+            <span className="dsm-trae-composer-panel-title">
+              {activeRegion === 'ai' ? t('composer.panelTitleGlobal') : t('composer.panelTitle')}
+            </span>
             <button
               type="button"
               className="dsm-trae-composer-panel-refresh"
@@ -363,7 +448,13 @@ export function ComposerPoints(props: ComposerPointsProps) {
                   <thead>
                     <tr>
                       <th scope="col">{t('composer.account')}</th>
-                      <th scope="col" className="dsm-trae-composer-panel-num">{t('composer.generalCredits')}</th>
+                      {/* On ai the figure in this column is the PLAN, not a
+                          balance: the international document has no `credits`
+                          at all. A header reading 「通用积分」 above the word
+                          `Pro` would name the wrong quantity. */}
+                      <th scope="col" className="dsm-trae-composer-panel-num">
+                        {activeRegion === 'ai' ? t('composer.plan') : t('composer.generalCredits')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -384,7 +475,14 @@ export function ComposerPoints(props: ComposerPointsProps) {
                             </button>
                           </th>
                           <td className="dsm-trae-composer-panel-num">
-                            {row.generalAvailable === undefined ? '—' : formatCredits(row.generalAvailable)}
+                            {activeRegion === 'ai'
+                              ? (() => {
+                                  const payStatus = row.id === selectedId && signedIn?.payStatus !== undefined
+                                    ? signedIn.payStatus
+                                    : accountPlans?.[row.id]
+                                  return payStatus === undefined ? '—' : planText(payStatus, t)
+                                })()
+                              : row.generalAvailable === undefined ? '—' : formatCredits(row.generalAvailable)}
                           </td>
                         </tr>
                       )

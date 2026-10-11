@@ -21,14 +21,14 @@ import {
   TRAE_MODELS_TEST_PATH,
   TRAE_REGIONS,
   TRAE_USAGE_PATH,
-  traePlanIsPaid,
   unwrapVolatileDeep,
   withTraeRegion,
 } from '../status-paths.ts'
-import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebModel, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
+import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
+import { planVerdict as payVerdict } from './plan-text.ts'
 import type { TraeSettingsKey } from './locales.ts'
 
 /** Localized copy injected by the browser-plugin registration. */
@@ -145,25 +145,6 @@ function formatCapacity(value: number | undefined, unknown: string): string {
   if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`
   if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}K`
   return formatNumber(value)
-}
-
-/**
- * The subscription row's verdict.
- *
- * Two independent things can entitle an international account: a package row
- * (`has_package`) and a plan identity (`user_pay_identity_str`). Reading only
- * the first is what rendered a Pro member as "No active package" in issue #19,
- * so either one counts. The tier string is carried separately so the row can
- * name the plan instead of just asserting a boolean.
- */
-function payVerdict(payStatus: TraeWebPayStatus): { paid: boolean; tier?: string; label: 'row.subscribed' | 'row.noPackage' } {
-  const tier = payStatus.payIdentityStr?.trim()
-  const paid = payStatus.hasPackage || traePlanIsPaid(payStatus.payIdentityStr)
-  return {
-    paid,
-    ...tier === undefined || tier === '' ? {} : { tier },
-    label: paid ? 'row.subscribed' : 'row.noPackage',
-  }
 }
 
 /**
