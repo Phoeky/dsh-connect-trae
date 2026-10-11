@@ -4,7 +4,7 @@ import type { TraeCredential } from '../src/auth.ts'
 import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
 import type { TraeRegion } from '../src/region.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
-import { traeAccountCredits, traeWebUsage } from '../src/web-status.ts'
+import { toCredits, traeAccountCredits, traeWebUsage } from '../src/web-status.ts'
 import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_MODELS_TEST_PATH, TRAE_USAGE_PATH } from '../src/status-paths.ts'
 
 const expiresAtMs = Date.now() + 60_000
@@ -122,8 +122,8 @@ describe('traeWebUsage', () => {
       workAvailable: 0,
       generalAvailable: 20.3712,
       accounts: [
-        { displayDesc: '老用户福利', remain: 0, size: 2000 },
-        { displayDesc: '签到奖励', remain: 20.3712, size: 200 },
+        { displayDesc: '老用户福利', remain: 0, size: 2000, expiresAtMs: 1788340660000 },
+        { displayDesc: '签到奖励', remain: 20.3712, size: 200, expiresAtMs: 1789837484000 },
       ],
     })
     // Credits and check-in are two independent reads, so the card document
@@ -1008,5 +1008,38 @@ describe('app sign-in follow hint (issue #29)', () => {
     expect(result.status).toBe('signed-in')
     if (result.status !== 'signed-in') return
     expect(result.appLogin).toBeUndefined()
+  })
+})
+
+describe('toCredits per-pack expiry', () => {
+  const pack = (over: Record<string, unknown> = {}) => ({
+    displayDesc: '签到奖励',
+    creditsLimit: 200,
+    consumedCredits: 0,
+    ...over,
+  })
+
+  const creditsOf = (packs: ReturnType<typeof pack>[]) => toCredits({
+    summary: { totalAmount: 200, consumedAmount: 0 },
+    packs,
+  })
+
+  it('carries each pack expiry through as epoch milliseconds', () => {
+    const result = creditsOf([pack({ endTimeMs: 1788340660000 })])
+    expect(result.accounts[0]?.expiresAtMs).toBe(1788340660000)
+  })
+
+  it('omits the expiry when the upstream reported no usable time', () => {
+    // `endTimeMs` is 0 for a pack the upstream gave no `end_time` for. It must be
+    // ABSENT rather than 0: a zero epoch reads as 1970 and would sort ahead of
+    // every real date, which is the opposite of what a "which lapses first"
+    // consumer needs.
+    const result = creditsOf([pack({ endTimeMs: 0 })])
+    expect(result.accounts[0]).not.toHaveProperty('expiresAtMs')
+  })
+
+  it('omits the expiry for a pack that carries none at all', () => {
+    const result = creditsOf([pack()])
+    expect(result.accounts[0]).not.toHaveProperty('expiresAtMs')
   })
 })
