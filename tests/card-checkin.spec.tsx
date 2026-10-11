@@ -232,6 +232,37 @@ describe('TraeUsageCard daily check-in', () => {
     await waitFor(() => { expect(screen.getByText(/row\.checkinError:.*9004/)).toBeTruthy() })
   })
 
+  it('claims for the ONE bound account only — never a per-account sweep', async () => {
+    // The account dropdown exists so a multi-account machine can switch who the
+    // card bills and signs in as (the WorkBuddy-style switch, issues #25/#29).
+    // That must NOT turn the single check-in button into a fan-out: Trae
+    // allows ONE claim per device per day (verified 2026-10-11 on a live CN
+    // account: `did_checked_in` flipped true→false with the `x-device-id`
+    // header dropped, same account, same day), so sweeping every account would
+    // only produce a 9095 refusal for each account after the first. The claim
+    // stays bound to the selected account and is sent exactly once.
+    const document = usageDocument(
+      { checkedIn: false, didCheckedIn: false, credits: 100, enabled: true },
+      {
+        accounts: [
+          { id: 'account-1', accountName: 'LaoDing', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: true },
+          { id: 'account-2', accountName: 'SecondCN', edition: 'cn', region: 'cn', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: false },
+          { id: 'account-3', accountName: 'SgAcc', edition: 'sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: Date.now() + 3_600_000, selected: false },
+        ],
+      },
+    )
+    const { calls } = stubFetch(document)
+    const { scope } = makeScope()
+    await renderOpen(scope)
+
+    fireEvent.click(checkinButton())
+
+    await waitFor(() => { expect(calls.some(call => call.url.startsWith(TRAE_CHECKIN_PATH))).toBe(true) })
+    const claims = calls.filter(call => call.url.startsWith(TRAE_CHECKIN_PATH))
+    expect(claims).toHaveLength(1)
+    expect(claims[0]).toMatchObject({ method: 'POST', url: withTraeRegion(TRAE_CHECKIN_PATH, 'cn') })
+  })
+
   it('reports a transport failure on the claim route', async () => {
     stubFetch(
       usageDocument({ checkedIn: false, didCheckedIn: false, credits: 150, enabled: true }),
