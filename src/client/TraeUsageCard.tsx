@@ -1134,7 +1134,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           aria-label={t('row.tabSwitchAria', { region: item === 'cn' ? t('row.tabCn') : t('row.tabAi') })}
                           onChange={event => { void toggleRegion(item, event.currentTarget.checked) }}
                         />
-                        <span className="dsm-trae-switch-track" aria-hidden="true" />
                       </label>
                     </div>
                   )
@@ -1179,7 +1178,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                         aria-describedby={followHintId}
                         onChange={event => { editSettings({ followAppLogin: event.currentTarget.checked }) }}
                       />
-                      <span className="dsm-trae-switch-track" aria-hidden="true" />
                     </label>
                   </span>
                 </div>
@@ -1204,7 +1202,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                             aria-describedby={creditsHintId}
                             onChange={event => { editSettings({ showPointsInMainUi: event.currentTarget.checked }) }}
                           />
-                          <span className="dsm-trae-switch-track" aria-hidden="true" />
                         </label>
                       </span>
                     </div>}

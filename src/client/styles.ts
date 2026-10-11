@@ -42,9 +42,8 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
 .dsm-trae-tab-active{color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-2,#232529);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2,#3a3d45)}
 .dsm-trae-tab-off{opacity:.55}
-/* The tab switch borrows .dsm-trae-switch wholesale (see the knob rules above);
-   only the padding differs, so the tab bar reads as the same product as the
-   settings block instead of showing a raw accent checkbox beside it. */
+/* Same checkbox as the settings block (.dsm-trae-switch); only the padding
+   differs, so it sits inside the tab cell without crowding the label. */
 .dsm-trae-tab-switch{flex:none;padding:0 8px 0 2px}
 .dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:baseline}
 .dsm-trae-tab-hint{margin:0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
@@ -66,15 +65,21 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-set-copy b{font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-set-copy span{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-set-ctl{flex:none;padding-top:1px}
+/* The card's checkboxes are the platform's own, styled only with
+   accent-color — the SAME idiom .dsm-trae-mainui-switch-label above already
+   uses for the composer-line switch, and the one the sibling
+   dsh-connect-workbuddy card uses for its tab and credits boxes.
+ *
+ * These were drawn by hand for one release: a 34x20 track with a 14px knob,
+ * --dsw-alias-brand-primary when checked. That token is DSH's CONTRAST colour
+ * (#0f1115 light / #f9fafb dark), not an accent, so a checked box came out as a
+ * solid black pill — heavier than anything else in the card, and unrelated to
+ * the native box sitting two centimetres away in the composer toolbar. The
+ * platform checkbox tracks the host's own accent and dark mode for free. */
 .dsm-trae-switch{display:inline-flex;align-items:center;cursor:pointer}
-.dsm-trae-switch input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-.dsm-trae-switch-track{position:relative;display:inline-block;width:34px;height:20px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45);transition:background .15s,border-color .15s}
-.dsm-trae-switch-track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-secondary,#c6c9d0);transition:transform .15s,background .15s}
-.dsm-trae-switch input:checked+.dsm-trae-switch-track{background:var(--dsw-alias-brand-primary,#5686fe);border-color:var(--dsw-alias-brand-primary,#5686fe)}
-.dsm-trae-switch input:checked+.dsm-trae-switch-track::after{transform:translateX(14px);background:var(--dsw-alias-bg-layer-1,#fff)}
-.dsm-trae-switch input:focus-visible+.dsm-trae-switch-track{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
-.dsm-trae-switch input:disabled+.dsm-trae-switch-track{opacity:.5}
-.dsm-trae-switch:has(input:disabled){cursor:default}
+.dsm-trae-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-switch input:disabled{cursor:default}
+.dsm-trae-switch:has(input:disabled){opacity:.6;cursor:default}
 .dsm-trae-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
 .dsm-trae-set-dirty{margin-right:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dsm-trae-set-buttons{display:flex;gap:8px}

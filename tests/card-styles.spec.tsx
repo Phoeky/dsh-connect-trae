@@ -114,7 +114,7 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
     // The new blocks are really in the DOM (an empty collection would make the
     // "nothing is missing" assertion below pass for the wrong reason).
     expect(rendered).toContain('dsm-trae-set-row')
-    expect(rendered).toContain('dsm-trae-switch-track')
+    expect(rendered).toContain('dsm-trae-switch')
     expect(rendered).toContain('dsm-trae-account-list')
     expect(rendered).toContain('dsm-trae-account-checkin')
     expect(rendered.length).toBeGreaterThan(15)
@@ -122,11 +122,26 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
     expect(rendered.filter(name => !defined.has(name) && !UNSTYLED_BY_DESIGN.has(name))).toEqual([])
   })
 
-  it('styles the switch ON state, so a ticked switch cannot look disabled', () => {
-    // The knob's travel is the only thing that distinguishes an opt-in from an
-    // opt-out; without it the control reads as broken rather than as off.
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input:checked\+\.dsm-trae-switch-track/)
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch-track::after/)
+  /**
+   * The switches are the PLATFORM checkbox, tinted with `accent-color` — the
+   * same idiom the composer-line switch already used, and the one the sibling
+   * dsh-connect-workbuddy card uses.
+   *
+   * This replaced a hand-drawn 34x20 track with a 14px knob. That design read
+   * its ON state from `--dsw-alias-brand-primary`, which is DSH's CONTRAST
+   * colour (#0f1115 light / #f9fafb dark) rather than an accent, so a ticked
+   * box rendered as a solid black pill. Nothing caught it: `accent-color` on a
+   * native box is the host's business, so there is no knob geometry left to
+   * assert — what has to hold is that the hand-drawn track is GONE and the
+   * native tint is what remains.
+   */
+  it('tints the platform checkbox instead of drawing its own knob', () => {
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*accent-color:var\(--dsw-alias-brand-primary/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch:has\(input:disabled\)/)
+    // The removed knob, spelled out: a reintroduced track would bring back the
+    // black pill and its mismatched ON state.
+    expect(TRAE_CARD_CSS).not.toContain('dsm-trae-switch-track')
+    expect(TRAE_CARD_CSS).not.toMatch(/\.dsm-trae-switch input\{[^}]*clip:rect/)
   })
 
   it('gives the two new blocks a titled container, not a bare checkbox row', () => {
@@ -157,7 +172,6 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
  * bundle) instead of inventing a plausible-looking name.
  */
 const TOKENS_VERIFIED_AGAINST_DSH = new Set([
-  '--dsw-alias-bg-layer-1',
   '--dsw-alias-bg-layer-2',
   '--dsw-alias-bg-layer-3',
   '--dsw-alias-border-l1',
