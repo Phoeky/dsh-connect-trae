@@ -453,14 +453,38 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
       })
       const body = await response.json() as { accounts?: { id: string; selected: boolean; accountName?: string }[] }
       if (!response.ok || !Array.isArray(body.accounts)) throw new Error(`HTTP ${response.status}`)
-      const selected = body.accounts.find(account => account.selected)
+      /**
+       * What this press must persist, and why it is NOT `accounts.find(selected)`.
+       *
+       * The route's `selected` flag answers "which account is IN USE" — and the
+       * store reports the account it is bound to, OR, when no binding has ever
+       * been saved, the DETECTED default (`preferred`, i.e. whatever the Trae
+       * app is signed in to). Those are the same value on a machine that has
+       * been used for a while and diverge on exactly the press where it matters:
+       * a fresh install, or a Trae sign-in the plugin has not recorded yet.
+       *
+       * Reading the flag alone therefore meant "nothing was explicitly bound"
+       * reduced to "the detected default is what is in use, write nothing" —
+       * so the account the user just refreshed was shown as bound while
+       * `accounts.<region>` stayed EMPTY, and the next store rebuild (restart,
+       * or a Trae sign-in change) silently re-defaulted somewhere else. That is
+       * the "refreshed account was not saved" report.
+       *
+       * The rule is now: persist the account this region is actually using
+       * (the store's verdict, which is the truth the card is displaying), and
+       * fall back to the region's own roster only when the route returned no
+       * verdict at all. A row that is already the SAVED binding is left alone —
+       * one press must not rewrite the settings document for nothing.
+       */
+      const inUse = body.accounts.find(account => account.selected) ?? body.accounts[0]
       const configured = configuredAccountsOf(settingsScope?.getSnapshot().value)
-      const followed = selected !== undefined && selected.id !== configured[activeRegion] && settingsScope !== undefined
-        && settingsScope.getSnapshot().writable === true
-      if (followed && settingsScope !== undefined) {
+      const alreadyBound = inUse !== undefined && inUse.id === configured[activeRegion]
+      const writable = settingsScope !== undefined && settingsScope.getSnapshot().writable === true
+      const saved = inUse !== undefined && !alreadyBound && writable
+      if (saved && settingsScope !== undefined && inUse !== undefined) {
         await writeSettingsField(settingsScope, 'accounts',
-          { ...configured, [activeRegion]: selected!.id },
-          readBack => configuredAccountsOf(readBack)[activeRegion] === selected!.id)
+          { ...configured, [activeRegion]: inUse.id },
+          readBack => configuredAccountsOf(readBack)[activeRegion] === inUse.id)
       }
       await refreshUsage(activeRegion)
       if (mounted.current) {
@@ -468,7 +492,12 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
           ? t('row.accountsRefreshedNone')
           : t('row.accountsRefreshed', {
             count: String(body.accounts.length),
-            selected: followed ? '' : ` · ${t('row.accountsKept')} ${selected?.accountName ?? selected?.id ?? '—'}`,
+            // Name what was BOUND, and say whether this press moved it. The
+            // previous wording reported "still bound to X" for a press that
+            // saved nothing at all, which is what made the gap invisible.
+            selected: saved
+              ? ` · ${t('row.accountsSaved')} ${inUse.accountName ?? inUse.id}`
+              : ` · ${t('row.accountsKept')} ${inUse?.accountName ?? configured[activeRegion] ?? '—'}`,
           }))
       }
     } catch (error: unknown) {
@@ -858,22 +887,19 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    */
   const rowImageIsAutomatic = (model: TraeWebModel): boolean => model.multimodal === true
   /**
-   * The subscription box's verdict for the bound account.
+   * The international tab's plan is rendered by `rowValue`, in the account
+   * table's 额度 column — one place, per account, beside the account it belongs
+   * to.
    *
-   * The international region has no credit packs to report, so its "balance"
-   * is the plan identity: `Free` vs a paid tier. The box below renders this
-   * verdict ONCE for the bound account, while every roster row renders its own
-   * through `rowValue` — two vantage points (this tab's account, the whole
-   * roster), not a duplicate figure.
+   * There used to be a SECOND surface for it: a standalone 「订阅状态」 box below
+   * the table, reporting the bound account's plan on its own. It was added to
+   * fix 「国际版没有那个积分框」 — an asymmetry against the CN tab's credit panel
+   * — but the table's 额度 column had since absorbed exactly that figure, so the
+   * box repeated the row directly above it. Two renderers of one verdict is the
+   * drift risk `plan-text.ts` exists to prevent, and the box could only ever
+   * restate what the marked 「当前使用」 row already said. It is gone; the row is
+   * the single surface.
    */
-  // Read the BOUND account's own `payStatus` through the SAME per-row state
-  // `rowValue` uses (`accountStatusByRegion[region][accountId]`) — not the
-  // usage document's top-level `payStatus`, which the ai document does not
-  // always carry. Same source as the roster row means the box and the row can
-  // never disagree about one account's tier, and a missing read degrades to
-  // `payStatusUnknown` instead of silently rendering nothing.
-  const payPlanState = status.status === 'signed-in' ? accountStatusByRegion[activeRegion][status.accountId] : undefined
-  const payPlan = payPlanState?.payStatus !== undefined ? payVerdict(payPlanState.payStatus) : undefined
   const activeContextBudgets = draft?.contextBudgets ?? savedContextBudgets
   const dirty = draft !== undefined
 
@@ -1156,7 +1182,17 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                   instead of two.
                   
                   The label IS the checkbox's own <label>, so the text is a
-                  larger click target and the accessible name needs no ARIA. */}
+                  larger click target and the accessible name needs no ARIA.
+                  
+                  ONE of the two booleans is on this tab, and which one is DERIVED
+                  from the region rather than a second switch:
+                  `followAppLogin` is region-agnostic (both tabs bind an account
+                  of their own), while `showPointsInMainUi` describes a CN BALANCE
+                  readout. The international tab's readout is its plan, which the
+                  account row below already names — so the switch is carried in
+                  BOTH regions instead of hidden on the international one, where
+                  turning it on is what makes that readout appear at all (see the
+                  `activeRegion !== 'cn'` guard that used to drop it). */}
               <div className="dsm-trae-prefs">
                 {/* Follow the Trae app's sign-in (issue #29). Region-agnostic:
                     both tabs bind an account of their own, so this line applies
@@ -1178,26 +1214,28 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     <span className="dsm-trae-pref-hint">{t('row.followAppLoginHint')}</span>
                   </span>
                 </label>
-                {/* CN ONLY: this readout mirrors a CN balance, and the
-                    international region's usage document carries no credits at
-                    all (webStatusFor returns payStatus for region === 'ai'), so
-                    there is no number for it to show. */}
-                {activeRegion !== 'cn'
-                  ? null
-                  : <label className="dsm-trae-pref" title={t('row.showPointsInMainUiHint')}>
-                      <input
-                        type="checkbox"
-                        checked={settingsEdits.showPointsInMainUi}
-                        disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
-                        aria-describedby={creditsHintId}
-                        onChange={event => { void writePreference('showPointsInMainUi', event.currentTarget.checked) }}
-                      />
-                      <span id={creditsHintId}>
-                        <b id={creditsLabelId}>{t('row.showPointsInMainUi')}</b>
-                        {' '}
-                        <span className="dsm-trae-pref-hint">{t('row.showPointsInMainUiHint')}</span>
-                      </span>
-                    </label>}
+                {/* REGION-AGNOSTIC, both tabs: a readout exists on either side
+                    (CN credits, international plan), so the switch that turns it
+                    on belongs on either side. The hint below names whichever
+                    figure THIS tab's readout would show, so the same box answers
+                    "what do I get if I tick this?" without the reader having to
+                    switch tabs to find out. */}
+                <label className="dsm-trae-pref" title={t(activeRegion === 'cn' ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}>
+                  <input
+                    type="checkbox"
+                    checked={settingsEdits.showPointsInMainUi}
+                    disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
+                    aria-describedby={creditsHintId}
+                    onChange={event => { void writePreference('showPointsInMainUi', event.currentTarget.checked) }}
+                  />
+                  <span id={creditsHintId}>
+                    <b id={creditsLabelId}>{t('row.showPointsInMainUi')}</b>
+                    {' '}
+                    <span className="dsm-trae-pref-hint">
+                      {t(activeRegion === 'cn' ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}
+                    </span>
+                  </span>
+                </label>
               </div>
               {/* The account table: one row per locally detected sign-in, with
                   the action that matters on a multi-account machine — bind this
@@ -1363,58 +1401,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
               </section>
               {status.status === 'signed-in'
                 ? <>
-                    {/* The international region's box, in the same slot the CN
-                        credit panel used. It has no packs to count, so its
-                        figure is the plan identity (`Free` / `Pro`).
-                        Previously only `rowValue` in each roster row rendered
-                        this, and when `payStatus` did not arrive the whole box
-                        vanished while the CN tab kept one — the asymmetry a
-                        user reported as 「国际版没有那个积分框」. Three states,
-                        none of them blank: a live verdict, a read failure
-                        stated as an error, and an unknown load rendered as
-                        its own label rather than an empty strip. */}
-                    {activeRegion !== 'ai'
-                      ? null
-                      : status.payStatusError !== undefined
-                        ? <p className="dsm-trae-usage-error">{t('row.payStatusError', { message: status.payStatusError })}</p>
-                        : payPlan === undefined
-                          ? <div className="dsm-trae-usage-account" role="status">
-                              <div className="dsm-trae-usage-account-copy">
-                                <div className="dsm-trae-usage-status">
-                                  <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle('signed-out')} />
-                                  <span>{t('row.subscriptionLabel')}</span>
-                                </div>
-                                <span className="dsm-trae-usage-expiry">{t('row.payStatusUnknown')}</span>
-                              </div>
-                            </div>
-                          : <div className="dsm-trae-usage-account">
-                              <div className="dsm-trae-usage-account-copy">
-                                <div className="dsm-trae-usage-status">
-                                  <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(payPlan.paid ? 'signed-in' : 'signed-out')} />
-                                  <span>{t('row.subscriptionLabel')}</span>
-                                </div>
-                                {/* The tier rides beside the verdict so the box
-                                    names the plan instead of only asserting a
-                                    boolean (issue #19). Trial state outranks it
-                                    when active: it is what expires next. */}
-                                <span className="dsm-trae-usage-expiry">
-                                  {payPlanState?.payStatus !== undefined && payPlanState.payStatus.inTrial && payPlanState.payStatus.trialEndTimeMs > 0
-                                    ? t('row.trialUntil', { date: formatDateTime(payPlanState.payStatus.trialEndTimeMs) })
-                                    : payPlan.tier === undefined ? t(payPlan.label) : t('row.planTier', { tier: payPlan.tier })}
-                                </span>
-                              </div>
-                              {/* NO switch lives here on purpose. The box
-                                  reports the BOUND account's plan, while the
-                                  roster row already offers a switch for every
-                                  other account; the only action this box could
-                                  wire up — `followAppLogin` — means "the app
-                                  signed in elsewhere, abandon this binding",
-                                  which is what the stale-binding hint above
-                                  exists to explain. Labelling that a generic
-                                  account switch would rebind billing under
-                                  words that say nothing about it. */
-                              }
-                            </div>}
                     {status.checkin !== undefined && !status.checkin.enabled
                       ? <p className="dsm-trae-usage-error">{t('row.checkinDisabled')}</p>
                       : null}

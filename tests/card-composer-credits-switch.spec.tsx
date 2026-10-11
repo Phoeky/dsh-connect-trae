@@ -12,6 +12,11 @@
  * card, clicks the real input, and asserts on the settings WRITE rather than on
  * internals.
  *
+ * The switch is carried in BOTH regions, because the readout it gates serves
+ * both provider routes (a CN balance on `trae`, the plan on `trae-global`). It
+ * is one setting and one write on either tab — see the 国际版 specs below, which
+ * exist because this box used to be hidden there.
+ *
  * The block commits on 保存, so the write assertions go through the button: a
  * tick must NOT reach the settings document on its own (that is what makes
  * 放弃修改 mean something), and the save must write exactly the fields the
@@ -147,20 +152,48 @@ describe('the composer-credits switch in the card', () => {
     expect(screen.queryByText('row.settingsDirty')).toBeNull()
   })
 
-  it('is ABSENT on the 国际版 tab: that region has no balance to mirror', () => {
-    // The switch is CN-only because the DATA is. The Host builds the `ai` usage
-    // document from `payStatus` and never sets `credits` on it, so an
-    // international tab offering "show the credit readout" would promise
-    // something that cannot render.
+  it('is PRESENT on the 国际版 tab too: that region has a plan readout to mirror', () => {
+    // The switch was CN-only while the underlying readout was. It is not any
+    // more: the composer readout serves BOTH provider routes, showing a CN
+    // BALANCE on `trae` and the PLAN on `trae-global` (see `ComposerPoints`).
+    // Hiding the switch on the international tab left that readout reachable
+    // from nowhere, so the box is carried in both regions — it is the same
+    // setting and the same write, not a second switch.
     renderOpen(makeScope({}).scope)
-    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).not.toBeNull()
+    expect(creditsSwitch()).not.toBeNull()
 
     fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
-    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).toBeNull()
+    expect(creditsSwitch()).not.toBeNull()
 
-    // ...and it comes back on the CN tab.
+    // ...and it is still there on the CN tab.
     fireEvent.click(screen.getByRole('tab', { name: /row\.tabCn/ }))
-    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).not.toBeNull()
+    expect(creditsSwitch()).not.toBeNull()
+  })
+
+  it('still writes the same field from the 国际版 tab', async () => {
+    // One setting, two regions: the box on the ai tab must commit exactly the
+    // field the readout reads. A per-region copy of this switch would need two
+    // settings and would let the readout disagree with the tab it was set on.
+    const holder = makeScope({})
+    renderOpen(holder.scope)
+    fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
+    fireEvent.click(creditsSwitch())
+    await waitForWrite(holder.writes)
+    expect(holder.writes).toEqual([{ field: 'showPointsInMainUi', value: true }])
+    expect(composerPointsEnabledOf(holder.scope as never)).toBe(true)
+  })
+
+  it('names the readout this tab actually gets in the hint', () => {
+    // The hint used to describe both regions at once ("…on the CN side, …on the
+    // international one") because it only ever rendered on one tab. Now that it
+    // renders on both, the hint is scoped to the tab it is on, so the box
+    // answers "what do I get if I tick this?" without a tab switch.
+    renderOpen(makeScope({}).scope)
+    expect(screen.getByText('row.showPointsInMainUiHint')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
+    expect(screen.getByText('row.showPointsInMainUiHintAi')).toBeTruthy()
+    expect(screen.queryByText('row.showPointsInMainUiHint')).toBeNull()
   })
 
   it('refuses to write on a read-only scope, and stays unchecked', () => {
