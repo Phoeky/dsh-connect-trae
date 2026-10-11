@@ -120,6 +120,68 @@ describe('traePlanIsPaid', () => {
   })
 })
 
+/**
+ * The international tab's subscription BOX — a separate surface from the roster
+ * row.
+ *
+ * WHY IT NEEDS ITS OWN GUARD: the visual redesign deleted the standalone stat
+ * blocks and left `rowValue` in each row as the only renderer of the plan.
+ * `rowValue` returns NOTHING when `payStatus` has not arrived, so the ai tab
+ * could show an empty strip where the CN tab keeps a credit panel — the report
+ * 「国际版没有那个积分框」. These three specs pin the box as its own element:
+ * it must render on the tab, and it must degrade to a labelled state rather
+ * than disappear, because "nothing rendered" and "this feature was removed"
+ * are indistinguishable to a reader.
+ */
+describe('TraeUsageCard subscription box (ai)', () => {
+  it('renders a subscription box on the tab, naming the tier', async () => {
+    stubFetch(payDocument(), { hasPackage: false, payIdentity: 5, payIdentityStr: 'Pro' })
+    await renderArtificialAccount()
+
+    // Wait for the TIER, not just for a status region: several regions share
+    // role=status, and the roster's empty roster answers first. Once it lands,
+    // the box must carry both the label and the plan Trae reports (issue #19:
+    // a bare boolean says nothing).
+    // BOTH the box and the roster row name the tier — two vantage points, so
+    // the assertion must pick the one carrying the box's own class rather than
+    // whichever React mounted first.
+    const tier = await screen.findAllByText('row.planTier:{"tier":"Pro"}')
+    const boxTier = tier.find(element => element.className.includes('dsm-trae-usage-expiry'))
+    expect(boxTier).toBeDefined()
+    expect(within(boxTier?.closest('.dsm-trae-usage-account') as HTMLElement).getByText('row.subscriptionLabel')).toBeTruthy()
+  })
+
+  it('does not render the box on the CN tab', async () => {
+    stubFetch(payDocument(), { hasPackage: false, payIdentity: 5, payIdentityStr: 'Pro' })
+    const { scope } = makeScope()
+    render(<TraeUsageCard t={t} settingsScope={scope as never} />)
+    fireEvent.click(screen.getByRole('button', { name: /row\.title/ }))
+    await waitFor(() => { expect(screen.getByRole('region', { name: 'row.accountsTitle' })).toBeTruthy() })
+
+    // CN reports credit packs, not a plan; a subscription box on that tab
+    // would be answering a question the tab does not ask.
+    expect(screen.queryByText('row.subscriptionLabel')).toBeNull()
+  })
+
+  it('renders a labelled box instead of an empty strip when payStatus never arrives', async () => {
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+      const url = String(input)
+      // The status route answers, but WITHOUT `payStatus` — the degraded shape
+      // that made the box vanish before this guard existed.
+      if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) return new Response(JSON.stringify({ id: 'account-1' }), { status: 200 })
+      if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(payDocument()), { status: 200 })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    await renderArtificialAccount()
+
+    // Not blank: the label plus an explicit "not loaded" state, so a missing
+    // read is never mistaken for a removed feature.
+    const box = await screen.findByRole('status')
+    expect(within(box).getByText('row.subscriptionLabel')).toBeTruthy()
+    expect(within(box).getByText('row.payStatusUnknown')).toBeTruthy()
+  })
+})
+
 describe('TraeUsageCard subscription row (ai)', () => {
   it('shows a member as subscribed from the plan identity alone', async () => {
     // has_package stays false, exactly as the reporter's account behaved.

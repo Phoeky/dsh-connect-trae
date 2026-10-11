@@ -860,7 +860,23 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * message — it never sends one by itself.
    */
   const rowImageIsAutomatic = (model: TraeWebModel): boolean => model.multimodal === true
-  /** The subscription row's verdict for the current account, when it has one. */
+  /**
+   * The subscription box's verdict for the bound account.
+   *
+   * The international region has no credit packs to report, so its "balance"
+   * is the plan identity: `Free` vs a paid tier. The box below renders this
+   * verdict ONCE for the bound account, while every roster row renders its own
+   * through `rowValue` — two vantage points (this tab's account, the whole
+   * roster), not a duplicate figure.
+   */
+  // Read the BOUND account's own `payStatus` through the SAME per-row state
+  // `rowValue` uses (`accountStatusByRegion[region][accountId]`) — not the
+  // usage document's top-level `payStatus`, which the ai document does not
+  // always carry. Same source as the roster row means the box and the row can
+  // never disagree about one account's tier, and a missing read degrades to
+  // `payStatusUnknown` instead of silently rendering nothing.
+  const payPlanState = status.status === 'signed-in' ? accountStatusByRegion[activeRegion][status.accountId] : undefined
+  const payPlan = payPlanState?.payStatus !== undefined ? payVerdict(payPlanState.payStatus) : undefined
   const activeContextBudgets = draft?.contextBudgets ?? savedContextBudgets
   const dirty = draft !== undefined
 
@@ -1354,11 +1370,58 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
               </section>
               {status.status === 'signed-in'
                 ? <>
-                    {/* Subscription, balances and the day's check-in now live in
-                        each account row of the table above — the standalone stat
-                        blocks were removed so the card does not show one bound
-                        account's figures twice (or a number that belongs to a
-                        different account). */}
+                    {/* The international region's box, in the same slot the CN
+                        credit panel used. It has no packs to count, so its
+                        figure is the plan identity (`Free` / `Pro`).
+                        Previously only `rowValue` in each roster row rendered
+                        this, and when `payStatus` did not arrive the whole box
+                        vanished while the CN tab kept one — the asymmetry a
+                        user reported as 「国际版没有那个积分框」. Three states,
+                        none of them blank: a live verdict, a read failure
+                        stated as an error, and an unknown load rendered as
+                        its own label rather than an empty strip. */}
+                    {activeRegion !== 'ai'
+                      ? null
+                      : status.payStatusError !== undefined
+                        ? <p className="dsm-trae-usage-error">{t('row.payStatusError', { message: status.payStatusError })}</p>
+                        : payPlan === undefined
+                          ? <div className="dsm-trae-usage-account" role="status">
+                              <div className="dsm-trae-usage-account-copy">
+                                <div className="dsm-trae-usage-status">
+                                  <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle('signed-out')} />
+                                  <span>{t('row.subscriptionLabel')}</span>
+                                </div>
+                                <span className="dsm-trae-usage-expiry">{t('row.payStatusUnknown')}</span>
+                              </div>
+                            </div>
+                          : <div className="dsm-trae-usage-account">
+                              <div className="dsm-trae-usage-account-copy">
+                                <div className="dsm-trae-usage-status">
+                                  <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(payPlan.paid ? 'signed-in' : 'signed-out')} />
+                                  <span>{t('row.subscriptionLabel')}</span>
+                                </div>
+                                {/* The tier rides beside the verdict so the box
+                                    names the plan instead of only asserting a
+                                    boolean (issue #19). Trial state outranks it
+                                    when active: it is what expires next. */}
+                                <span className="dsm-trae-usage-expiry">
+                                  {payPlanState?.payStatus !== undefined && payPlanState.payStatus.inTrial && payPlanState.payStatus.trialEndTimeMs > 0
+                                    ? t('row.trialUntil', { date: formatDateTime(payPlanState.payStatus.trialEndTimeMs) })
+                                    : payPlan.tier === undefined ? t(payPlan.label) : t('row.planTier', { tier: payPlan.tier })}
+                                </span>
+                              </div>
+                              {/* NO switch lives here on purpose. The box
+                                  reports the BOUND account's plan, while the
+                                  roster row already offers a switch for every
+                                  other account; the only action this box could
+                                  wire up — `followAppLogin` — means "the app
+                                  signed in elsewhere, abandon this binding",
+                                  which is what the stale-binding hint above
+                                  exists to explain. Labelling that a generic
+                                  account switch would rebind billing under
+                                  words that say nothing about it. */
+                              }
+                            </div>}
                     {status.checkin !== undefined && !status.checkin.enabled
                       ? <p className="dsm-trae-usage-error">{t('row.checkinDisabled')}</p>
                       : null}
