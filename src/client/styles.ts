@@ -56,15 +56,21 @@ export const TRAE_CARD_CSS = `
    the whole block. It replaces the bare checkbox rows that used to write on
    every click — a draft needs a visible way back out, so each row carries its
    own explanation and the footer carries the buttons. */
-.dsm-trae-set{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
-.dsm-trae-set-head{display:flex;flex-direction:column;gap:3px}
-.dsm-trae-set-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-set-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-.dsm-trae-set-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
-.dsm-trae-set-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
-.dsm-trae-set-copy b{font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-set-copy span{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-.dsm-trae-set-ctl{flex:none;padding-top:1px}
+/* The preference switches: BARE LINES, one per switch, each with its label
+   wrapped around the box so the whole line is a click target.
+ *
+ * The 设置 block used to be a bordered box with a heading, two rows and a
+ * 「保存」/「放弃」 footer. That is gone with the draft it existed to serve — this
+ * is the sibling dsh-connect-workbuddy card's shape, where a preference is a
+ * checkbox on a line that commits on the click. */
+.dsm-trae-prefs{display:flex;flex-direction:column;gap:8px}
+.dsm-trae-pref{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);cursor:pointer}
+.dsm-trae-pref input{flex:none;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-pref input:disabled{cursor:default}
+.dsm-trae-pref:has(input:disabled){opacity:.6;cursor:default}
+.dsm-trae-pref b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pref span{min-width:0}
 /* The card's checkboxes are the platform's own, styled only with
    accent-color — the SAME idiom .dsm-trae-mainui-switch-label above already
    uses for the composer-line switch, and the one the sibling
@@ -80,9 +86,6 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-switch input:disabled{cursor:default}
 .dsm-trae-switch:has(input:disabled){opacity:.6;cursor:default}
-.dsm-trae-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
-.dsm-trae-set-dirty{margin-right:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#f59e0b)}
-.dsm-trae-set-buttons{display:flex;gap:8px}
 /* The account block is a real table: the question it answers is "which of these
    accounts, and what is the action on each one" — a dropdown can only ever show
    the one already chosen. */
@@ -97,21 +100,46 @@ export const TRAE_CARD_CSS = `
    table was the wrong instrument here: every field demanded its own header, the
    columns drifted with the content ("LaoDing" vs a full expiry stamp), and the
    bound row repeated its "in use" badge in two different columns. */
-.dsm-trae-account-list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
-.dsm-trae-account{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
-.dsm-trae-account:first-child{border-top:0;padding-top:0}
-.dsm-trae-account-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}
-.dsm-trae-account-line{display:flex;align-items:center;gap:6px;min-width:0}
-.dsm-trae-account-line .dsm-trae-usage-dot{margin-right:0;flex:none}
-.dsm-trae-account-name{font-size:13px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsm-trae-account-current .dsm-trae-account-name{font-weight:600}
-.dsm-trae-account-badge{flex:none;padding:0 6px;border-radius:5px;font-size:10px;line-height:15px;font-weight:500;color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.12)}
+/* The account table, shaped like the sibling WorkBuddy card's pool table: a
+   bordered container, a tinted header row, and one grid row per account whose
+   tracks are FRACTIONS of the container rather than sizes derived from the
+   content. That is the whole point — the previous four-column table let each
+   column grow with its own text, so the columns did not line up from row to row
+   and the table read as noise in a narrow panel. */
+.dsm-trae-account-table{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
+/* Four tracks where the region has a check-in column, three where it does not
+   (the international region has no check-in at all: the ug/* family answers
+   404 on every ai gateway, so the column is absent rather than empty and
+   permanently unknown). The freed track goes to the account name. */
+.dsm-trae-account-row{display:grid;grid-template-columns:1.7fr 1.1fr 1fr 1.1fr;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18));font-size:13px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-account-table:not(.dsm-trae-account-table-checkin) .dsm-trae-account-row{grid-template-columns:2.2fr 1.2fr 1.1fr}
+.dsm-trae-account-row:first-child{border-top:0}
+.dsm-trae-account-row-head{padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#2a2c33);color:var(--dsw-alias-label-tertiary,#999);font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
+/* The serving row, findable at a glance: the accent bar is what distinguishes it
+   in a long table, where the 7%-opacity wash alone reads as a zebra stripe. */
+.dsm-trae-account-row-current{background:rgba(86,134,254,.07);box-shadow:inset 3px 0 0 var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-account-who{display:flex;align-items:center;gap:8px;min-width:0}
+.dsm-trae-account-who .dsm-trae-usage-dot{margin-right:0;flex:none}
+.dsm-trae-account-name{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dsm-trae-account-name b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-trae-account-row-current .dsm-trae-account-name b{font-weight:600}
+/* Declared AFTER the blanket span rule above so it wins: the badge must not
+   inherit the muted 11px tertiary treatment the edition line uses. */
+.dsm-trae-account-name .dsm-trae-account-badge{align-self:flex-start;margin-top:2px;padding:1px 6px;border-radius:999px;font-size:10px;line-height:15px;font-weight:600;white-space:nowrap;color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.14)}
 .dsm-trae-account-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8);min-width:0}
 .dsm-trae-account-meta i{font-style:normal;opacity:.4}
-.dsm-trae-account-value{color:var(--dsw-alias-label-secondary,#c6c9d0);font-variant-numeric:tabular-nums}
-.dsm-trae-account-value-on{color:#3f8d60;font-weight:500}
-.dsm-trae-account-note{margin:1px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-state-error-primary,#ef4444)}
-.dsm-trae-account-actions{display:flex;align-items:center;gap:6px;flex:none}
+.dsm-trae-account-note{font-size:11px;line-height:16px;color:var(--dsw-alias-state-error-primary,#ef4444)}
+/* Its own track, in tabular figures, so digits in different rows sit on the same
+   column of the grid instead of jittering with the glyph widths. */
+.dsm-trae-account-worth{display:flex;flex-direction:column;gap:1px;min-width:0;font-variant-numeric:tabular-nums}
+.dsm-trae-account-value{color:var(--dsw-alias-label-primary,#e6e6e6);font-weight:600}
+.dsm-trae-account-value-on{color:var(--dsw-alias-state-success-primary,#22a06b)}
+.dsm-trae-account-checkin-cell{display:flex;align-items:center;min-width:0}
+.dsm-trae-account-actions{display:flex;align-items:center;gap:6px;justify-content:flex-end;flex:none}
+/* The per-row switch is the shared outline button, only smaller: one button
+   vocabulary in the card instead of a bespoke one per block. */
+.dsm-trae-account-row .dsm-trae-account-switch{padding:2px 10px;font-size:12px}
+@media (max-width:760px){.dsm-trae-account-row,.dsm-trae-account-table:not(.dsm-trae-account-table-checkin) .dsm-trae-account-row{grid-template-columns:1fr 1fr;row-gap:6px}.dsm-trae-account-row-head{display:none}}
 /* The check-in is the only action on this card that reaches upstream account
    state, so it is the one button allowed a colour. Everything else in the row
    defers to it. */

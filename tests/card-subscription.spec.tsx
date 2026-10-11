@@ -100,9 +100,16 @@ function accountBlock(): HTMLElement {
   return screen.getByRole('region', { name: 'row.accountsTitle' })
 }
 
-/** One account row, by the account name it renders. */
-function accountRow(name: string): HTMLLIElement {
-  return within(accountBlock()).getByText(name).closest('li') as HTMLLIElement
+/**
+ * One account row, by the account name it renders.
+ *
+ * The row is a grid `div[role=row]`, not a `<li>`: the account block became a
+ * TABLE (header row + one grid row per account) to match the sibling
+ * dsh-connect-workbuddy card, whose fixed tracks are what stop the columns
+ * drifting with their own content.
+ */
+function accountRow(name: string): HTMLElement {
+  return within(accountBlock()).getByText(name).closest('.dsm-trae-account-row') as HTMLElement
 }
 
 describe('traePlanIsPaid', () => {

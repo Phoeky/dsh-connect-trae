@@ -131,9 +131,16 @@ function accountBlock(): HTMLElement {
   return screen.getByRole('region', { name: 'row.accountsTitle' })
 }
 
-/** One account row, by the account name it renders. */
-function accountRow(name: string): HTMLLIElement {
-  return within(accountBlock()).getByText(name).closest('li') as HTMLLIElement
+/**
+ * One account row, by the account name it renders.
+ *
+ * The row is a grid `div[role=row]`, not a `<li>`: the account block became a
+ * TABLE (header row + one grid row per account) to match the sibling
+ * dsh-connect-workbuddy card, whose fixed tracks are what stop the columns
+ * drifting with their own content.
+ */
+function accountRow(name: string): HTMLElement {
+  return within(accountBlock()).getByText(name).closest('.dsm-trae-account-row') as HTMLElement
 }
 
 describe('the account rows in the card', () => {
@@ -142,8 +149,14 @@ describe('the account rows in the card', () => {
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const rows = within(accountBlock()).getAllByRole('listitem')
-    expect(rows).toHaveLength(2)
+    // The header row plus one row per account: the header is what makes the
+    // tracks a TABLE the eye can read DOWN, so its presence is part of the
+    // contract rather than chrome to be tolerated.
+    const rows = within(accountBlock()).getAllByRole('row')
+    expect(rows).toHaveLength(3)
+    expect(rows[0]?.className).toContain('dsm-trae-account-row-head')
+    expect(accountRow('LaoDing')).toBeTruthy()
+    expect(accountRow('SecondCN')).toBeTruthy()
 
     // The raw `edition` token used to be all the user got: "solo" told them
     // nothing about which product the credential came from (issue #25).
@@ -161,11 +174,11 @@ describe('the account rows in the card', () => {
     await renderOpen(scope)
 
     const current = accountRow('LaoDing')
-    expect(current.className).toContain('dsm-trae-account-current')
+    expect(current.className).toContain('dsm-trae-account-row-current')
     expect(current.textContent).toContain('row.accountCurrentBadge')
 
     const other = accountRow('SecondCN')
-    expect(other.className).not.toContain('dsm-trae-account-current')
+    expect(other.className).not.toContain('dsm-trae-account-row-current')
 
     // The bound row offers NO switch: it is already the one in use, and a
     // disabled copy of the badge sitting next to the badge said nothing.

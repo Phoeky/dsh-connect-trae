@@ -113,9 +113,10 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
     const rendered = renderedClasses()
     // The new blocks are really in the DOM (an empty collection would make the
     // "nothing is missing" assertion below pass for the wrong reason).
-    expect(rendered).toContain('dsm-trae-set-row')
+    expect(rendered).toContain('dsm-trae-pref')
     expect(rendered).toContain('dsm-trae-switch')
-    expect(rendered).toContain('dsm-trae-account-list')
+    expect(rendered).toContain('dsm-trae-account-table')
+    expect(rendered).toContain('dsm-trae-account-row-head')
     expect(rendered).toContain('dsm-trae-account-checkin')
     expect(rendered.length).toBeGreaterThan(15)
 
@@ -144,10 +145,24 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
     expect(TRAE_CARD_CSS).not.toMatch(/\.dsm-trae-switch input\{[^}]*clip:rect/)
   })
 
-  it('gives the two new blocks a titled container, not a bare checkbox row', () => {
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-set\{/)
+  /**
+   * The account block keeps a titled container; the PREFERENCE block no longer
+   * does, and that asymmetry is deliberate.
+   *
+   * The roster needs a heading — "Trae 账号" plus its rescan button is how the
+   * user knows what the block is and that it can be re-detected. The two
+   * preference checkboxes do not: they are bare lines that commit on the click,
+   * exactly like the sibling dsh-connect-workbuddy card, and wrapping two
+   * booleans in a titled box with a Save button asked the user to remember
+   * something that had no reason to need remembering.
+   */
+  it('titles the account block, and leaves the preference switches as bare lines', () => {
     expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-accounts\{/)
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-account-list\{/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-account-table\{/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-pref\{/)
+    // The removed box: a restored .dsm-trae-set would bring back the draft
+    // footer it was the container for.
+    expect(TRAE_CARD_CSS).not.toMatch(/\.dsm-trae-set\{/)
   })
 })
 

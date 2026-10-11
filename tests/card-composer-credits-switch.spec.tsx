@@ -63,30 +63,28 @@ function renderOpen(scope: unknown): void {
 
 /** The composer-credits checkbox, by its own label. */
 function creditsSwitch(): HTMLInputElement {
-  const [box] = screen.getAllByRole('checkbox', { name: /row\.showPointsInMainUi$/ }) as HTMLInputElement[]
+  // The label WRAPS the hint, so the accessible name is the label plus the hint
+  // text — anchoring on the start keeps this independent of how the hint reads.
+  const [box] = screen.getAllByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ }) as HTMLInputElement[]
   if (box === undefined) throw new Error('the composer-credits checkbox is missing from the card')
   return box
 }
 
 /** The follow-the-app checkbox, by its own label. */
 function followSwitch(): HTMLInputElement {
-  const [box] = screen.getAllByRole('checkbox', { name: /row\.followAppLogin$/ }) as HTMLInputElement[]
+  const [box] = screen.getAllByRole('checkbox', { name: /^row\.followAppLogin\b/ }) as HTMLInputElement[]
   if (box === undefined) throw new Error('the follow-the-app checkbox is missing from the card')
   return box
 }
 
-/** The 设置 section, so its 保存/放弃修改 are never confused with the model block's. */
-function settingsBlock(): HTMLElement {
-  return screen.getByRole('region', { name: 'row.settingsTitle' })
-}
-
-function settingsButton(name: string): HTMLElement {
-  return within(settingsBlock()).getByRole('button', { name })
-}
-
-/** Press 保存 and wait for the write chain to reach the recorded document. */
-async function saveSettings(writes: { field: string; value: unknown }[]): Promise<void> {
-  fireEvent.click(settingsButton('row.save'))
+/**
+ * Wait for one preference write to reach the recorded document.
+ *
+ * There is no 保存 button any more: the 设置 block's switches commit on the
+ * click that flips them, matching the sibling dsh-connect-workbuddy card. So the
+ * assertion is simply that the write follows the tick.
+ */
+async function waitForWrite(writes: { field: string; value: unknown }[]): Promise<void> {
   await vi.waitFor(() => { expect(writes.length).toBeGreaterThan(0) })
 }
 
@@ -103,25 +101,16 @@ describe('the composer-credits switch in the card', () => {
     expect(creditsSwitch().checked).toBe(true)
   })
 
-  it('stages the tick without writing: nothing reaches the settings document until 保存', () => {
+  it('writes on the click that flips it — there is no 保存 to press', async () => {
     const holder = makeScope({})
     renderOpen(holder.scope)
+    expect(creditsSwitch().checked).toBe(false)
     fireEvent.click(creditsSwitch())
-    expect(holder.writes).toEqual([])
-    expect(composerPointsEnabledOf(holder.scope as never)).toBe(false)
-    // The draft is visible, so an unsaved tick can never look saved.
-    expect(within(settingsBlock()).getByRole('status').textContent).toBe('row.settingsDirty')
-  })
-
-  it('writes showPointsInMainUi=true on 保存 and drops the dirty badge', async () => {
-    const holder = makeScope({})
-    renderOpen(holder.scope)
-    fireEvent.click(creditsSwitch())
-    await saveSettings(holder.writes)
+    // The whole point of dropping the draft: one click, one write. A leftover
+    // 保存/放弃 pair would leave this tick uncommitted and the readout off.
+    await waitForWrite(holder.writes)
     expect(holder.writes).toEqual([{ field: 'showPointsInMainUi', value: true }])
-    // The readout's own predicate must agree with what the card committed.
     expect(composerPointsEnabledOf(holder.scope as never)).toBe(true)
-    expect(within(settingsBlock()).queryByRole('status')).toBeNull()
   })
 
   it('writes false when unticked again, leaving the readout with nothing to render', async () => {
@@ -130,32 +119,32 @@ describe('the composer-credits switch in the card', () => {
     const box = creditsSwitch()
     expect(box.checked).toBe(true)
     fireEvent.click(box)
-    await saveSettings(holder.writes)
+    await waitForWrite(holder.writes)
     expect(holder.writes).toEqual([{ field: 'showPointsInMainUi', value: false }])
     expect(composerPointsEnabledOf(holder.scope as never)).toBe(false)
   })
 
-  it('saves both switches in one press, writing only the fields the draft moved', async () => {
-    // `followAppLogin` is already true in the document: a save must not rewrite
-    // it, or a draft that never touched it would be able to clobber a change
-    // made elsewhere with the value this card happened to read.
+  it('writes ONLY the switch that was clicked, never its sibling', async () => {
+    // `followAppLogin` is already true in the document. An immediate write must
+    // still name exactly one field: sending both would let this click clobber a
+    // change made elsewhere with the value this card happened to read.
     const holder = makeScope({ followAppLogin: true })
     renderOpen(holder.scope)
     expect(followSwitch().checked).toBe(true)
     fireEvent.click(creditsSwitch())
-    await saveSettings(holder.writes)
+    await waitForWrite(holder.writes)
     expect(holder.writes).toEqual([{ field: 'showPointsInMainUi', value: true }])
   })
 
-  it('放弃修改 drops the draft and writes nothing', () => {
+  it('gives the flipped box the value the write landed, with no dirty badge to show', async () => {
     const holder = makeScope({})
     renderOpen(holder.scope)
     fireEvent.click(creditsSwitch())
+    // The optimistic overlay is dropped once the write settles, so the box then
+    // reads the committed document. Nothing may be left saying "unsaved".
+    await waitForWrite(holder.writes)
     expect(creditsSwitch().checked).toBe(true)
-    fireEvent.click(settingsButton('row.discard'))
-    expect(creditsSwitch().checked).toBe(false)
-    expect(holder.writes).toEqual([])
-    expect(within(settingsBlock()).queryByRole('status')).toBeNull()
+    expect(screen.queryByText('row.settingsDirty')).toBeNull()
   })
 
   it('is ABSENT on the 国际版 tab: that region has no balance to mirror', () => {
@@ -164,14 +153,14 @@ describe('the composer-credits switch in the card', () => {
     // international tab offering "show the credit readout" would promise
     // something that cannot render.
     renderOpen(makeScope({}).scope)
-    expect(screen.queryByRole('checkbox', { name: /row\.showPointsInMainUi$/ })).not.toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).not.toBeNull()
 
     fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
-    expect(screen.queryByRole('checkbox', { name: /row\.showPointsInMainUi$/ })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).toBeNull()
 
     // ...and it comes back on the CN tab.
     fireEvent.click(screen.getByRole('tab', { name: /row\.tabCn/ }))
-    expect(screen.queryByRole('checkbox', { name: /row\.showPointsInMainUi$/ })).not.toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /^row\.showPointsInMainUi\b/ })).not.toBeNull()
   })
 
   it('refuses to write on a read-only scope, and stays unchecked', () => {
