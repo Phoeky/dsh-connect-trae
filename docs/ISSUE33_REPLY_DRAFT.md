@@ -3,9 +3,15 @@
 > 用途：回复 <https://github.com/dingminhua/dsh-connect-trae/issues/33>
 > （junbin-lai：`GLM-5.3` 报 `Trae code 4011`，额度充足，Trae 客户端的 SOLO 里正常）
 >
-> **尚未发布**：修复已提交到仓库、`pnpm run check` 全绿（typecheck + 549 测试 + build），
-> 但**还没有升版本、没有 npm publish、没有 tag**。贴之前需要先确认要不要先发版。
-> 若要「先发版再贴」，把下面的「怎么用」一节改成升级命令再发。
+> **状态**：修复已提交（`8989f76`）、tag `v3.4.1` 已推、`pnpm run check` 全绿
+> （typecheck + 549 测试 + build）。
+> **`npm publish` 待你在交互终端执行**（2FA 你在浏览器确认）：
+>
+> ```bash
+> cd /Users/dmh2002/DshProject/dsh-connect-trae && npm publish
+> ```
+>
+> 发布成功后本稿的「怎么用」一节可直接用（已写明 `3.4.1`）。
 
 ---
 
@@ -84,7 +90,17 @@ function 就正常了。**那个推断是错的**，本轮我在本机 CN 账号
 1. **等一会儿再发**——Trae 原文自己说的就是「please wait and try again later」；
    被限流通常几分钟内自己恢复，不用重装、不用换模型、不用签到换额度。
 2. **别连着重试**：修好之后 4011 会如实显示成「被限流」，仍是可重试的语义，但短时间内密集重试只会延长限流。
-3. **升级后**再来一次，如果还报，麻烦把**报文原文**（像这次这样整条贴出来）和**大致时间点**给我——
+3. **升级**（`3.4.1`）：
+
+   ```bash
+   dsh plugin --profile desktop add dsh-connect-trae@3.4.1
+   # 或
+   npm install dsh-connect-trae@3.4.1
+   ```
+
+   装完重启 DSH 进程。升级后再遇到 4011，横幅会直接写「Trae 限流了这条 SOLO 通道」，
+   「一键测试」也会显示「被限流」而不是「上游不提供」。
+4. **如果还报别的**，麻烦把**报文原文**（像这次这样整条贴出来）和**大致时间点**给我——
    这次就是你贴的原文直接定位到了根因，比截图更有用。
 
 再次抱歉让你多问了一句：这条报错本该自己说清楚「我被限流了」。
