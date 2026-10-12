@@ -222,9 +222,10 @@ function displayKey(name: string): string {
  * their own Trae IDE offers. The row therefore ships, and its call fails
  * honestly: the bridge now translates the in-stream refusal into a readable
  * error (`4001` → "Trae does not serve this model under the SOLO function the
- * request used", `4011` → "Trae refused this model under the SOLO function the
- * request used"), so a user who picks an unusable model is told why instead of
- * seeing nothing. This reverses the 2026-08-30 note about `Doubao-Seed-Code`,
+ * request used", `4011` → "Trae throttled the SOLO channel for this account",
+ * the second one corrected by issue #33 — 4011 is a rate limit, see
+ * src/solo-bridge.ts), so a user who picks an unusable model is told why instead
+ * of seeing nothing. This reverses the 2026-08-30 note about `Doubao-Seed-Code`,
  * which later turned out to be callable under `chat_v3`.
  *
  * Credit multiplier precedence: the wire's `display_contact_config` rate wins

@@ -45,14 +45,41 @@ describe('classifyProbeResult', () => {
     expect(classified.detail).toContain('plan 4')
   })
 
-  it('reads 4001 and 4011 as "this channel does not serve it"', () => {
-    for (const code of [4001, 4011]) {
-      const classified = classifyProbeResult({
-        ok: false, status: 400, kind: 'client',
-        message: `Trae refused this model · Trae code ${String(code)}`,
-      }, false)
-      expect(classified.verdict).toBe('unsupported')
-    }
+  it('reads 4001 as "this channel does not serve it" — the only code that may say so', () => {
+    const classified = classifyProbeResult({
+      ok: false, status: 400, kind: 'client',
+      message: 'Trae does not serve this model under the SOLO function the request used (config_name rejected) · Trae code 4001',
+    }, false)
+    expect(classified.verdict).toBe('unsupported')
+  })
+
+  it('reports 4011 as throttled, never as a model the channel does not serve (issue #33)', () => {
+    // Issue #33: 4011 is Trae's rate limit (its own text says so). Reporting it
+    // as `unsupported` told the user a working model was dead — the exact
+    // "turn an inconclusive answer into unavailable" failure this module's
+    // header forbids.
+    const classified = classifyProbeResult({
+      ok: false, status: 429, kind: 'soft_rate',
+      message: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance) · Trae code 4011 · upstream: exceeded the rate limit',
+    }, false)
+    expect(classified.verdict).toBe('rate_limited')
+  })
+
+  it('still reads a bare 4011 code out of a message that arrives without a 429 status', () => {
+    const classified = classifyProbeResult({
+      ok: false, status: 0, kind: 'client',
+      message: 'Trae throttled the SOLO channel for this account · Trae code 4011',
+    }, false)
+    expect(classified.verdict).toBe('rate_limited')
+  })
+
+  it('keeps an exhausted account quota (4008) inconclusive about the model', () => {
+    const classified = classifyProbeResult({
+      ok: false, status: 400, kind: 'client',
+      message: "Trae reports the account's SOLO quota is exhausted for this request · Trae code 4008 · upstream: Your requests have exceeded the quota.",
+    }, false)
+    expect(classified.verdict).toBe('unknown')
+    expect(classified.detail).toContain('4008')
   })
 
   it('treats an unauthenticated answer as an auth stop, not a dead model', () => {
@@ -71,9 +98,44 @@ describe('classifyProbeResult', () => {
   })
 
   it('treats an unnamed 4xx client refusal as unsupported', () => {
-    // The bridge classifies a 4001/4011 refusal as `client`; one that arrives
-    // without a code label is still a request refusal, not an unknown.
+    // One that arrives without a code label is still a request refusal, not an
+    // unknown.
     expect(classifyProbeResult({ ok: false, status: 400, kind: 'client', message: 'bad request' }, false).verdict).toBe('unsupported')
+  })
+
+  it('gives each recognised code exactly one verdict, whatever order it is read in', () => {
+    // Issue #33 hardened this: when the codes lived in one Set per verdict, a
+    // code present in two sets was decided by which branch happened to run
+    // first, so re-adding 4011 to the "unsupported" set was undetectable. The
+    // table must therefore agree with itself for every code it knows.
+    const expectations: [number, string][] = [
+      [1005, 'gated'],
+      [4001, 'unsupported'],
+      [4008, 'unknown'],
+      [4011, 'rate_limited'],
+    ]
+    for (const [code, verdict] of expectations) {
+      // The bare message is what the probe sees when the bridge translated it;
+      // a 400 status here is the ordering trap — the code, not the status, must
+      // decide the verdict.
+      const bare = classifyProbeResult({
+        ok: false, status: 400, kind: 'client', message: `Trae refused the request · Trae code ${String(code)}`,
+      }, false)
+      expect([code, bare.verdict]).toEqual([code, verdict])
+    }
+  })
+
+  it('keeps 4001 and 4011 apart under a status that would mask the difference', () => {
+    // Both arrive as an in-band `event: error` translated by the bridge; the
+    // point of the fix is that 400 is NOT enough to call a model unsupported.
+    const asUnsupported = classifyProbeResult({
+      ok: false, status: 400, kind: 'client', message: 'Trae does not serve this model · Trae code 4001',
+    }, false)
+    const asThrottled = classifyProbeResult({
+      ok: false, status: 400, kind: 'client', message: 'Trae throttled the SOLO channel · Trae code 4011',
+    }, false)
+    expect(asUnsupported.verdict).toBe('unsupported')
+    expect(asThrottled.verdict).toBe('rate_limited')
   })
 })
 
@@ -103,13 +165,23 @@ describe('probeOneModel', () => {
   it('classifies a mid-stream refusal thrown by the bridge, without calling it unknown', async () => {
     // The bridge errors the stream (rather than returning a result) when the
     // refusal arrives after output started; its message still names the code.
+    // A 4001 there is the model genuinely not being served — a real refusal,
+    // so the verdict is a negative one rather than `unknown`.
     const chat = async (): Promise<TraeChatResult> => ({ ok: true, response: new Response('') })
     const poisoned = new Response(new ReadableStream({
-      start(controller) { controller.error(new Error('Trae refused this model · Trae code 4011')) },
+      start(controller) { controller.error(new Error('Trae does not serve this model under the SOLO function the request used (config_name rejected) · Trae code 4001')) },
     }))
     const streamChat = async (): Promise<TraeChatResult> => ({ ok: true, response: poisoned })
     expect((await probeOneModel(streamChat, 'gpt-5.6-sol')).verdict).toBe('unsupported')
     expect(chat).toBeDefined()
+  })
+
+  it('classifies a mid-stream 4011 throttle as throttled, not as a dead model', async () => {
+    const poisoned = new Response(new ReadableStream({
+      start(controller) { controller.error(new Error('Trae throttled the SOLO channel for this account (a rate limit, not the credit balance) · Trae code 4011')) },
+    }))
+    const streamChat = async (): Promise<TraeChatResult> => ({ ok: true, response: poisoned })
+    expect((await probeOneModel(streamChat, 'glm-5.3')).verdict).toBe('rate_limited')
   })
 
   it('reports a timeout as unknown, never as unavailable', async () => {

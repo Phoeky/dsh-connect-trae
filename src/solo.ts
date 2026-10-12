@@ -24,9 +24,14 @@ export const TRAE_SOLO_FUNCTION = 'solo_work_lite'
  * live SG credential, issue #19): it is a Remote-agent roster function, not a
  * chat function. Every model sent with `function: "solo_agent"` — `gpt-5.4`,
  * `gpt-5.6-sol`, `gpt-6-astra`, `glm-5.2`, `kimi-k2.7-code` — answered
- * `event:error {"code":4011}` (message says "rate limit", it is really "not
- * served here"), while the same model with the same body answered normally
- * under `solo_work_remote` / `solo_work_lite` / `solo_agent_remote`.
+ * `event:error {"code":4011}`, while the same model with the same body answered
+ * normally under `solo_work_remote` / `solo_work_lite` / `solo_agent_remote`.
+ * Issue #33 corrected the reading of that code: `4011` is Trae's rate limit on
+ * the route that was asked (its own text says so, and issue #33's reporter hit
+ * it on the CORRECT function), and the "this route does not serve that model"
+ * condition is `4001` — measured on all 22 functions of a live CN credential.
+ * The conclusion for this list is unchanged either way: a route that refuses
+ * chat is not a chat route, so `solo_agent` stays out.
  *
  * Note `get_detail_param` DOES answer `solo_agent` with a 43-entry list, so
  * asking it looks helpful while making 8 of the 10 exposed ai-region models

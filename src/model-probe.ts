@@ -24,8 +24,14 @@
  *  - `available`    — output arrived.
  *  - `gated`        — `1005`: the plan does not cover this model (`extra.plan`
  *                     carries the tier). A paying account may pass.
- *  - `unsupported`  — `4001`/`4011`: no SOLO function serves this config_name.
- *  - `rate_limited` — upstream throttled the probe.
+ *  - `unsupported`  — `4001`: no SOLO function serves this config_name. This is
+ *                     the ONLY code that may produce this verdict.
+ *  - `rate_limited` — upstream throttled the probe: `4011`, or an honest 429.
+ *                     Issue #33 moved `4011` here: it is Trae's rate limit (its
+ *                     own text says so), so calling it "not served" told users a
+ *                     working model was dead. `4008` (account quota exhausted)
+ *                     is also account-scoped, never model-scoped, and stays
+ *                     inconclusive.
  *  - `auth`         — the credential is rejected; nothing else can be tested.
  *  - `unknown`      — timeout, transport error, proxy, or any other status.
  */
@@ -55,9 +61,45 @@ export interface TraeProbeResult {
  */
 export const TRAE_PROBE_TIMEOUT_MS = 30_000
 
-/** Upstream error codes the probe recognises, and what they mean. */
-const GATE_CODES = new Set([1005])
-const UNSUPPORTED_CODES = new Set([4001, 4011])
+/**
+ * Every upstream code the probe recognises, mapped to the verdict it implies.
+ *
+ * ONE table, not a set per verdict: with separate sets the outcome depended on
+ * the order the branches happened to be written in, so a code left in two sets
+ * was silently decided by whichever line ran first (measured: re-adding `4011`
+ * to the "unsupported" set passed every test). A single map makes a code mean
+ * exactly one thing, and {@link assertCodesAreDistinct} pins that down at
+ * module load.
+ *
+ *  - `1005` — the plan does not cover this model (`extra.plan` carries the
+ *    tier). A paying account may pass, so it is a gate, not a dead model.
+ *  - `4001` — this function's roster does not contain that `config_name`. The
+ *    ONLY code that may produce `unsupported`, measured on all 22 functions of
+ *    a live CN credential (issue #33).
+ *  - `4011` — Trae throttled the route; its own text says the rate limit was
+ *    exceeded. Issue #33 moved this here from `unsupported`: reporting a
+ *    throttle as "the channel does not serve it" told users a working model was
+ *    dead.
+ *  - `4008` — the ACCOUNT's SOLO quota is exhausted. It says nothing about any
+ *    one model, so it must not become a model verdict; it stays inconclusive
+ *    and carries the upstream text, so the user retests once the quota is back.
+ */
+const CODE_VERDICTS: Readonly<Record<number, TraeProbeVerdict>> = {
+  1005: 'gated',
+  4001: 'unsupported',
+  4008: 'unknown',
+  4011: 'rate_limited',
+}
+
+/** A code that maps to two verdicts would make the table order-dependent. */
+function assertCodesAreDistinct(table: Readonly<Record<number, TraeProbeVerdict>>): void {
+  const codes = Object.keys(table)
+  if (new Set(codes).size !== codes.length) {
+    throw new Error('dsh-connect-trae: a Trae probe code maps to more than one verdict')
+  }
+}
+
+assertCodesAreDistinct(CODE_VERDICTS)
 
 /** Pull `Trae code N` out of an already-translated failure message. */
 function codeOf(message: string): number | undefined {
@@ -105,8 +147,8 @@ export function classifyProbeResult(result: TraeChatResult, outputSeen: boolean)
     return { verdict: 'rate_limited', detail: message }
   }
   const code = codeOf(message)
-  if (code !== undefined && GATE_CODES.has(code)) return { verdict: 'gated', detail: message }
-  if (code !== undefined && UNSUPPORTED_CODES.has(code)) return { verdict: 'unsupported', detail: message }
+  const mapped = code === undefined ? undefined : CODE_VERDICTS[code]
+  if (mapped !== undefined) return { verdict: mapped, detail: message }
   // A 4xx that names no recognised code is still a client-side refusal; a 5xx
   // or a status of 0 (transport/timeout) is not evidence about the model.
   if (result.kind === 'client' && result.status >= 400 && result.status < 500) {

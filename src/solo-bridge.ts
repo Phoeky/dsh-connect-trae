@@ -21,22 +21,38 @@ interface TraeFailure {
 }
 
 /**
- * What Trae's in-stream error codes mean. Measured 2026-10-01 on a live SG
- * credential (issue #19), by sending the same body to several functions:
+ * What Trae's in-stream error codes mean. Measured 2026-10-01 on live
+ * credentials (issue #19), and re-measured 2026-10-12 on a live CN credential
+ * (issue #33) with a 22-function × 6-model chat matrix:
  *
  *  - `1005` — the model needs a paid plan. Trae answers HTTP 200 with
  *    `event:error {"code":1005,"message":"","extra":"{\"plan\":1}"}`, so the
  *    gate is only visible in `extra.plan`; `gpt-6-sol` returned it under both
  *    `solo_work_remote` and `solo_agent_remote` on a free account.
- *  - `4011` — the function the request named does not serve that model. Its
- *    message claims "exceeded the rate limit", which is misleading: the same
- *    model answers normally when sent under `solo_work_remote`.
+ *  - `4011` — Trae throttled the SOLO route for this account. Trae's own text
+ *    is `your requests have exceeded the rate limit. Please wait and try again
+ *    later.`, and issue #33 is why that text is now taken at face value: the
+ *    earlier reading of 4011 as "this function does not serve that model" is
+ *    contradicted by measurement. On CN that condition is `4001`, and all 22
+ *    functions answered `4001` — never `4011` — for a model absent from their
+ *    roster, while `glm-5.3` streamed normally under its own function. Rate
+ *    limiting is per account, route and moment, which is exactly the shape of
+ *    that report: the same model through the same function was fine for days
+ *    and then failed, with Trae's own text saying "rate limit".
  *  - `4001` — `config_name` is not one this function serves.
+ *  - `4008` — the account's SOLO quota is exhausted. Deliberately a different
+ *    code from `4011`: Trae words this one `your requests have exceeded the
+ *    quota`, so "I still have plenty of credits" and "I am being throttled" are
+ *    two different statements, and a user hits the second without touching the
+ *    first (issue #33).
+ *  - `4023` — the model name is unknown on the route that was asked.
  */
 const TRAE_ERROR_HINTS: Readonly<Record<number, string>> = {
   1005: 'Trae requires a paid plan for this model; the current account\'s plan does not cover it',
   4001: 'Trae does not serve this model under the SOLO function the request used (config_name rejected)',
-  4011: 'Trae refused this model under the SOLO function the request used',
+  4008: 'Trae reports the account\'s SOLO quota is exhausted for this request',
+  4011: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance)',
+  4023: 'Trae does not recognise this model name on the SOLO route that was asked',
 }
 
 /** `extra` is a JSON *string* on the wire; unwrap it to read `plan`. */
@@ -59,8 +75,11 @@ export function describeTraeFailure(failure: TraeFailure): string {
     ...failure.code === undefined ? [] : [`Trae code ${failure.code}`],
   ]
   const detail = failure.message.trim()
-  // Trae's own text is often a generic apology that contradicts the code, so it
-  // is appended as detail rather than used as the message.
+  // Trae's own text is appended as detail rather than replacing the hint, so the
+  // message carries both the plugin's reading of the code and the upstream's own
+  // words. It is NOT dropped: the client classifies an error by this text (see
+  // classifyTraeFailure), and upstream wording is evidence — issue #33 showed
+  // the plugin's own 4011 hint asserting a cause Trae's text contradicted.
   return detail === '' ? parts.join(' · ') : `${parts.join(' · ')} · upstream: ${detail}`
 }
 
@@ -69,10 +88,24 @@ export function describeTraeFailure(failure: TraeFailure): string {
  * answer with a real error instead of a truncated 200 stream.
  *
  * `1005` is a subscription gate: 402 is what makes clients stop rather than
- * retry, and it is truthful. Everything else is a client-side rejection.
+ * retry, and it is truthful.
+ *
+ * `4011` is a rate limit and is reported as one — `429` / `soft_rate` (issue
+ * #33). It previously answered `400` / `client`, which contradicted both its own
+ * message and the client's own behaviour: pi-ai classifies an error by its text
+ * (`/\b429\b|rate.?limit/i` → `RATE_LIMIT`), and `RATE_LIMIT` is retryable, so
+ * the kernel retried five times with backoff while this function called the same
+ * failure a non-retryable client error. Reporting the real status makes all
+ * three agree, and `soft_rate` is already what `fallback-upstream` refuses to
+ * replay — correct, since a throttled route is not a route-compatibility
+ * problem.
+ *
+ * Everything else stays a client-side rejection.
  */
 function classifyTraeFailure(failure: TraeFailure): { status: number; kind: TraeUpstreamErrorKind } {
-  return failure.code === 1005 ? { status: 402, kind: 'hard_credit' } : { status: 400, kind: 'client' }
+  if (failure.code === 1005) return { status: 402, kind: 'hard_credit' }
+  if (failure.code === 4011) return { status: 429, kind: 'soft_rate' }
+  return { status: 400, kind: 'client' }
 }
 
 /** Recognise an in-stream failure event, or return undefined for anything else. */

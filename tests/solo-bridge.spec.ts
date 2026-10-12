@@ -249,8 +249,16 @@ describe('TraeSoloBridge', () => {
 // reported `Stream ended without finish_reason`, which reads as a network
 // fault and gets retried five times. The shapes below are the ones measured
 // live on the SG gateway (docs/ISSUE19_DIAGNOSIS.md): `extra` is a JSON
-// *string* on the wire, and 4011's own message claims a rate limit that it is
-// not.
+// *string* on the wire.
+//
+// Issue #33 revised what 4011 IS. It had been read as "the request's function
+// does not serve this model", with Trae's own "exceeded the rate limit" text
+// dismissed as misleading. A 22-function × 6-model matrix on a live CN
+// credential contradicted that: the wrong-function condition is `4001` on every
+// function, `4011` never appeared for it, and `glm-5.3` streamed normally under
+// the function that owns it. 4011 is the SOLO channel's THROTTLE, and Trae says
+// so itself — so the text is now believed and the code is reported as a rate
+// limit.
 describe('describeTraeFailure: readable in-stream failure text (issue #19)', () => {
   it('keeps the subscription gate readable: 1005 names the plan and the code', () => {
     expect(describeTraeFailure({ code: 1005, message: '', extra: '{"plan":4}' }))
@@ -261,16 +269,34 @@ describe('describeTraeFailure: readable in-stream failure text (issue #19)', () 
     expect(describeTraeFailure({ code: 1005, message: '', extra: { plan: 1 } })).toContain('plan 1')
   })
 
-  it('uses the 4011 hint and demotes the misleading rate-limit text to detail', () => {
-    const message = describeTraeFailure({ code: 4011, message: 'exceeded the rate limit' })
-    expect(message).toContain('refused this model under the SOLO function the request used')
+  it('reports 4011 as the throttle it is, and keeps Trae\'s own wording', () => {
+    const message = describeTraeFailure({
+      code: 4011,
+      message: "We're sorry, your requests have exceeded the rate limit. Please wait and try again later.",
+    })
+    expect(message).toContain('Trae throttled the SOLO channel')
+    expect(message).toContain('a rate limit, not the credit balance')
     expect(message).toContain('Trae code 4011')
-    expect(message.endsWith('upstream: exceeded the rate limit')).toBe(true)
+    expect(message.endsWith("upstream: We're sorry, your requests have exceeded the rate limit. Please wait and try again later.")).toBe(true)
+    // The claim that made issue #33 confusing must never come back.
+    expect(message).not.toContain('refused this model under the SOLO function')
+  })
+
+  it('separates an exhausted quota (4008) from a throttle (4011)', () => {
+    const quota = describeTraeFailure({ code: 4008, message: "Your requests have exceeded the quota." })
+    expect(quota).toContain("Trae reports the account's SOLO quota is exhausted for this request")
+    expect(quota).toContain('Trae code 4008')
+    expect(quota).not.toContain('throttled')
+  })
+
+  it('names an unknown model name (4023) instead of calling it a bad request', () => {
+    expect(describeTraeFailure({ code: 4023, message: "the model is unknown" }))
+      .toContain('does not recognise this model name')
   })
 
   it('falls back to a generic refusal for an unmeasured code, still naming it', () => {
-    expect(describeTraeFailure({ code: 4008, message: 'quota exceeded' }))
-      .toBe('Trae refused the request · Trae code 4008 · upstream: quota exceeded')
+    expect(describeTraeFailure({ code: 4955, message: 'quota exceeded' }))
+      .toBe('Trae refused the request · Trae code 4955 · upstream: quota exceeded')
   })
 
   it('describes a codeless error event without inventing a code suffix', () => {
@@ -293,16 +319,16 @@ describe('bridgeTraeSoloStreamOrFail: an early refusal becomes a real error resu
     })
   })
 
-  it('maps a 4011 function-ownership refusal to a client error with its code', async () => {
+  it('maps a 4011 throttle to 429 soft_rate so the status agrees with the message', async () => {
     const result = await bridgeTraeSoloStreamOrFail(traeStream([
       'event: error\ndata: {"code":4011,"message":"exceeded the rate limit"}\n\n',
       'event: done\ndata: {"finish_reason":"stop"}\n\n',
-    ]), 'gpt-5.4')
+    ]), 'glm-5.3')
     expect(result).toEqual({
       ok: false,
-      status: 400,
-      kind: 'client',
-      message: 'Trae refused this model under the SOLO function the request used · Trae code 4011 · upstream: exceeded the rate limit',
+      status: 429,
+      kind: 'soft_rate',
+      message: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance) · Trae code 4011 · upstream: exceeded the rate limit',
     })
   })
 
@@ -315,7 +341,7 @@ describe('bridgeTraeSoloStreamOrFail: an early refusal becomes a real error resu
       ok: false,
       status: 400,
       kind: 'client',
-      message: 'Trae refused the request · Trae code 4008 · upstream: quota exceeded',
+      message: "Trae reports the account's SOLO quota is exhausted for this request · Trae code 4008 · upstream: quota exceeded",
     })
   })
 
