@@ -3,15 +3,10 @@
 > 用途：回复 <https://github.com/dingminhua/dsh-connect-trae/issues/33>
 > （junbin-lai：`GLM-5.3` 报 `Trae code 4011`，额度充足，Trae 客户端的 SOLO 里正常）
 >
-> **状态**：修复已提交（`8989f76`）、tag `v3.4.1` 已推、`pnpm run check` 全绿
-> （typecheck + 549 测试 + build）。
-> **`npm publish` 待你在交互终端执行**（2FA 你在浏览器确认）：
->
-> ```bash
-> cd /Users/dmh2002/DshProject/dsh-connect-trae && npm publish
-> ```
->
-> 发布成功后本稿的「怎么用」一节可直接用（已写明 `3.4.1`）。
+> **状态：3.4.1 已发布**（registry `dist-tags.latest` = `3.4.1`，GitHub Release
+> [v3.4.1](https://github.com/dingminhua/dsh-connect-trae/releases/tag/v3.4.1)）。
+> `pnpm run check` 全绿（typecheck + 549 测试 + build），发布后逐文件核验与 tag 一致。
+> 可直接复制横线以内的内容。
 
 ---
 
