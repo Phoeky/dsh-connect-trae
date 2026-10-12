@@ -17,6 +17,11 @@
 >
 > **已于 2026-10-12 发布到 issue**：
 > <https://github.com/dingminhua/dsh-connect-trae/issues/27#issuecomment-6129839899>
+>
+> ⚠️ **归属说明**：本回复针对的那份完整报告实际提交在 **#34**（xiean676），
+> 已在那里给出正式回复：<https://github.com/dingminhua/dsh-connect-trae/issues/34#issuecomment-6129965859>
+> 起初按文件名（`issue-27-report.md`）误判归属，发到了这里；该评论现已加上更正抬头，
+> 但正文对 #27 同样适用（#27 报告人原帖的三条推测，正是这张表格逐条回答的问题）。
 
 ---
 
