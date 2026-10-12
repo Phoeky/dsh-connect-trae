@@ -37,7 +37,24 @@ function stubRoute(): void {
     accounts: [],
     models: [],
     enabledModelIds: [],
-    credits: { total: 7500, consumed: 0, available: 4503, workAvailable: 1777, generalAvailable: 3392, accounts: [] },
+    // Carries the expiry summary on purpose: the panel renders an expiry notice
+    // when it is present, and this fixture is what makes the "every class the
+    // PANEL renders has a rule" guard below actually cover that markup. Without
+    // it the notice never mounts and a missing rule would go unnoticed.
+    credits: {
+      total: 7500,
+      consumed: 0,
+      available: 4503,
+      workAvailable: 1777,
+      generalAvailable: 3392,
+      accounts: [],
+      expiry: {
+        within24h: { total: 250, packs: 2, earliestExpiresAtMs: Date.now() + 3_600_000 },
+        within3d: { total: 250, packs: 2, earliestExpiresAtMs: Date.now() + 3_600_000 },
+        within7d: { total: 250, packs: 2, earliestExpiresAtMs: Date.now() + 3_600_000 },
+        expired: { total: 0, packs: 0 },
+      },
+    },
   }), { status: 200 }))
 }
 

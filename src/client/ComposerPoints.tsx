@@ -41,7 +41,7 @@ import {
 } from '../status-paths.ts'
 import { COMPOSER_POINTS_CSS } from './styles.ts'
 import { planText } from './plan-text.ts'
-import type { TraeWebAccountCredit, TraeWebAccountState, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
+import type { TraeWebAccountCredit, TraeWebAccountState, TraeWebCreditExpiry, TraeWebPayStatus, TraeWebUsage } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import type { TraeSettingsKey } from './locales.ts'
 import type { TraeUsageCardInjected } from './TraeUsageCard.tsx'
@@ -131,6 +131,45 @@ function generalCreditsOf(usage: TraeWebUsage): number | undefined {
 /** Group the digits so a four-figure balance stays readable in a narrow row. */
 function formatCredits(value: number): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
+}
+
+/** The soonest expiry any bucket names, or undefined when none carries one. */
+function soonestExpiryOf(expiry: TraeWebCreditExpiry): number | undefined {
+  return expiry.within24h.earliestExpiresAtMs
+    ?? expiry.within7d.earliestExpiresAtMs
+    ?? undefined
+}
+
+/**
+ * Which urgency tone the notice takes.
+ *
+ * Escalation order matters: a live expiry the user can still act on outranks a
+ * lapsed one they cannot, even when the lapsed amount is larger.
+ */
+function expiryToneOf(expiry: TraeWebCreditExpiry): string {
+  if (expiry.within24h.packs > 0) return 'dsm-trae-expiry-soon'
+  if (expiry.within7d.packs > 0) return 'dsm-trae-expiry-week'
+  return 'dsm-trae-expiry-lapsed'
+}
+
+/** The notice's headline sentence, naming the amount and the pack count. */
+function expiryMessageOf(expiry: TraeWebCreditExpiry, t: NonNullable<ComposerPointsProps['t']>): string {
+  if (expiry.within24h.packs > 0) {
+    return t('row.expiryWarningSoon', {
+      total: formatCredits(expiry.within24h.total),
+      packs: String(expiry.within24h.packs),
+    })
+  }
+  if (expiry.within7d.packs > 0) {
+    return t('row.expiryWarningWeek', {
+      total: formatCredits(expiry.within7d.total),
+      packs: String(expiry.within7d.packs),
+    })
+  }
+  return t('row.expiryWarningLapsed', {
+    total: formatCredits(expiry.expired.total),
+    packs: String(expiry.expired.packs),
+  })
 }
 
 function formatClock(value: number): string {
@@ -490,6 +529,20 @@ export function ComposerPoints(props: ComposerPointsProps) {
                   </tbody>
                 </table>
               )}
+          {/* Credit about to lapse. This panel is where the balance is actually
+              read, so it is where "some of that balance is about to disappear"
+              belongs — but only for the CN shape: the international document
+              carries a plan, not packs, so it has no per-pack expiry at all. */}
+          {activeRegion === 'cn' && signedIn?.credits?.expiry !== undefined
+            ? <div className={`dsm-trae-expiry ${expiryToneOf(signedIn.credits.expiry)}`} role="status">
+                <span>{expiryMessageOf(signedIn.credits.expiry, t)}</span>
+                {soonestExpiryOf(signedIn.credits.expiry) === undefined
+                  ? null
+                  : <span className="dsm-trae-expiry-detail">
+                      {t('row.expiryEarliest', { time: formatClock(soonestExpiryOf(signedIn.credits.expiry)!) })}
+                    </span>}
+              </div>
+            : null}
           <div className="dsm-trae-composer-panel-foot">
             <span>
               {t('composer.lastRefresh')} {lastRefresh === undefined ? '—' : formatClock(lastRefresh)}

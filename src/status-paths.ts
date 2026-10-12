@@ -86,6 +86,31 @@ export interface TraeWebCreditAccount {
   expiresAtMs?: number
 }
 
+/** Credit lapsing inside one horizon, as the card reports it. */
+export interface TraeWebExpiringCredits {
+  /** Sum of the contributing packs' remaining credit. */
+  total: number
+  /** How many packs contribute. */
+  packs: number
+  /** Soonest expiry among them, epoch milliseconds. */
+  earliestExpiresAtMs?: number
+}
+
+/**
+ * Credit at risk, bucketed by how soon it lapses.
+ *
+ * Only present when at least one pack carried a usable `expiresAtMs` — a card
+ * must never read "we were not told when anything expires" as "nothing is
+ * about to lapse".
+ */
+export interface TraeWebCreditExpiry {
+  within24h: TraeWebExpiringCredits
+  within3d: TraeWebExpiringCredits
+  within7d: TraeWebExpiringCredits
+  /** Packs already past their end time but still carrying credit. */
+  expired: TraeWebExpiringCredits
+}
+
 /** Aggregated usage/credit answer rendered by the plugin card. */
 export interface TraeWebCredits {
   total: number
@@ -94,6 +119,13 @@ export interface TraeWebCredits {
   workAvailable: number
   generalAvailable: number
   accounts: readonly TraeWebCreditAccount[]
+  /**
+   * Credit lapsing soon, for the card's warning banner.
+   *
+   * Derived from the per-pack {@link TraeWebCreditAccount.expiresAtMs} the
+   * `/usage` route already carries, so it costs no extra upstream read.
+   */
+  expiry?: TraeWebCreditExpiry
 }
 
 /** Editable Trae model row rendered by the plugin-owned settings card. */

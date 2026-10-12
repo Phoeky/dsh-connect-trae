@@ -15,7 +15,7 @@ export const TRAE_CARD_CSS = `
 .dsm-plugin-card-title{color:var(--dsw-alias-label-primary,#e6e6e6);font-size:15px;font-weight:600;line-height:1.4}
 .dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:13px;line-height:1.5}
 /* Pure-CSS caret: the host primitives' chevron icon names are not part of any
-   stable contract across DSH releases, so no static import is used — a border
+   stable contract across DSH releases, so no static import is used 鈥?a border
    caret in the plugin's own CSS is version-proof. */
 .dsm-plugin-card-chevron{color:var(--dsw-alias-label-tertiary,#999);flex:none;width:16px;height:16px;position:relative;transition:transform .16s}
 .dsm-plugin-card-chevron::before{content:"";display:block;position:absolute;left:4px;top:5px;width:7px;height:7px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(45deg)}
@@ -52,15 +52,15 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-usage-account-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dsm-trae-usage-expiry{padding-left:19px;color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:18px}
 .dsm-trae-account-picker{display:block}
-/* The 设置 block: label + hint on the left, control on the right, one save for
+/* The 璁剧疆 block: label + hint on the left, control on the right, one save for
    the whole block. It replaces the bare checkbox rows that used to write on
-   every click — a draft needs a visible way back out, so each row carries its
+   every click 鈥?a draft needs a visible way back out, so each row carries its
    own explanation and the footer carries the buttons. */
 /* The preference switches: BARE LINES, one per switch, each with its label
    wrapped around the box so the whole line is a click target.
  *
- * The 设置 block used to be a bordered box with a heading, two rows and a
- * 「保存」/「放弃」 footer. That is gone with the draft it existed to serve — this
+ * The 璁剧疆 block used to be a bordered box with a heading, two rows and a
+ * 銆屼繚瀛樸€?銆屾斁寮冦€?footer. That is gone with the draft it existed to serve 鈥?this
  * is the sibling dsh-connect-workbuddy card's shape, where a preference is a
  * checkbox on a line that commits on the click. */
 .dsm-trae-prefs{display:flex;flex-direction:column;gap:8px}
@@ -72,14 +72,14 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pref span{min-width:0}
 /* The card's checkboxes are the platform's own, styled only with
-   accent-color — the SAME idiom .dsm-trae-mainui-switch-label above already
+   accent-color 鈥?the SAME idiom .dsm-trae-mainui-switch-label above already
    uses for the composer-line switch, and the one the sibling
    dsh-connect-workbuddy card uses for its tab and credits boxes.
  *
  * These were drawn by hand for one release: a 34x20 track with a 14px knob,
  * --dsw-alias-brand-primary when checked. That token is DSH's CONTRAST colour
  * (#0f1115 light / #f9fafb dark), not an accent, so a checked box came out as a
- * solid black pill — heavier than anything else in the card, and unrelated to
+ * solid black pill 鈥?heavier than anything else in the card, and unrelated to
  * the native box sitting two centimetres away in the composer toolbar. The
  * platform checkbox tracks the host's own accent and dark mode for free. */
 .dsm-trae-switch{display:inline-flex;align-items:center;cursor:pointer}
@@ -87,7 +87,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-switch input:disabled{cursor:default}
 .dsm-trae-switch:has(input:disabled){opacity:.6;cursor:default}
 /* The account block is a real table: the question it answers is "which of these
-   accounts, and what is the action on each one" — a dropdown can only ever show
+   accounts, and what is the action on each one" 鈥?a dropdown can only ever show
    the one already chosen. */
 .dsm-trae-accounts{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-accounts-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
@@ -95,15 +95,15 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-accounts-head>button{flex:none;white-space:nowrap}
 .dsm-trae-accounts-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-accounts-hint{margin:3px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-/* The account rows: two lines each — who the account is, then what it is worth
-   — with the one action that applies to THAT row on the right. A four-column
+/* The account rows: two lines each 鈥?who the account is, then what it is worth
+   鈥?with the one action that applies to THAT row on the right. A four-column
    table was the wrong instrument here: every field demanded its own header, the
    columns drifted with the content ("LaoDing" vs a full expiry stamp), and the
    bound row repeated its "in use" badge in two different columns. */
 /* The account table, shaped like the sibling WorkBuddy card's pool table: a
    bordered container, a tinted header row, and one grid row per account whose
    tracks are FRACTIONS of the container rather than sizes derived from the
-   content. That is the whole point — the previous four-column table let each
+   content. That is the whole point 鈥?the previous four-column table let each
    column grow with its own text, so the columns did not line up from row to row
    and the table read as noise in a narrow panel. */
 .dsm-trae-account-table{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
@@ -147,7 +147,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-account-checkin:hover:not(:disabled){background:rgba(86,134,254,.16)}
 .dsm-trae-account-checkin:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
 /* A disabled check-in still STATES something ("claimed", "device used"), so it
-   stays readable — clearly inactive, not invisible. */
+   stays readable 鈥?clearly inactive, not invisible. */
 .dsm-trae-account-checkin:disabled{opacity:.55;cursor:default;border-color:transparent;color:var(--dsw-alias-label-tertiary,#9aa0a8);background:transparent}
 /* The switch is the row's LIVE control, so it is brighter than the inert
    check-in labels beside it: same shape, different weight. */
@@ -194,7 +194,7 @@ export const TRAE_CARD_CSS = `
    the hint tooltip rather than looking like its read-only sibling. */
 /* The sidebar-credit switch. Two instances share this style: the card's own
    row at the top and the copy beside the model actions (2.9.3). Without it the
-   checkbox rendered unstyled and read as absent — the whole reason the switch
+   checkbox rendered unstyled and read as absent 鈥?the whole reason the switch
    looked missing. */
 .dsm-trae-models-actions{display:flex;align-items:center;gap:8px;flex:none}
 .dsm-trae-usage-alternative{display:flex;align-items:flex-start;gap:10px;margin-top:10px;padding:10px 12px;border:1px solid var(--dsw-alias-state-warn-secondary,#fbbf24);border-radius:10px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7)}
@@ -203,6 +203,14 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-usage-switch-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
 .dsm-trae-usage-switch-button:disabled{opacity:.5;cursor:not-allowed}
 .dsm-trae-usage-note{margin:8px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
+/* Credit-expiry notice, card copy. Three tones by urgency, so the 24-hour case
+   cannot be mistaken for the 7-day one at a glance. Reads as an advisory, not
+   an error: the account works fine, the credit is simply about to lapse. */
+.dsm-trae-expiry{display:flex;flex-direction:column;gap:2px;margin-top:10px;padding:10px 12px;border:1px solid;border-radius:10px;font-size:12px;line-height:18px}
+.dsm-trae-expiry-soon{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-expiry-week{border-color:var(--dsw-alias-border-l2,#3a3d45);background:var(--dsw-alias-bg-layer-3,#2c2f36);color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-expiry-lapsed{border-color:var(--dsw-alias-border-l2,#3a3d45);background:var(--dsw-alias-bg-layer-3,#2c2f36);color:var(--dsw-alias-label-tertiary,#999)}
+.dsm-trae-expiry-detail{font-size:11px;line-height:16px;opacity:.8}
 .dsm-trae-models-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
 /* Verdict badge. Only a real refusal is coloured as a warning; an unknown
    verdict stays neutral because an inconclusive probe is not evidence against
@@ -250,8 +258,8 @@ export const TRAE_CARD_CSS = `
  *
  * SEPARATE from `TRAE_CARD_CSS`, and that is not tidiness: the card's CSS is
  * only injected when the settings card module loads, so putting the composer's
- * rules in it means the readout renders UNSTYLED in the composer toolbar —
- * which is exactly what shipped in 2.13.0–2.13.4. The trigger fell back to the
+ * rules in it means the readout renders UNSTYLED in the composer toolbar 鈥?
+ * which is exactly what shipped in 2.13.0鈥?.13.4. The trigger fell back to the
  * browser's default button box, and the panel, without `position: fixed`, had
  * its inline left/top ignored and rendered nowhere useful.
  *
@@ -259,14 +267,14 @@ export const TRAE_CARD_CSS = `
  * renders has a rule here, so a rule cannot go missing without a test failing.
  */
 export const COMPOSER_POINTS_CSS = `
-/* The readout is plain composer text — no border, no fill at rest. The padding
+/* The readout is plain composer text 鈥?no border, no fill at rest. The padding
    is only the click target, invisible until the pointer arrives. */
 .dsm-trae-composer-points{display:inline-flex;align-items:center;min-width:0}
 .dsm-trae-composer-points-trigger{
   appearance:none;display:inline-flex;align-items:center;align-self:stretch;
   padding:2px 6px;border:0;border-radius:6px;background:transparent;
   /* EXPLICIT, not inherit. The composer row's own font and body colour are
-     noticeably larger and darker than the neighbouring controls — a credit
+     noticeably larger and darker than the neighbouring controls 鈥?a credit
      readout is secondary information and must not shout. 12px matches this
      plugin's original line; label-tertiary matches the shell's own composer-row
      control (ContextMeter), which is the sibling this reads alongside. */
@@ -278,7 +286,7 @@ export const COMPOSER_POINTS_CSS = `
 .dsm-trae-composer-points-trigger:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14))}
 .dsm-trae-composer-points-trigger:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
 /* The panel is portaled to document.body and positioned from the trigger, so it
-   MUST be fixed — otherwise the left/top it measures are ignored and it lands in
+   MUST be fixed 鈥?otherwise the left/top it measures are ignored and it lands in
    document flow. All material comes from shell tokens so it follows the theme. */
 .dsm-trae-composer-panel{
   position:fixed;z-index:1100;box-sizing:border-box;
@@ -332,7 +340,7 @@ export const COMPOSER_POINTS_CSS = `
   color:var(--dsw-alias-label-primary,CanvasText);
 }
 /* The current account reads as current without shouting: a filled dot and a
-   slightly heavier weight. Disabled — pressing it would write a selection that
+   slightly heavier weight. Disabled 鈥?pressing it would write a selection that
    has not changed. */
 .dsm-trae-composer-panel-table tbody tr.dsm-trae-composer-panel-row-current td{font-weight:600}
 .dsm-trae-composer-panel-switch{
@@ -367,4 +375,28 @@ export const COMPOSER_POINTS_CSS = `
 }
 .dsm-trae-composer-panel-empty{margin:0;color:var(--dsw-alias-label-tertiary,GrayText)}
 .dsm-trae-composer-panel-error{margin:8px 0 0;color:var(--dsw-alias-state-error-primary,#d92d20);font-size:11px;line-height:16px}
+/* Credit-expiry notice. Three tones by urgency, so the 24-hour case cannot be
+   mistaken for the 7-day one at a glance. Reads as an advisory, not an error:
+   the account works fine, the credit is simply about to lapse. */
+.dsm-trae-expiry{
+  display:flex;flex-direction:column;gap:2px;
+  margin-top:9px;padding:8px 10px;border:1px solid;border-radius:8px;
+  font-size:11px;line-height:16px;
+}
+.dsm-trae-expiry-soon{
+  border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);
+  background:var(--dsw-alias-state-warn-tertiary,#fef3c7);
+  color:var(--dsw-alias-label-primary,#1f2329);
+}
+.dsm-trae-expiry-week{
+  border-color:var(--dsw-alias-border-l2,rgba(127,127,127,.36));
+  background:transparent;
+  color:var(--dsw-alias-label-secondary,GrayText);
+}
+.dsm-trae-expiry-lapsed{
+  border-color:var(--dsw-alias-border-l2,rgba(127,127,127,.36));
+  background:transparent;
+  color:var(--dsw-alias-label-tertiary,GrayText);
+}
+.dsm-trae-expiry-detail{font-size:11px;line-height:16px;opacity:.85}
 `
