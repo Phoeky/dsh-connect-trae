@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.4.0 (2026-10-12)
+
+### 新增
+
+- **积分即将过期时给出提醒**（贡献者 [JeffTsuiCUG](https://github.com/JeffTsuiCUG)，PR [#32](https://github.com/dingminhua/dsh-connect-trae/pull/32)）。剩余额度只回答「还有多少」，回答不了「**哪一笔先到期**」，而后者才是「该先用哪个」的依据。此前一个 1 小时后过期的包和一个下个月才过期的包在界面上看起来完全一样，只盯总额的用户会毫无察觉地丢掉最先到期的那个。
+  - **数据在上一版（3.3.0，PR #31）已就绪**：`credits.accounts[].expiresAtMs` 已逐包携带到期时刻；本版在其之上加提醒 UI，**不新增任何上游读、卡片也不因此多一次请求**。原始起因见 [issue #26](https://github.com/dingminhua/dsh-connect-trae/issues/26)（DSH 主界面侧边栏显示积分状态的长期目标；`credits.expiry` 这份数据将来做 #26 可直接复用，同一个计费请求的结果）。
+  - **`toCredits` 按到期时刻把有余额的积分包分桶汇总为 `credits.expiry`**：`within24h` / `within3d` / `within7d` / `expired` 四桶，每桶带金额合计、套餐数量与最早到期时间。
+    - 只统计**正余额**的包：已用尽的包即使今天到期也不计入，否则长命账号会看起来永远「迫在眉睫」。
+    - 已过期的包**单独计桶**，不进入前瞻窗口——剩余毫秒数为负时会满足所有前瞻条件（`end - now < 24h`），混在一起会让一个早就死掉的包看起来永远临近。
+    - 抽出 `usableExpiry()` 谓词（`> 0` 且有限），与每包投影共用同一判断，两者不可能对同一批数据得出矛盾结论。`0` 与 `NaN`/`Infinity` 均被排除。
+  - **`TraeWebCreditExpiry` / `TraeWebExpiringCredits` 仅当有包携带可用到期时间时才存在**——「没拿到数据」不得渲染成「没有要过期的」，这与 #31 里 `expiresAtMs` 缺省即省略的设计一致。
+  - **两处 UI 不再一视同仁**：使用量标签页新增到期提示条，按 **7 天 → 24 小时 → 已过期**逐级加重，写明金额、套餐数和最早到期时间；输入框下面的积分面板（真正常驻看额度的地方）同样渲染提示条。仅国内版：国际版是订阅制（`payStatus`），没有逐包到期数据。
+  - 中英双语文案（`row.expiryWarningSoon` / `row.expiryWarningWeek` / `row.expiryWarningLapsed` / `row.expiryEarliest`）。
+  - 新增测试覆盖分桶边界、正余额排除、已过期/未到期分离、最早到期选取、非有限值与 `0` 的处理，以及「无数据」与「没有要过期的」这两个必须区分的状态。
+
+### 测试
+
+- `tests/composer-styles.spec.tsx` 的 fixture 补上带 `expiry` 的数据，让输入框面板的到期提示条真正被渲染并接受「每个渲染出的 class 在样式表里有规则」的守卫检查；并做了负向验证——临时删掉一条样式规则，测试精确报出缺失的 class（`dsm-trae-expiry-detail`），确认守卫是真的在覆盖而不是假通过。
+- `tests/web-status.spec.ts` 新增 `expiry summary` 一组，钉住分桶与两种状态的区分。
+
 ## 3.3.0 (2026-10-11)
 
 ### 新增
