@@ -24,7 +24,7 @@ import {
   unwrapVolatileDeep,
   withTraeRegion,
 } from '../status-paths.ts'
-import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
+import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebCreditExpiry, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -182,6 +182,56 @@ function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
       ? 'var(--dsw-alias-state-error-primary, #d92d20)'
       : 'var(--dsw-alias-label-dimmed, #9aa0a6)'
   return { background: color }
+}
+
+/**
+ * A warning that credit is about to lapse.
+ *
+ * The balance alone cannot express this: a pack lapsing in an hour and one
+ * lapsing next month both render as "150", so a user watching only the total
+ * loses the first one silently. The notice names the amount, the pack count and
+ * the soonest expiry, and escalates 7d → 24h → already-lapsed.
+ *
+ * Renders nothing when the upstream reported no end times at all — absence of
+ * expiry data is not evidence that nothing lapses, so the component stays
+ * silent rather than reassuring.
+ */
+function ExpiryNotice({ expiry, t, formatNumber: fmt, formatDateTime: fmtTime }: {
+  expiry: TraeWebCreditExpiry
+  /** Required here: the card throws before rendering if its own `t` is absent,
+   *  so this component is only ever reached with a translation function. */
+  t: TraeUsageCardInjected['t']
+  formatNumber: (value: number) => string
+  formatDateTime: (value: number) => string
+}): ReactNode {
+  const { expired, within24h, within7d } = expiry
+  let message: string | undefined
+  let soonest: number | undefined
+  let tone: string
+  // Escalation order: a live expiry the user can still act on outranks a lapsed
+  // one they cannot, even when the lapsed amount is larger.
+  if (within24h.packs > 0) {
+    message = t('row.expiryWarningSoon', { total: fmt(within24h.total), packs: String(within24h.packs) })
+    soonest = within24h.earliestExpiresAtMs
+    tone = 'dsm-trae-expiry-soon'
+  } else if (within7d.packs > 0) {
+    message = t('row.expiryWarningWeek', { total: fmt(within7d.total), packs: String(within7d.packs) })
+    soonest = within7d.earliestExpiresAtMs
+    tone = 'dsm-trae-expiry-week'
+  } else if (expired.packs > 0) {
+    message = t('row.expiryWarningLapsed', { total: fmt(expired.total), packs: String(expired.packs) })
+    tone = 'dsm-trae-expiry-lapsed'
+  } else {
+    return null
+  }
+  return (
+    <div className={`dsm-trae-expiry ${tone}`} role="status">
+      <span>{message}</span>
+      {soonest === undefined
+        ? null
+        : <span className="dsm-trae-expiry-detail">{t('row.expiryEarliest', { time: fmtTime(soonest) })}</span>}
+    </div>
+  )
 }
 
 /** Render Trae sign-in state and the total usage summary as one expandable card. */
@@ -1375,6 +1425,19 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                       {t('row.creditsAlternativeSwitch')}
                     </button>
                   </div>
+                  : null}
+                {/* Credit about to lapse. Sits in the usage tab, right after the
+                    exhausted/alternative rows, because it answers the same
+                    question those do — "is there anything I should do about my
+                    balance?" — and unlike them it is actionable while the account
+                    still works. */}
+                {status.status === 'signed-in' && status.credits?.expiry !== undefined
+                  ? <ExpiryNotice
+                      expiry={status.credits.expiry}
+                      t={t}
+                      formatNumber={formatNumber}
+                      formatDateTime={formatDateTime}
+                    />
                   : null}
                 {/* The app signed in to a DIFFERENT account than this plugin is
                     bound to (issue #29). Reported by the Host only on that

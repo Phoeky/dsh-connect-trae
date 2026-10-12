@@ -125,6 +125,15 @@ describe('traeWebUsage', () => {
         { displayDesc: '老用户福利', remain: 0, size: 2000, expiresAtMs: 1788340660000 },
         { displayDesc: '签到奖励', remain: 20.3712, size: 200, expiresAtMs: 1789837484000 },
       ],
+      // Both packs in this fixture lapsed before the assertion runs, and one of
+      // them still carries 20.3712 credit — exactly the case the notice exists
+      // for, since that balance is still counted in `total`.
+      expiry: {
+        within24h: { total: 0, packs: 0 },
+        within3d: { total: 0, packs: 0 },
+        within7d: { total: 0, packs: 0 },
+        expired: { total: 20.3712, packs: 1, earliestExpiresAtMs: 1789837484000 },
+      },
     })
     // Credits and check-in are two independent reads, so the card document
     // costs exactly two upstream calls.
@@ -1041,5 +1050,93 @@ describe('toCredits per-pack expiry', () => {
   it('omits the expiry for a pack that carries none at all', () => {
     const result = creditsOf([pack()])
     expect(result.accounts[0]).not.toHaveProperty('expiresAtMs')
+  })
+
+  /**
+   * Bucketing. `toCredits` is the only place the card's expiry summary is
+   * derived, so these pin the horizons, the soonest-expiry selection, and the
+   * two states that must not be confused: "no end times reported" versus
+   * "nothing about to lapse".
+   */
+  describe('expiry summary', () => {
+    const HOUR = 3_600_000
+    const DAY = 24 * HOUR
+    // Fixed clock so a bucket edge cannot drift with the wall clock.
+    const NOW = 1_700_000_000_000
+    const at = (offsetMs: number): number => NOW + offsetMs
+    /** `toCredits` takes the clock explicitly, so buckets are testable. */
+    const creditsNow = (packs: ReturnType<typeof pack>[]) => toCredits({
+      summary: { totalAmount: 200, consumedAmount: 0 },
+      packs,
+    }, NOW)
+
+    it('reports no summary when not one pack carried an end time', () => {
+      // Absence of data is not evidence of safety, so the field stays unset.
+      const result = creditsNow([pack(), pack()])
+      expect(result.expiry).toBeUndefined()
+    })
+
+    it('buckets credit by horizon and only counts positive balances', () => {
+      const result = creditsNow([
+        pack({ endTimeMs: at(2 * HOUR), creditsLimit: 100, consumedCredits: 90 }), // 10
+        pack({ endTimeMs: at(2 * DAY), creditsLimit: 100, consumedCredits: 80 }), // 20
+        pack({ endTimeMs: at(5 * DAY), creditsLimit: 100, consumedCredits: 70 }), // 30
+        pack({ endTimeMs: at(20 * DAY), creditsLimit: 100, consumedCredits: 60 }), // 40, outside every window
+        // Zero balance inside the window must not inflate the at-risk number.
+        pack({ endTimeMs: at(1 * HOUR), creditsLimit: 100, consumedCredits: 100 }),
+      ])
+      const expiry = result.expiry
+      expect(expiry).toBeDefined()
+      expect(expiry!.within24h).toMatchObject({ total: 10, packs: 1 })
+      expect(expiry!.within3d).toMatchObject({ total: 30, packs: 2 })
+      expect(expiry!.within7d).toMatchObject({ total: 60, packs: 3 })
+    })
+
+    it('separates already-lapsed credit from credit still to come', () => {
+      const result = creditsNow([
+        pack({ endTimeMs: at(-1 * HOUR), creditsLimit: 100, consumedCredits: 75 }), // 25, lapsed
+        pack({ endTimeMs: at(30 * DAY), creditsLimit: 100, consumedCredits: 95 }), // 5, far future
+      ])
+      expect(result.expiry!.expired).toMatchObject({ total: 25, packs: 1 })
+      // A lapsed pack is still listed as credit, so it still counts toward the
+      // total — which is exactly why the notice has to surface it separately.
+      // It must NOT also satisfy the forward-looking horizons.
+      expect(result.expiry!.within24h).toMatchObject({ total: 0, packs: 0 })
+      expect(result.expiry!.within3d).toMatchObject({ total: 0, packs: 0 })
+      expect(result.expiry!.within7d).toMatchObject({ total: 0, packs: 0 })
+    })
+
+    it('names the soonest expiry in each bucket', () => {
+      const result = creditsNow([
+        pack({ endTimeMs: at(4 * DAY), creditsLimit: 10, consumedCredits: 9 }),
+        pack({ endTimeMs: at(3 * DAY), creditsLimit: 10, consumedCredits: 9 }),
+      ])
+      expect(result.expiry!.within7d.earliestExpiresAtMs).toBe(at(3 * DAY))
+    })
+
+    it('leaves an empty bucket without a soonest time', () => {
+      const result = creditsNow([pack({ endTimeMs: at(30 * DAY), creditsLimit: 10, consumedCredits: 0 })])
+      expect(result.expiry!.within24h).toEqual({ total: 0, packs: 0 })
+      expect(result.expiry!.within24h).not.toHaveProperty('earliestExpiresAtMs')
+    })
+
+    it('ignores a non-finite expiry rather than bucketing it', () => {
+      const result = creditsNow([
+        pack({ endTimeMs: Number.NaN, creditsLimit: 100, consumedCredits: 0 }),
+        pack({ endTimeMs: Number.POSITIVE_INFINITY, creditsLimit: 100, consumedCredits: 0 }),
+      ])
+      // Neither is a usable date, so the card carries no per-pack expiry and the
+      // summary stays absent — "we were told nothing usable", not "nothing lapses".
+      expect(result.accounts[0]).not.toHaveProperty('expiresAtMs')
+      expect(result.expiry).toBeUndefined()
+    })
+
+    it('ignores a zero expiry, matching the per-pack projection', () => {
+      // `endTimeMs === 0` means the upstream reported no time. The summary must
+      // agree with the projection that this pack is undated, or the card would
+      // warn about a pack it does not itself carry a date for.
+      const result = creditsNow([pack({ endTimeMs: 0, creditsLimit: 100, consumedCredits: 0 })])
+      expect(result.expiry).toBeUndefined()
+    })
   })
 })
