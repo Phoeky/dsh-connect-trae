@@ -138,6 +138,25 @@ Restart the DSH process after install/update/uninstall.
 **Requires DSH 0.1.7-rc.1 and up** (since 2.3.0 the plugin no longer targets hosts older than 0.1.7; the peer dependency ranges are narrowed accordingly).
 **The peer upper bound is `<0.3.0-0`, so both the 0.1.7 and the 0.2 line are supported.**
 
+### Both pi-ai context generations are supported (since 3.4.2)
+
+DSH itself spans two generations of `@earendil-works/pi-ai`, and **which one this plugin resolves to is decided by your install**, not by the host — declaring it a peer is correct, but the two generations disagree on what a context looks like:
+
+| | legacy (≤0.85) | modern (0.86+) |
+| --- | --- | --- |
+| shape | `{ systemPrompt, tools, messages }` | `{ messages: [ {role:'system', content, toolsAdded}, … ] }` |
+| system prompt | top-level `systemPrompt` | **only** on that system message |
+| tool declarations | top-level `tools` | **only** on that system message's `toolsAdded` |
+
+A mismatch breaks **in both directions**, so since 3.4.2 the plugin adapts bidirectionally according to the generation it resolved (issue #27):
+
+- **Modern host + legacy library**: a guaranteed crash — the legacy token estimator has no `role === 'system'` branch, so it iterates a string and throws `Cannot read properties of undefined (reading 'length')`. This happens before the request is built, which is why it looks like "every model crashes, within milliseconds, with all-zero usage".
+- **Legacy host + modern library**: no crash, but the modern api reads only that system message and silently ignores the top-level fields — the system prompt and **every tool declaration** are lost, so the model can never emit a tool call. Quieter, and also fixed.
+
+The generation gate is the copy **this plugin resolved** (its manifest version; package layout when that is unreadable), **not the host version** — a nested older copy shadows a newer host copy and vice versa. Startup logs one line, `dsh-connect-trae: pi-ai <version> (<generation>)`; `legacy` means your install resolved to the ≤0.85 line.
+
+The boundary is **0.86**: `dist/utils/transcript.js`, `normalizeContext`, the estimator's system branch, and the switch away from the top-level fields all land in 0.86.0 together. Gating on `0.87` misclassifies 0.86.x as legacy and folds a context the modern api consumes natively, destroying the prompt and the tools.
+
 The 0.2.0 line breaks **no** contract this plugin consumes — a symbol-by-symbol check confirmed every API it imports is unchanged ([full 0.2.0-rc.1 impact check](https://github.com/dingminhua/dsh-connect-trae/blob/main/docs/DSH_0.2.0_RC1_IMPACT_CHECK.md)). But since 0.1.7 DSH enforces a **bundle-level peer gate**: a bundle whose peers are unsatisfied is skipped **whole**, with one line on stderr and nothing in the UI — the plugin simply disappears.
 
 ### Why the upper bound is not `<0.2.0`
@@ -232,7 +251,7 @@ pnpm run check   # typecheck + test + build
 Local dev via a `link:` install to the desktop profile (restart DSH Desktop after editing):
 
 ```sh
-dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
+dsh plugin --profile desktop add /path/to/dsh-connect-trae
 ```
 
 ## Acknowledgements

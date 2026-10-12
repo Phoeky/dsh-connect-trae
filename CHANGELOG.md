@@ -1,5 +1,109 @@
 # Changelog
 
+## 3.4.2 (2026-10-13)
+
+> **插件现在与它自己解析到的那份 `@earendil-works/pi-ai` 代数对齐了**——这是 [issue #27](https://github.com/dingminhua/dsh-connect-trae/issues/27)
+> 的修复。起因是报告人用任意模型都拿到 `PI_AI_ERROR / Cannot read properties of undefined (reading 'length')`，
+> 且 usage 恒为 0：崩溃发生在**请求发出之前**的本地 token 估算里，所以既与模型无关，也看不到任何 HTTP 痕迹。
+> 取证见 `docs/ISSUE27_DIAGNOSIS.md`。
+
+### 修复
+
+- **插件现在会在两种上下文形状之间双向适配，而不是把宿主的形状原样交给自己的 api**（issue #27）：
+  - **原行为**：`createTraeAdapter` 把 `openAICompletionsApi()` 直接交给 `createProvider`，没有任何适配层。
+    插件声明 pi-ai 为 peer（`>=0.85.1`），所以它解析到哪一份**由安装环境决定**，未必是宿主那一份。
+  - **为什么这是必崩**：pi-ai **0.86 起**在每个公开入口调一次 `normalizeContext()`，于是 provider 收到的是
+    *归一化 transcript*：`{ messages: [ { role:'system', content:<字符串>, toolsAdded }, … ] }`——系统提示与工具声明
+    **只**挂在这条 system 消息上，顶层 `systemPrompt` / `tools` 已被删除。而 ≤0.85 的 `estimateMessageTokens`
+    **没有 `role === 'system'` 分支**：它 `for (const block of message.content)` 迭代一个**字符串**，逐字符拿到
+    `block`，再读 `block.name.length` → `TypeError`。因为这一步位于 `buildBaseOptions` 内、早于任何 HTTP 构造，
+    所以现象就是「105ms 内本地崩溃 + usage 恒 0 + 换模型无效」。
+  - **两个方向都要修**，因为 **DSH 自己也横跨两代**（`dsh-llm-pi-ai` ≤0.2.0-rc.1 声明 `^0.85.1`，0.2.0-rc.2 起声明
+    `^0.87.1`，0.2.1-alpha.2 已到 `^1.0.2`），而本插件声明支持 `>=0.1.7-rc.1 <0.3.0-0`：
+    - **新宿主 + 旧库**（issue #27 本尊）：必崩。
+    - **旧宿主 + 新库**：不崩，但现代 api 只从 system 消息读提示与工具，顶层字段被**静默忽略** → 系统提示与
+      **全部工具声明**丢失（模型永远不会产生 toolCall）。只修前者会把一个响亮的故障换成一个安静的故障。
+  - **改后**：新增 `withContextAdaptation(api, generation)`，按**本插件自己解析到的那一代**决定折返方向；
+    两个适配函数都以**形状**做幂等短路（普通路径返回同一个对象，零分配）。
+    - `adaptLegacyPiAiContext`（transcript → 旧形状）：把 system 文本提升为 `systemPrompt`，并把
+      `toolsRemoved`/`toolsAdded` **按序回放**成顶层 `tools`——工具那一步不能省，`normalizeContext` 之后它是
+      工具声明的**唯一**载体。
+    - `adaptModernPiAiContext`（旧形状 → transcript）：把 `systemPrompt`/`tools` 提到一条首部 system 消息上，
+      并移除顶层字段，避免后续的形状判据误判。
+  - **提示文本的三条载体都要搬，`sections` 不能漏**：新代 `SystemMessage` 的提示文本有 `content` 与
+    `sections` 两条载体（`Record<string, string | null>`），库自己的 `getSystemMessageText` 是
+    「`content` + 全部非 null section」按空行连接。只读 `content` 会让以 section 形态到达的提示整体折成
+    `undefined`——与该适配器要防的「静默丢失」完全同类。现已逐字对齐库的语义（`content` 在前、
+    按声明顺序接 section、跳过 `null`）。
+  - **折上的语义与 `normalizeContext` 逐字对齐，包括「混合形状」**：当上下文**同时**带顶层字段和
+    system 消息时（部分归一化的宿主），pi-ai 自己的做法是**前插**（于是有两条 system 消息，provider 再按
+    空行折叠），本插件因此同样前插。实测该输出经真实 0.87.1 的 `resolveTranscript` 折叠后，与
+    `normalizeContext` 的结果**逐字相同**。早先版本在混合形状下直接原样返回，会静默丢掉顶层提示与其
+    工具——这条是评审的变异测试暴露的（见「测试」）。
+- **代际判据落在 0.86，不是 0.87**（issue #27）：
+  - 报告与兄弟插件的既有实现都按 `>= 0.87 → modern` 划分。实测**真实边界是 0.86.0**——
+    `dist/utils/transcript.js`、`normalizeContext`、估算器的 system 分支、以及「不再读 `systemPrompt`/`tools`」
+    四件事**同时**出现在 0.86.0。
+  - **为什么这个偏差有害**：若插件解析到 **0.86.x**，`>= 0.87` 的判据会把它当旧代而执行折返，而 0.86+ 的 api
+    根本不读顶层字段 → 系统提示与全部工具被静默丢弃。即「照抄现成实现」反而会引入一个新的静默故障。
+- **新增 `src/pi-ai-runtime.ts`：世代探测不依赖版本号字符串**（issue #27）：
+  - 主判据是解析到的那份包 manifest 的版本，用**数值**比较（`major > 0` 或 `minor >= 86` 即现代），
+    因此 `0.9.0` 不会被误判为高于 `0.86.0`，已发布的 `1.x` 也无需改动即可正确归类。
+  - 版本读不到时退化为**包布局**判据（`dist/utils/transcript.js` 是否存在）。
+  - **刻意不使用 `import.meta.resolve()` 做能力探测**：bundler 风格的解析器（vite，以及在它之上的 vitest）
+    会把 exports map 里的 `"./utils/*"` 通配符展开成路径**并直接返回，不检查文件是否存在**，于是对 0.85.1
+    也回答「有」——实测该假阳性会把 0.85.1 判成 modern，从而**在声称按能力判断的同时放过 issue #27**。
+    读包目录则不会被这样骗过。
+  - 解析不到 pi-ai（宿主外探测的市场安装）时取 `modern` 透传：每个做归一化的宿主都同时提供现代代，
+    且透传不可能破坏一个本来就正确的上下文。
+
+### 诊断
+
+- **启动时打印解析到的 pi-ai 版本与代数**（issue #27）：混代安装是「安静坏掉」的那一类，日志里一行
+  `dsh-connect-trae: pi-ai 0.85.1 (legacy generation)` 让它在下次出现时立刻可见，而不是只表现为一次崩溃。
+
+### 测试
+
+- **全仓 549 → 594（+45）**：
+  - `tests/pi-ai-context.spec.ts`（38 例）：代际判定（含 0.86/0.87 边界、数值排序、`1.x`、不可读版本）、
+    `decidePiAiGeneration` 的三条分支（含本机**永不可达**的「什么都没探测到」——市场安装的默认答案，
+    必须显式钉住）、折返（提示提升、**工具提升**、`toolsRemoved`/`toolsAdded` 顺序回放、既有顶层 `tools`
+    权威、空文本 system 消息只丢文本不丢工具、文本块、**`sections` 三条载体**、混合形状、畸形输入）、
+    折上（提升、移除顶层字段、幂等、空提示、**混合形状前插**）、
+    `withContextAdaptation`（两个入口都适配、同形状透传为**同一对象**、保留 `fetchDeferred` 等其余字段），
+    以及**对真实解析到的那份 pi-ai 的集成对拍**：`estimateContextTokens` 不抛错、`convertMessages` 后
+    `messages[0].role === 'system'` 且 `tools` 仍在。
+  - `tests/pi-ai-adapter-wiring.spec.ts`（7 例）：**接线层**用例。上面那批函数级用例在把适配层从工厂里删掉后
+    **依然全绿**（已用变异验证），正是「函数没问题、只是没人调用」这一原始缺陷的形状；本文件 mock 掉
+    `openai-completions.lazy`，经 `adapter.current() → piProvider → streamSimple` 走真实装配路径断言交付给
+    api 的形状。
+  - **变异验证 8 次，8 次全部被抓**（①–⑤ 为自查，⑥–⑧ 由独立评审提出）：
+    ① 工厂里移除适配层 → 5 例失败；② 折返只搬 prompt 不搬 tools → 6 例失败；③ 边界写成 `>= 87` →
+    1 例失败；④ 折上时不移除顶层字段 → 2 例失败；⑤ 折返不做幂等短路 → 5 例失败；
+    **⑥ 折返忽略 `sections` → 2 例失败**；**⑦ 折上跳过多 system 消息的混合形状 → 1 例失败**；
+    **⑧ 不可探测时默认 `legacy` → 1 例失败**。恢复后 57 文件 594 例全绿。
+  - 确认新增用例真的在跑：改动前基线 **549**、改动后 **594**，净增 45，与新增用例数一致。
+
+### 独立评审
+
+发布前由独立评审对 diff 做了对抗性复核（真实发布包 + 真实 api 模块），确认：双向四组合均不丢提示、
+不丢工具、不重复 system 消息；**0.86 边界**在 0.85.1/0.86.0/0.86.1/0.87.1/1.0.2 五个真实 tarball 上
+逐项复核成立；**`import.meta.resolve` 的假阳性被独立复现**（该模块在 0.85.1 磁盘上不存在，vite 仍返回
+其 URL）；接线层用例确实覆盖工厂路径。
+
+评审同时提出 **3 条有效缺陷**，均已修复并补上用例（即上表 ⑥⑦⑧）：`sections` 载体被漏读、
+混合形状下折上会静默丢弃顶层提示与工具、以及不可探测分支的默认值无任何用例约束。
+
+### 文档
+
+- `docs/ISSUE27_DIAGNOSIS.md`：对外部报告的逐条核验——链路 6 跳的取证、双向错配四组合矩阵的实测结果、
+  DSH 各版本与 pi-ai 代数对照，并明确指出该报告的 **3 处硬错误**（代际边界实为 0.86 而非 0.87；
+  CASE B 实测为 `{"tokens":25}` 而非 `15`；`undefined maxTokens` 实为 `NaN` 而非「夹回正整数」）
+  与 **2 处需修正的修复建议**（「收紧 peer 即可在安装期被拒」不成立——DSH 内核预检
+  `evaluatePluginCompatibility` 只覆盖 `@deepseek-ai/dsh*`，pi-ai 不在其中，报告引用的 `install-compat`
+  告警来自 dshmarket 社区插件且属只告警不阻止的 `soft-incompatible`；以及「升级 DSH」解决不了问题，
+  报告人本就在最新的 0.2.0-rc.2 上，而升级只会把他更牢地留在「新宿主」一侧）。
+
 ## 3.4.1 (2026-10-12)
 
 > **`4011` 的含义改正了：它是 Trae 对 SOLO 通道的限流，不是「该 function 不提供此模型」。**

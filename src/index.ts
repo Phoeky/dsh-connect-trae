@@ -17,6 +17,7 @@ import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 import { configuredAccountsOf, followAppLoginEnabled, unwrapVolatile } from './status-paths.ts'
 import type { TraeAdapter } from './adapter.ts'
 import { traeAccountId, TraeCredentialStore } from './auth.ts'
+import { piAiRuntimeInfo } from './pi-ai-runtime.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
@@ -38,6 +39,8 @@ import { TraeUsageClient } from './usage.ts'
 import { registerTraeUsageRoute, toCheckin, toCredits } from './web-status.ts'
 
 export {
+  adaptLegacyPiAiContext,
+  adaptModernPiAiContext,
   createTraeAdapter,
   regionOfTraeProvider,
   TRAE_AI_PROVIDER,
@@ -45,8 +48,10 @@ export {
   TRAE_PROVIDER_DISPLAY_NAMES,
   TRAE_PROVIDERS,
   TRAE_STREAM_IDLE_TIMEOUT_MS,
+  withContextAdaptation,
   type TraeAdapter,
 } from './adapter.ts'
+export { decidePiAiGeneration, generationOf, piAiRuntimeInfo, type PiAiGeneration, type PiAiRuntimeInfo } from './pi-ai-runtime.ts'
 export {
   legacyTraeOwnAuthPath,
   normalizeTraeCredential,
@@ -1121,6 +1126,15 @@ export function apply(ctx: Context, config: Config): void {
   void Promise.all(REGION_KEYS.map(region => stacks[region].shim.ready)).then(async () => {
     if (stopped) return
     try {
+      // Mixed-generation installs are the silent kind of broken (issue #27):
+      // the plugin's own pi-ai copy decides the context shape it can consume,
+      // and it is NOT necessarily the host's copy. Print what was resolved so a
+      // future mismatch is visible in the log instead of only as a crash.
+      const piAi = piAiRuntimeInfo()
+      ctx.logger.info(
+        `dsh-connect-trae: pi-ai ${piAi.version ?? 'unknown'} (${piAi.generation} generation)`
+        + `${piAi.inspected ? '' : ' — not resolved locally, the host supplies it'}`,
+      )
       for (const region of REGION_KEYS) {
         const stack = stacks[region]
         const trae = createTraeAdapter({

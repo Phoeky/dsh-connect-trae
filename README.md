@@ -143,6 +143,33 @@ npm install dsh-connect-trae
 **要求 DSH 0.1.7-rc.1 及以上**（2.3.0 起不再支持 0.1.7 之前的宿主；peer 依赖范围已按此收窄）。
 **peer 上界为 `<0.3.0-0`：0.1.7 与 0.2 两条线均受支持。**
 
+### 同时支持 pi-ai 的两代上下文（3.4.2 起）
+
+DSH 自己横跨 `@earendil-works/pi-ai` 的两代，而**本插件解析到哪一代由你的安装环境决定**，
+未必是宿主那一代——插件声明它是 peer，这是对的，但两代对「上下文长什么样」的定义不同：
+
+| | 旧代（≤0.85） | 新代（0.86+） |
+| --- | --- | --- |
+| 形状 | `{ systemPrompt, tools, messages }` | `{ messages: [ {role:'system', content, toolsAdded}, … ] }` |
+| 系统提示 | 顶层 `systemPrompt` | **只**挂在那条 system 消息上 |
+| 工具声明 | 顶层 `tools` | **只**挂在那条 system 消息的 `toolsAdded` 上 |
+
+错配**两个方向都会坏**，所以 3.4.2 起插件会按自己解析到的那一代双向适配（issue #27）：
+
+- **新宿主 + 旧库**：必崩——旧代的 token 估算没有 `role === 'system'` 分支，会去迭代一个字符串并抛
+  `Cannot read properties of undefined (reading 'length')`。这一步在请求构造之前，所以表现为
+  「任意模型都崩、耗时极短、usage 恒为 0」。
+- **旧宿主 + 新库**：不崩，但现代 api 只读那条 system 消息，顶层字段被**静默忽略**——系统提示与
+  **全部工具声明**丢失（模型永远不会产生 toolCall）。这类故障更隐蔽，同样已修。
+
+代际判据是**本插件自己解析到的那份包**（读它的 manifest 版本；读不到时看包布局），
+**不是宿主版本**——因为嵌套的旧副本会盖过宿主的新副本，反之亦然。启动时日志里会有一行
+`dsh-connect-trae: pi-ai <版本> (<代数>)`，`legacy` 表示你这份安装解析到了 ≤0.85 的旧代。
+
+分界线是 **0.86**：`dist/utils/transcript.js`、`normalizeContext`、估算器的 system 分支、
+以及「不再读顶层字段」这四件事同时出现在 0.86.0。按 `0.87` 划分会把 0.86.x 误判成旧代而错误折返，
+反而丢掉提示与工具。
+
 0.2.0 线对本插件**没有契约破坏**——逐符号核对确认插件消费的 API 全部未变（[完整的 0.2.0-rc.1 影响面核对](https://github.com/dingminhua/dsh-connect-trae/blob/main/docs/DSH_0.2.0_RC1_IMPACT_CHECK.md)）。但 0.1.7 起 DSH 有一道**bundle 级 peer 门禁**：
 peer 范围不满足的 bundle 会被**整体跳过**，只往 stderr 写一行，界面上表现为「插件凭空消失」。
 
@@ -242,7 +269,7 @@ pnpm run check   # typecheck + test + build
 本地开发用 `link:` 安装到 desktop profile（改码后重启 DSH Desktop 生效）：
 
 ```sh
-dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
+dsh plugin --profile desktop add /path/to/dsh-connect-trae
 ```
 
 ## 致谢
