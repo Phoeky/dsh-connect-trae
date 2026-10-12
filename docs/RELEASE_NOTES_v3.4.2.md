@@ -105,3 +105,8 @@ dsh plugin install dsh-connect-trae@3.4.2
 升级后重启 DSH 即可。若你在日志里看到
 `dsh-connect-trae: pi-ai <版本> (<代数>)`，那就是本次修复的探测结果 ——
 `legacy` 表示你这份安装解析到了 ≤0.85 的旧代，适配层会为它折返。
+
+---
+
+**完整比较**：[v3.4.1...v3.4.2](https://github.com/dingminhua/dsh-connect-trae/compare/v3.4.1...v3.4.2)
+
