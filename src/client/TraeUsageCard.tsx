@@ -28,6 +28,7 @@ import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, Tra
 import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
+import { BusyOverlay } from './BusyOverlay.tsx'
 import { planVerdict as payVerdict } from './plan-text.ts'
 import type { TraeSettingsKey } from './locales.ts'
 
@@ -1632,6 +1633,10 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
             </div>
           : null}
       </div>
+      <BusyOverlay
+        visible={saving || savingSettings}
+        message={t('row.veilSaving')}
+      />
     </li>
   )
 }
