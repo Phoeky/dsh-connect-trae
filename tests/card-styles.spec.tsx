@@ -16,8 +16,11 @@
  *  - the switch's ON state has a rule, because a switch whose knob never moves
  *    is indistinguishable from a disabled one.
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import ts from 'typescript'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconChevronDownOutline14: () => null,
@@ -98,6 +101,25 @@ function styledClasses(): Set<string> {
     if (match[1] !== undefined) defined.add(match[1])
   }
   return defined
+}
+
+/**
+ * The stylesheet SOURCE, read from disk rather than imported.
+ *
+ * Two of the guards below ("cannot be silently dead") operate on the literal's
+ * SOURCE and on the extracted string, not on the imported value, because a
+ * stray backtick inside the template literal would let the import still succeed
+ * while silently truncating the stylesheet. Reading the file keeps this suite
+ * able to notice that, exactly when the import would not.
+ *
+ * Resolved from `process.cwd()` rather than `import.meta.url`: vitest runs from
+ * the repo root, and this file runs in the jsdom environment, where the
+ * transform gives `import.meta.url` a non-`file:` scheme (only node-environment
+ * specs here can use `new URL(..., import.meta.url)`).
+ */
+const repoRoot = process.cwd()
+function stylesSource(): string {
+  return readFileSync(join(repoRoot, 'src/client/styles.ts'), 'utf8')
 }
 
 describe('the card stylesheet behind the 3.2.0 settings and account blocks', () => {
@@ -189,6 +211,11 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
 const TOKENS_VERIFIED_AGAINST_DSH = new Set([
   '--dsw-alias-bg-layer-2',
   '--dsw-alias-bg-layer-3',
+  // The busy veil's mask: the exact pair the host's own overlays use, so the
+  // veil dims the way every other overlay in the shell does. These two came in
+  // with the veil (see `dsm-trae-veil` below), along with the panel shadow
+  // `--dsw-elevation-prominent` at the end of the list.
+  '--dsw-alias-bg-mask-1',
   '--dsw-alias-border-l1',
   '--dsw-alias-border-l2',
   '--dsw-alias-brand-primary',
@@ -202,6 +229,10 @@ const TOKENS_VERIFIED_AGAINST_DSH = new Set([
   '--dsw-alias-state-warn-primary',
   '--dsw-alias-state-warn-secondary',
   '--dsw-alias-state-warn-tertiary',
+  // The host's own panel shadow, not a hand-rolled drop shadow.
+  '--dsw-elevation-prominent',
+  // The host's overlay blur, paired with the mask above.
+  '--dsw-mask-blur',
 ])
 
 describe('the stylesheet cannot be silently dead', () => {
@@ -220,6 +251,34 @@ describe('the stylesheet cannot be silently dead', () => {
     expect({ firstStray, depth }).toEqual({ firstStray: -1, depth: 0 })
   })
 
+  /**
+   * A stray backtick inside the CSS template literal ends the string early, and
+   * the rest of the stylesheet is then parsed as UNRELATED TS SYNTAX rather
+   * than as CSS. Neither typecheck nor the build complains: the file is still
+   * valid TS, it just exports a stub stylesheet plus a pile of junk expression
+   * statements. The sibling workbuddy card hit this exactly while reworking its
+   * busy veil (its comments quoted CSS tokens in backticks, the literal split
+   * at the first one, and the veil block vanished) — and this repo must not
+   * relearn it, because the veil added here is just such a rework.
+   *
+   * So count the file's top-level statements against its HEALTHY shape. A
+   * healthy styles.ts declares its CSS exports as VariableStatements and
+   * nothing else; truncation turns the remainder into dozens of expression
+   * statements, one per token. The `TRAE_CARD_CSS` import could not catch this
+   * — an extraction over the string would simply match the shorter, broken
+   * literal.
+   */
+  it('exports exactly the CSS variables, and nothing truncated from the literal', () => {
+    const source = stylesSource()
+    const sf = ts.createSourceFile('styles.ts', source, ts.ScriptTarget.ESNext, true)
+    const strays = sf.statements.filter(st => !ts.isVariableStatement(st))
+    // A leftover expression statement is a fragment of the truncated literal.
+    expect(strays.map(st => ts.SyntaxKind[st.kind])).toEqual([])
+    // The veil CSS lives INSIDE the TRAE_CARD_CSS literal, so the healthy count
+    // stays at 2 even with the veil shipped. Anything else is a truncation.
+    expect(sf.statements.length).toBe(2)
+  })
+
   it('only asks DSH for tokens that actually exist', () => {
     const used = new Set<string>()
     for (const match of TRAE_CARD_CSS.matchAll(/var\((--dsw-[a-z0-9-]+)/gi)) {
@@ -229,5 +288,101 @@ describe('the stylesheet cannot be silently dead', () => {
     expect([...used].filter(name => !TOKENS_VERIFIED_AGAINST_DSH.has(name)).sort()).toEqual([])
     // ...and the list must not rot into a superset nobody prunes.
     expect(TOKENS_VERIFIED_AGAINST_DSH.size).toBe(used.size)
+  })
+})
+
+/**
+ * Belt and braces for the SAME truncation defect, aimed at the veil.
+ *
+ * The truncation guard above is about the SOURCE file's shape; this one is
+ * about the extracted CSS string. If the literal were ever truncated again, or
+ * a veil rule were lost to a rename, these selectors disappear from the
+ * stylesheet while every behavioural test stays green (jsdom does no cascade,
+ * so an unstyled element still has the right classes and text).
+ *
+ * The match is PREFIX-AGNOSTIC first — the sibling workbuddy card spells these
+ * `dsm-workbuddy-veil*`, this one `dsm-trae-veil*`, so the guard names the
+ * plugin's own prefix rather than a hard-coded one — but EXACT about the class:
+ * a whole `{`-terminated rule must be present, so a renamed `.dsm-trae-veil-x`
+ * is not read as present via the `veil` substring inside `dsm-trae-veil-card`.
+ */
+describe('the busy veil keeps the selectors its markup depends on', () => {
+  // The classes BusyOverlay.tsx actually renders, in DOM order. The spinner's
+  // two circles (track + arc) are listed because the ARC — not a border ring —
+  // is the whole point of matching the host's state spinner.
+  const VEIL_CLASSES = ['veil', 'veil-card', 'veil-spinner', 'veil-spinner-track', 'veil-spinner-arc'] as const
+
+  it('defines a rule for every veil class the overlay renders', () => {
+    const css = TRAE_CARD_CSS
+    for (const name of VEIL_CLASSES) {
+      expect(css).toMatch(new RegExp(`\\.dsm-trae-${name}\\{`))
+    }
+  })
+
+  it('keeps the arc spinner rules, not a self-drawn border ring', () => {
+    const css = TRAE_CARD_CSS
+    // The arc is drawn by a dash animation driven by the veil's own keyframes;
+    // a reverted to a CSS border-ring would drop both of these.
+    expect(css).toMatch(/@keyframes dsm-trae-veil-dash/)
+    expect(css).toMatch(/\.dsm-trae-veil-spinner-arc\{/)
+    // Reduced motion degrades to a static arc, matching the host.
+    expect(css).toMatch(/prefers-reduced-motion: reduce/)
+  })
+})
+
+/**
+ * The veil exists to make a save the user is waiting for visible, not merely to
+ * declare classes. The two structural suites above prove the stylesheet backs
+ * the classes; this one proves the OVERLAY really appears while a write is in
+ * flight — the observable behaviour the other two render as moot.
+ *
+ * The card's two writers (`saving` from saveModels, `savingSettings` from
+ * writePreference) both raise the same veil via `visible={saving ||
+ * savingSettings}`. The preference switch is the cheapest to drive: one click on
+ * `followAppLogin` calls `writePreference`, which flips `savingSettings` true
+ * and keeps it true until the settings write resolves. By handing the scope a
+ * `set` that stays pending, the veil stays up long enough to assert — in the
+ * real renderer, not via CSS.
+ */
+describe('the busy veil renders while a save is in flight', () => {
+  it('shows the overlay with the saving message from the moment a preference write starts', async () => {
+    let releaseWrite: () => void = () => {}
+    const writeHeld = new Promise<void>(resolve => { releaseWrite = resolve })
+    const scope = {
+      getSnapshot: () => ({ status: 'ready', value: {}, writable: true }),
+      subscribe: () => () => {},
+      // The write stays in flight until the test decides; only then does
+      // `savingSettings` clear and the veil come down.
+      set: async () => { await writeHeld; return true },
+    }
+
+    vi.stubGlobal('fetch', async (input: string | URL | Request) =>
+      new Response(JSON.stringify(usageDocument()), { status: 200 }))
+    render(<TraeUsageCard t={t} settingsScope={scope as never} />)
+
+    // Expand the card so the preference switches are present.
+    fireEvent.click(screen.getByRole('button', { name: /row\.expand/ }))
+    const followSwitch = await screen.findByRole('checkbox', { name: /row\.followAppLogin/ })
+
+    fireEvent.click(followSwitch)
+
+    // The overlay is genuinely in the DOM, live region and all. Queried by the
+    // class (like the rest of this file) rather than by `role="status"`, because
+    // the card carries several other live regions.
+    await waitFor(() => expect(document.querySelector('.dsm-trae-veil')).not.toBeNull())
+    const veil = document.querySelector('.dsm-trae-veil')
+    expect(veil).not.toBeNull()
+    expect(veil?.getAttribute('role')).toBe('status')
+    expect(veil?.getAttribute('aria-busy')).toBe('true')
+    expect(veil?.getAttribute('aria-live')).toBe('polite')
+    // The veil says what it is waiting for.
+    expect(veil?.textContent).toContain('row.veilSaving')
+    // The arc spinner renders inside the veil card.
+    expect(document.querySelector('.dsm-trae-veil-spinner')).not.toBeNull()
+    expect(document.querySelector('.dsm-trae-veil-card')).not.toBeNull()
+
+    // Let the write land: the re-read has caught up, so the veil comes down.
+    releaseWrite()
+    await waitFor(() => expect(document.querySelector('.dsm-trae-veil')).toBeNull())
   })
 })
