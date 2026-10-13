@@ -1,5 +1,61 @@
 # Changelog
 
+## 3.4.3 (2026-10-13)
+
+> **保存模型列表时终于有了「正在进行」的反馈。** 本版对齐同族 `dsh-connect-workbuddy` 4.4.2
+> 对忙碌遮罩做的修正（该处修的是同族共有的缺陷），并把当初核实过的依据一并带过来。
+
+### 新增
+
+- **保存 / 写设置时有一层忙碌遮罩**（新增 `src/client/BusyOverlay.tsx`，共用组件）：
+  - **此前完全没有。** 保存状态只表现为控件变灰加按钮文案从「保存」变「保存中…」——
+    用户盯着某个具体行等它落地时，屏幕上没有任何「正在进行」的迹象。
+  - 遮罩由卡片的**两条**写路径共同驱动：`saveModels` 的 `saving`（保存模型列表）与
+    `writePreference` 的 `savingSettings`（跟随登录 / 输入框读数两个开关）。
+  - 遮罩在该写路径的 `finally` 里随忙碌标记一起落下，也就是 **Host 重读落地的时刻**——
+    延迟从「看不见」变成「看着它发生」。
+
+### 修复
+
+- **遮罩的配色与动效改用宿主自己的令牌与节奏**（对齐同族 workbuddy 4.4.2）：
+  - **遮罩卡片底色**若沿用同族的旧值 `--dsw-alias-bg-primary`，那个变量**在宿主令牌集里根本不存在**
+    （实测宿主 bundle 零命中；宿主只有 `bg-base` / `bg-layer-1..3` / `bg-module-platform` / `bg-overlay` 等），
+    于是一路回退到写死的近黑 —— 卡片变成一块黑板子，上面的字看不清。现改用宿主给弹层用的
+    `--dsw-alias-bg-layer-2`，亮暗两套主题各自成立；阴影也从手写的 drop shadow 换成宿主的
+    `--dsw-elevation-prominent`。
+  - **遮罩底色**原写死 `rgba(0,0,0,.38)`，既不跟随主题、也没有宿主的模糊。改用宿主自己遮罩用的
+    `--dsw-alias-bg-mask-1`（亮 `.24` / 暗 `.5`）+ `--dsw-mask-blur`，与外壳里其他遮罩一致。
+  - **提示行**用 `label-secondary` —— 原先的 `label-tertiary` 是宿主最暗的一档
+    （亮 `neutral-bluish-600`、暗 `neutral-bluish-400`），给元数据用的，不该承载一句要等的人必须读的话。
+  - **spinner 换成宿主同款弧线**。此前那种 18px 的 CSS border 环、`.7s` 匀速转，比宿主自己的状态
+    转圈（`_dsh-state-dot-spin`：SVG 弧线 + dash 呼吸、`1.5s`）快了近一倍 —— 比起形状本身，
+    **这个速度差才是它看着廉价的主因**。现按宿主 bundle 实测到的几何逐条对齐：
+    `viewBox 0 0 20 20`、`r=8`、`stroke-width 2`、track `opacity .25`、弧线 `stroke-dasharray 12 150`
+    与 dash 呼吸、`1.5s`、`currentColor` 继承所在层级；reduced-motion 降级为**静态弧线**
+    （与宿主降级方式一致），并补 `aria-hidden`，免得 `role="status"` 之外多报一次。
+
+### 测试
+
+- **+4**（`tests/card-styles.spec.tsx` 5 → 9，全仓 **594 → 598**）：
+  - 遮罩选择器守卫：逐条钉住五个遮罩规则，且要求整条 `{` 结尾匹配，避免改名前缀后被子串误判为存在。
+  - 弧线节奏守卫：钉住 `dsm-trae-veil-dash` 关键帧与 reduced-motion 降级，防止退回到自绘 border 环。
+  - **渲染守卫（唯一能证明「遮罩真的出现」的断言）**：jsdom 不做层叠，前几条都只证明样式表里有这些
+    名字。这条在 `scope.set` 挂起的条件下点「跟随 Trae 当前登录的账号」，断言遮罩确实进 DOM
+    （`role=status` / `aria-busy=true` / `aria-live=polite`）、文案为 `row.veilSaving`、弧线与卡片都在，
+    写盘落地后卸载。
+  - 令牌白名单补三条（`--dsw-alias-bg-mask-1` / `--dsw-mask-blur` / `--dsw-elevation-prominent`），
+    三者均经宿主 bundle 实测存在。白名单断言「大小必须等于实际用到的令牌数」，遮罩引入新令牌后必须同步补齐。
+  - 变异验证（各自变红后恢复）：把 `.dsm-trae-veil{` 改成 `.dsm-trae-veilz{` → 仅选择器守卫变红；
+    把 `visible={saving || savingSettings}` 改成 `visible={false}` → 仅渲染守卫变红。
+  - **一处诚实记录，不夸大守卫能力**：本仓库的 `vite/oxc` 与 `tsdown` 比 workbuddy 严格，模板字符串被
+    反引号截断后会**直接报解析错误**（构建同样失败），所以「顶层语句数」那条截断守卫在本仓库
+    不会比它们更早报警。真正拦不住截断的是 `tsc`（实测被截断的文件 `tsc` 仍 `exit 0`）——
+    这正是同族当初能静默中招的原因。那条守卫作为「解析器不再拦时的兜底」保留。
+
+### 文档
+
+- 无。本版只含上述新增、修复与配套测试。
+
 ## 3.4.2 (2026-10-13)
 
 > **插件现在与它自己解析到的那份 `@earendil-works/pi-ai` 代数对齐了**——这是 [issue #27](https://github.com/dingminhua/dsh-connect-trae/issues/27)
