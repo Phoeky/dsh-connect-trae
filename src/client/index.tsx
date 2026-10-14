@@ -27,6 +27,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { TraeUsageCard } from './TraeUsageCard.tsx'
 import { ComposerPointsGate } from './ComposerPointsGate.tsx'
 import type { TraeUsageCardInjected } from './TraeUsageCard.tsx'
+import type { TraeCreditPosition } from '../status-paths.ts'
 import { en, zh } from './locales.ts'
 import type { TraeSettingsKey } from './locales.ts'
 
@@ -189,29 +190,55 @@ export function apply(ctx: ClientContext): void {
      * Registration is unconditional; the gate reads the Host's modelSelection
      * projection and returns null for every other provider, so nothing is drawn
      * and no fetch loop starts while another provider is selected.
+     *
+     * THE SAME READOUT IS REGISTERED IN TWO SEATS (learned from workbuddy issue
+     * #62), and BOTH registrations are unconditional too. Which one actually
+     * draws is decided inside the gate by the per-region `creditPosition`
+     * setting, so changing the setting is a settings write rather than a slot
+     * re-registration — this file's own header records how fragile rebinding a
+     * slot is across DSH lines (the rc.6→rc.7 `id`/`order` → `key`/`priority`
+     * rename). The composer row is a LIST seat shared with every other bundle,
+     * so a third party parking something there can crowd this readout out of
+     * existence; the second seat is what keeps one plugin's presence from
+     * deciding another's.
      */
-    const registerComposerPoints = (): void => {
+    const registerPointsSlot = (
+      slotName: string,
+      id: string,
+      order: number,
+      position: TraeCreditPosition,
+    ): void => {
       try {
-        ctx.slots.inject('conversation.input.left' as never, () => (ctx.slots as unknown as {
+        ctx.slots.inject(slotName as never, () => (ctx.slots as unknown as {
           register(
-            options: { name: string; id: string; order: number; locale: string; inject: () => { t: typeof t } },
+            options: { name: string; id: string; order: number; locale: string; inject: () => TraeUsageCardInjected },
             component: unknown,
           ): () => void
         }).register({
-          name: 'conversation.input.left',
-          id: 'dsh-connect-trae-composer-points',
-          order: 4,
+          name: slotName,
+          id,
+          order,
           locale: namespace,
           // `settingsScope` rides along so the gate can honor the card's
-          // "show credits in the composer" switch without a second writer.
-          inject: () => ({ t, settingsScope }),
+          // "show credits in the composer" switch and its seat without a second
+          // writer; `position` is which seat THIS registration occupies.
+          inject: () => ({ t, settingsScope, position }),
         }, ComposerPointsGate))
       } catch (error: unknown) {
-        console.error('[dsh-connect-trae] composer points slot failed to register (host provider unaffected):', error)
+        // Isolated per seat: a failed registration in one must never take the
+        // other down with it, and the host provider is unaffected either way.
+        console.error(`[dsh-connect-trae] points slot "${slotName}" failed to register (host provider unaffected):`, error)
       }
     }
 
-    registerComposerPoints()
+    // The composer tool row: the default seat, and the closer, more glanceable
+    // one. `order: 4` is this readout's long-standing place in that row.
+    registerPointsSlot('conversation.input.left', 'dsh-connect-trae-composer-points', 4, 'composer')
+    // The ambient dock below the composer card, where the shell renders its own
+    // round/step/token pills. `order: 10` places this readout AFTER those pills
+    // (the shell's own statistics register at 0), so the shipped figures stay
+    // leftmost and the readout reads as an addition rather than a replacement.
+    registerPointsSlot('conversation.composer.dock', 'dsh-connect-trae-stats-points', 10, 'stats')
 
   } catch (error: unknown) {
     // Degrade silently on the page: the host provider still serves models.

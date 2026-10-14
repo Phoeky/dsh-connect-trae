@@ -95,6 +95,15 @@ export const en = {
   'row.showPointsInMainUi': 'Show credits in the composer row',
   'row.showPointsInMainUiHint': 'A clickable readout in the composer tool row while a model from this plugin is selected: Trae CN · <balance> on the CN side, Trae Global · <plan> on the international one.',
   'row.showPointsInMainUiHintAi': 'A clickable readout in the composer tool row while a model from this plugin is selected: Trae Global · <plan>.',
+  // WHERE the readout sits (learned from workbuddy #62). The composer tool row is
+  // a LIST seat shared with any other plugin that registers there — the reported
+  // symptom is the readout disappearing once another plugin was installed — so
+  // the seat is a choice.
+  'row.creditPositionLabel': 'position',
+  'row.creditPositionComposer': 'composer toolbar',
+  'row.creditPositionStats': 'below the input box',
+  'row.creditPositionAria': 'Credit readout position for {region}',
+  'row.creditPositionHint': 'Where the credit readout sits. "composer toolbar" is the default (the row with the model picker). Choose "below the input box" — the row carrying the round / step / token statistics — if another plugin occupies the composer toolbar and the readout does not appear.',
   'composer.switchTo': 'Switch to {account}',
   'composer.noAccounts': 'No account in this region',
   'composer.panelTitle': 'Trae credits',
@@ -242,6 +251,14 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.showPointsInMainUi': '在输入框工具栏显示积分读数',
   'row.showPointsInMainUiHint': '在输入框工具栏显示可点击读数（选中本插件模型时出现）：国内版为「Trae CN · 余额」，国际版为「Trae 国际版 · 套餐」。',
   'row.showPointsInMainUiHintAi': '在输入框工具栏显示可点击读数（选中本插件模型时出现）：国际版为「Trae 国际版 · 套餐」。',
+  // 积分显示在哪个位置（学自 dsh-connect-workbuddy issue #62）。输入框工具栏是
+  // **共享**的 list 插槽，别的插件也注册在那里时本插件读数会消失（报告者遇到的
+  // 就是这个），所以位置做成可选项。
+  'row.creditPositionLabel': '显示位置',
+  'row.creditPositionComposer': '输入框工具栏',
+  'row.creditPositionStats': '输入框下方',
+  'row.creditPositionAria': '{region} 的积分显示位置',
+  'row.creditPositionHint': '积分显示在哪里。「输入框工具栏」是默认位置（与模型选择同一行）。如果装了别的插件后读数不显示，改成「输入框下方」—— 那是「轮次 / 步数 / token」统计所在的那一行。',
   'composer.switchTo': '切换到 {account}',
   'composer.noAccounts': '该区域暂无账号',
   'composer.panelTitle': 'Trae 积分',

@@ -29,8 +29,16 @@ class Slots extends Service {
   readonly registrations: { name: string; key: string }[] = []
   constructor(owner: Context) { super(owner, 'slots') }
   inject(_name: string, callback: () => void): void { callback() }
-  register(options: { name: string; key: string }): () => void {
-    this.registrations.push({ name: options.name, key: options.key })
+  /**
+   * The real 0.1.7 registry takes a slot's identity as `id` for the
+   * conversation slots and as `key` for the plugin-config card slots — the
+   * rc.6→rc.7 rename that this repository's client entry documents. The double
+   * accepts either and records whichever was given, so an assertion about a
+   * slot's identity cannot silently read `undefined` for a registration that
+   * used the other spelling.
+   */
+  register(options: { name: string; key?: string; id?: string }): () => void {
+    this.registrations.push({ name: options.name, key: options.key ?? options.id ?? '' })
     return () => {}
   }
 }
@@ -95,16 +103,36 @@ describe('client entry activation on 0.1.7', () => {
     // The 0.1.7 slots are registered, and the scope came from configForms
     // bound to the namespace the mirror actually serves (the patch id, not the
     // declared fallback `trae`).
-    // A third slot joins the two config ones: `conversation.input.left`, the
-    // provider-scoped credit readout. It exists precisely so two connector
-    // plugins do not fight over a single shared row — which is why the earlier
+    // A third and fourth slot join the two config ones: the credit readout,
+    // registered in BOTH of its seats (learned from workbuddy #62) —
+    // `conversation.input.left` (the default composer toolbar) and
+    // `conversation.composer.dock` (the ambient row below the input box, beside
+    // the shell's own round/step/token pills). Both are registered
+    // unconditionally because the CHOICE between them lives in the gate's
+    // per-region `creditPosition` test — registering only the chosen seat would
+    // mean re-registering a slot on every settings change, which this repository
+    // already documents as fragile across DSH lines.
+    //
+    // The composer row exists precisely so two connector plugins do not fight
+    // over a single shared row — which is why the earlier
     // `sidebar.footer.action` line is GONE (2.12.0): the sidebar foot is one
     // root-level row shared with the shell's own controls, so two plugins each
-    // parking a line there squeezed one of them down to a clipped fragment.
-    // It registers unconditionally; the gate renders nothing unless this
-    // plugin's own model is the selected one.
+    // parking a line there squeezed one of them down to a clipped fragment. That
+    // same crowding is what the second seat insures against: a list seat cannot
+    // promise that every occupant is visible.
+    //
+    // The gate renders nothing unless this plugin's own model is selected AND
+    // the setting names this seat.
     expect(slots.registrations.map(entry => entry.name).sort())
-      .toEqual(['conversation.input.left', 'plugins.bundle.config', 'plugins.row.config'])
+      .toEqual(['conversation.composer.dock', 'conversation.input.left', 'plugins.bundle.config', 'plugins.row.config'])
+    // The two seats must have DISTINCT slot ids: two registrations sharing one
+    // id would have the second silently replace the first, leaving the setting
+    // able to select a seat that is no longer registered — the readout would
+    // then vanish entirely, which is the defect this feature exists to fix.
+    // The double records the id under `key`, the field name the real 0.1.7
+    // registry takes it as.
+    const pointSlots = slots.registrations.filter(entry => entry.name.startsWith('conversation.'))
+    expect(pointSlots.map(entry => entry.key)).toEqual(['dsh-connect-trae-composer-points', 'dsh-connect-trae-stats-points'])
     expect(forms.requested).toEqual(['dsh-connect-trae'])
     expect(errors).toHaveLength(0)
 
@@ -151,11 +179,13 @@ describe('client entry activation on 0.1.7', () => {
 
     // A missing settings surface must not cost the card its slots: only saving
     // needs the scope, so the card still registers (the scope stays unbound
-    // and read-only). The sidebar line registers too — with no scope the gate
+    // and read-only). BOTH credit seats register too — with no scope the gate
     // reads the switch as false and renders nothing, which is the correct
-    // default for a host that cannot be asked.
+    // default for a host that cannot be asked. Losing the second seat here
+    // would be invisible until a user picked it, so the count is asserted
+    // rather than left implied.
     const slots = ctx.get('slots') as unknown as Slots
-    expect(slots.registrations).toHaveLength(3)
+    expect(slots.registrations).toHaveLength(4)
     expect(errors).toHaveLength(0)
 
     spy.mockRestore()

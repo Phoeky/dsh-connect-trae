@@ -205,3 +205,92 @@ describe('the composer-credits switch in the card', () => {
     expect(holder.writes).toHaveLength(0)
   })
 })
+
+describe('the credit-position picker in the card (learned from workbuddy #62)', () => {
+  /**
+   * The picker, by its OWN label rather than by position or by tag.
+   *
+   * The label is `row.creditPositionLabel` and its own CSS class, deliberately
+   * not the plain preference label the two checkboxes use — a positional or
+   * role-only pick would start asserting about a checkbox the moment the block
+   * is reordered, which is exactly how a guard stops guarding.
+   */
+  function positionPicker(): HTMLSelectElement {
+    const [box] = screen.getAllByRole('combobox', { name: /row\.creditPositionAria/ }) as HTMLSelectElement[]
+    if (box === undefined) throw new Error('the credit-position picker is missing from the card')
+    return box
+  }
+
+  it('defaults to the composer toolbar when nothing is stored', () => {
+    // The default is what keeps an upgrade from moving anyone's readout: before
+    // this setting existed the composer row was the only seat.
+    renderOpen(makeScope({ showPointsInMainUi: true }).scope)
+    expect(positionPicker().value).toBe('composer')
+  })
+
+  it('shows the stored seat for the ACTIVE tab, and follows the tab switch', () => {
+    // The seat is per REGION, so the control must reflect whichever tab it is
+    // on rather than one global value — the two tabs move independently.
+    renderOpen(makeScope({
+      showPointsInMainUi: true,
+      regions: { cn: { creditPosition: 'stats' }, ai: { creditPosition: 'composer' } },
+    }).scope)
+    expect(positionPicker().value).toBe('stats')
+
+    fireEvent.click(screen.getByRole('tab', { name: /row\.tabAi/ }))
+    expect(positionPicker().value).toBe('composer')
+  })
+
+  it('writes the picked seat into THIS region\'s slot alone', async () => {
+    // The write must be a whole-slot merge, so moving the CN readout cannot drop
+    // that region's model picks or disturb the international slot.
+    const holder = makeScope({
+      showPointsInMainUi: true,
+      regions: {
+        cn: { enabledModelIds: ['m1'], creditPosition: 'composer' },
+        ai: { creditPosition: 'stats' },
+      },
+    })
+    renderOpen(holder.scope)
+    fireEvent.change(positionPicker(), { target: { value: 'stats' } })
+    await waitForWrite(holder.writes)
+
+    expect(holder.writes).toHaveLength(1)
+    expect(holder.writes[0]?.field).toBe('regions')
+    const regions = holder.writes[0]?.value as Record<string, Record<string, unknown>>
+    expect(regions['cn']?.['creditPosition']).toBe('stats')
+    expect(regions['cn']?.['enabledModelIds']).toEqual(['m1'])
+    expect(regions['ai']?.['creditPosition']).toBe('stats')
+  })
+
+  it('disables the picker for a region that is switched off, rather than hiding it', () => {
+    // A region that is off has no readout to place, so the control must not
+    // write. It is DISABLED rather than removed: a control that vanished would
+    // read as the feature having gone away.
+    const holder = makeScope({ showPointsInMainUi: true, regions: { cn: { enabled: false } } })
+    renderOpen(holder.scope)
+    expect(positionPicker().disabled).toBe(true)
+  })
+
+  it('is independent of the show/hide box: a hidden readout keeps its seat', async () => {
+    // The two answer different questions. With the readout hidden the seat is
+    // still stored, so turning it back on returns it to where the user put it
+    // instead of resetting to the default.
+    const holder = makeScope({ showPointsInMainUi: false, regions: { cn: { creditPosition: 'stats' } } })
+    renderOpen(holder.scope)
+    expect(creditsSwitch().checked).toBe(false)
+    expect(positionPicker().value).toBe('stats')
+    fireEvent.change(positionPicker(), { target: { value: 'composer' } })
+    await waitForWrite(holder.writes)
+    expect(holder.writes[0]?.value).toMatchObject({ cn: { creditPosition: 'composer' } })
+  })
+
+  it('refuses to write on a read-only scope', () => {
+    const holder = makeScope({ showPointsInMainUi: true }, false)
+    renderOpen(holder.scope)
+    const picker = positionPicker()
+    expect(picker.disabled).toBe(true)
+    fireEvent.change(picker, { target: { value: 'stats' } })
+    expect(holder.writes).toHaveLength(0)
+  })
+})

@@ -71,6 +71,16 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pref b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pref span{min-width:0}
+/* The credit readout's seat picker (learned from workbuddy #62). Its OWN label
+   class, deliberately not the plain .dsm-trae-pref the two checkboxes use: a
+   query for "the composer-credits switch" must not be able to pick this control
+   up, because the two are different widgets and a test selecting by position
+   would otherwise start asserting about a <select>.
+   The select keeps its own class for the same reason, and takes the checkbox
+   column's width so it reads as a sibling of the box rather than a stray row. */
+.dsm-trae-credit-position-pref{align-items:flex-start}
+.dsm-trae-credit-position{flex:none;max-width:150px;margin-top:-1px;padding:2px 6px;font-size:12px}
+.dsm-trae-credit-position:disabled{cursor:default}
 /* The card's checkboxes are the platform's own, styled only with
    accent-color 鈥?the SAME idiom .dsm-trae-mainui-switch-label above already
    uses for the composer-line switch, and the one the sibling

@@ -104,7 +104,9 @@ export { registerTraeUsageRoute, traeWebUsage, type TraeUsageRouteOptions } from
 export {
   regionOfTraeStatusUrl,
   regionEnabledOf,
+  regionCreditPositionOf,
   nextRegionEnabled,
+  nextRegionCreditPosition,
   nextRegionSlots,
   TRAE_ACCOUNT_STATUS_PATH,
   TRAE_CHECKIN_PATH,
@@ -124,6 +126,7 @@ export {
   configuredAccountsOf,
   followAppLoginEnabled,
 } from './status-paths.ts'
+import type { TraeCreditPosition } from './status-paths.ts'
 export { createTraeShim, type TraeShim } from './shim.ts'
 export { UnconfiguredTraeUpstreamClient, type TraeChatResult, type TraeUpstreamClient } from './upstream.ts'
 export { classifyProbeError, classifyProbeResult, probeBody, probeModelsSequentially, probeOneModel, TRAE_PROBE_TIMEOUT_MS, type TraeProbeResult, type TraeProbeVerdict } from './model-probe.ts'
@@ -181,6 +184,29 @@ export interface TraeRegionState {
   imageModelIds?: string[]
   /** Local DSH context budget per model in this region. */
   contextBudgets?: Record<string, number>
+  /**
+   * WHERE this region's credit readout sits (learned from dsh-connect-workbuddy
+   * issue #62).
+   *
+   * Two seats, because the first one is not always available:
+   *
+   *   - `composer` — the composer tool row (`conversation.input.left`), shared
+   *     with the shell's own controls. It is the closer, more glanceable seat,
+   *     and it is the default so nothing moves for anyone who does not choose.
+   *   - `stats` — the ambient dock below the composer card
+   *     (`conversation.composer.dock`), where the shell renders its own
+   *     round/step/token pills. That row is a LIST seat whose shipped occupant
+   *     registers separately, so a third-party plugin that ALSO parks something
+   *     in the composer row cannot crowd this readout out of existence.
+   *
+   * The report behind this (workbuddy #62) was exactly that: with another
+   * plugin installed, the readout vanished from the composer row. Making the
+   * seat a choice is what keeps one plugin's presence from deciding another's.
+   * Trae already lost this readout once to a shared seat — see the sibling
+   * plugin's note about the sidebar foot, where this line was clipped to "Tr"
+   * beside dsh-connect-workbuddy's rows — so the setting applies here too.
+   */
+  creditPosition?: TraeCreditPosition
 }
 
 export interface Config {
@@ -296,6 +322,21 @@ export function regionEnabled(config: Config, region: TraeRegion): boolean {
 }
 
 /**
+ * WHERE one region's credit readout sits (learned from workbuddy #62).
+ *
+ * A local reader rather than a bare schema default, so a config written before
+ * the setting existed reads as `composer` — the seat that was the only one, so
+ * an upgrade moves nothing on screen — and so a hand-edited value the schema
+ * does not know falls back to a seat that renders rather than to nowhere.
+ *
+ * Shared with the browser half by construction: the card renders the Host's
+ * answer for this field, so the control cannot disagree with the readout.
+ */
+export function creditPosition(config: Config, region: TraeRegion): TraeCreditPosition {
+  return regionStateOf(config, region).creditPosition === 'stats' ? 'stats' : 'composer'
+}
+
+/**
  * Mark a schema's field as volatile.
  *
  * `volatile()` exists from schemastery 3.18.3; since 2.3.0 the peer range
@@ -344,6 +385,14 @@ const regionStateConfig = z.object({
   enabledModelIds: z.array(z.string()).default([]),
   imageModelIds: z.array(z.string()).default([]),
   contextBudgets: z.dict(z.number().step(1).min(1)).default({}),
+  // WHERE this region's credit readout sits (learned from workbuddy #62).
+  // Defaults to `composer` because that is the seat that already existed, so an
+  // upgrade moves nothing on screen; `stats` is what a user reaches for when
+  // another plugin occupies the composer row. Declared in the schema so the DSH
+  // settings form can read it, and read back through `regionCreditPositionOf`
+  // rather than from a schema default alone — a profile written before this
+  // field existed must still read as `composer`.
+  creditPosition: z.union([z.const('composer'), z.const('stats')]).default('composer').description('积分读数显示位置："composer" = 输入框工具栏（默认），"stats" = 输入框下方（与「轮次 / 步数 / token」统计同一行）。装了别的插件后读数不显示时改成 stats。'),
 })
 
 const accountSelectionConfig = z.object({

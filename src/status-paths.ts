@@ -510,6 +510,62 @@ export function nextRegionEnabled(
   return nextRegionSlots(regionsMapOf(value), region, { ...regionSlotOf(value, region), enabled })
 }
 
+/**
+ * The two seats this region's credit readout can occupy.
+ *
+ * `composer` is the composer tool row (`conversation.input.left`); `stats` is
+ * the ambient dock below the composer card (`conversation.composer.dock`),
+ * beside the shell's own round/step/token pills.
+ *
+ * WHY THE SEAT IS A CHOICE AT ALL (learned from dsh-connect-workbuddy issue
+ * #62): the composer tool row is a LIST seat, so it is shared not only with the
+ * shell's own controls but with any other plugin that registers there — and a
+ * list seat cannot promise that every occupant is visible. The report behind
+ * that issue is exactly that: with a third-party plugin installed the readout
+ * stopped appearing. A fixed seat therefore lets one plugin's presence decide
+ * another's, so the seat belongs to the user.
+ *
+ * Named as a union rather than a boolean because a third seat is plausible and
+ * a `showAtTop: boolean` would have to be MIGRATED rather than extended.
+ */
+export type TraeCreditPosition = 'composer' | 'stats'
+
+/**
+ * Which seat one region's readout uses, defaulting to the composer row.
+ *
+ * Anything other than an explicit `'stats'` reads as `'composer'`, which covers
+ * the two cases that matter: a profile written BEFORE this setting existed (the
+ * composer row was the only seat, so an upgrade moves nothing on screen), and a
+ * hand-edited value the schema does not know. Falling back rather than
+ * rendering nowhere is deliberate — an unrecognized value must not make the
+ * readout disappear, which is the very defect this setting exists to fix.
+ *
+ * `value` may be the whole settings section or the `regions` map (see
+ * {@link regionsMapOf}).
+ */
+export function regionCreditPositionOf(value: unknown, region: TraeRegion): TraeCreditPosition {
+  return regionSlotOf(value, region)['creditPosition'] === 'stats' ? 'stats' : 'composer'
+}
+
+/**
+ * Build the next `regions` settings value for one region's credit seat.
+ *
+ * Same merge rule as every sibling region write: only the target region's
+ * `creditPosition` changes, so a seat change cannot drop that slot's model
+ * directory, selection, budgets or enabled flag, nor touch the other region.
+ *
+ * `value` may be the whole settings section or the `regions` map; the RETURN
+ * value is always the `regions` map, i.e. exactly what `settingsScope.set(
+ * 'regions', ...)` needs.
+ */
+export function nextRegionCreditPosition(
+  value: unknown,
+  region: TraeRegion,
+  position: TraeCreditPosition,
+): Record<string, unknown> {
+  return nextRegionSlots(regionsMapOf(value), region, { ...regionSlotOf(value, region), creditPosition: position })
+}
+
 /** Subscription status of an international (ai) account, rendered instead of the CN credit packs. */
 export interface TraeWebPayStatus {
   isDollarUsageBilling: boolean
@@ -546,7 +602,13 @@ export function traePlanIsPaid(payIdentityStr: string | undefined): boolean {
 
 /** The JSON document the plugin card renders. */
 export type TraeWebUsage =
-  | { status: 'signed-out'; accounts: readonly TraeWebAccount[]; message?: string; searched?: readonly TraeWebSearchPath[]; enabled?: boolean }
+  | {
+    status: 'signed-out'
+    accounts: readonly TraeWebAccount[]
+    message?: string
+    searched?: readonly TraeWebSearchPath[]
+    enabled?: boolean
+  }
   | {
     status: 'signed-in'
     accountId: string

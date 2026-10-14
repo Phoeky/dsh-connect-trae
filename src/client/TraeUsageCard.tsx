@@ -12,7 +12,9 @@ import {
   configuredAccountsOf,
   followAppLoginEnabled,
   nextRegionEnabled,
+  nextRegionCreditPosition,
   nextRegionSlots,
+  regionCreditPositionOf,
   regionEnabledOf,
   TRAE_ACCOUNT_STATUS_PATH,
   TRAE_ACCOUNTS_REFRESH_PATH,
@@ -25,6 +27,7 @@ import {
   withTraeRegion,
 } from '../status-paths.ts'
 import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebCreditExpiry, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
+import type { TraeCreditPosition } from '../status-paths.ts'
 import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -367,7 +370,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
     followAppLogin: optimisticSettings.current.followAppLogin ?? committedSettings.followAppLogin,
     showPointsInMainUi: optimisticSettings.current.showPointsInMainUi ?? committedSettings.showPointsInMainUi,
   }
-
   const settingsIds = useId()
   const followLabelId = `${settingsIds}-follow`
   const followHintId = `${settingsIds}-follow-hint`
@@ -416,6 +418,60 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   }
 
   useEffect(() => settingsScope?.subscribe(() => { setSettingsRevision(value => value + 1) }), [settingsScope])
+
+  /**
+   * WHERE the active tab's credit readout sits (learned from workbuddy #62).
+   *
+   * Read from the committed SETTINGS document, through the same
+   * `regionCreditPositionOf` helper the Host uses — so the control reads
+   * instantly and can never disagree with the readout's own gate, which reads
+   * the same scope. This mirrors how the show/hide box beside it works
+   * (`committedSettings`), rather than how the sibling workbuddy card does it:
+   * that card reads the Host's usage answer because a measured defect on its
+   * 0.1.7 deployments left the browser settings mirror for its namespace STALE.
+   * No such staleness is reproducible here, and reading the mirror eagerly is
+   * what keeps this control correct on first paint — a picker fed only by the
+   * usage document would sit on the default until a fetch landed, which is the
+   * "looks like it did nothing" failure this control must not have.
+   *
+   * `settingsRevision` is read through the setter above, and the whole block
+   * re-renders when the scope notifies, so a write made elsewhere (another
+   * window, the DSH settings form) converges here.
+   */
+  const creditPositionOn = (item: TraeRegion): TraeCreditPosition =>
+    regionCreditPositionOf(settingsScope?.getSnapshot().value, item)
+
+  /**
+   * Move one region's credit readout between its two seats.
+   *
+   * Same shape as every other region write on this card: the whole target slot
+   * goes in (so a seat change cannot drop that region's model picks, budgets or
+   * enabled flag, nor touch the sibling region), the write is read-back
+   * verified, and the Host is re-read afterwards. The re-read is load-bearing
+   * here — the control renders the Host's answer, so without it the picker
+   * keeps showing the seat it had and the change looks like it did nothing.
+   */
+  const changeCreditPosition = async (item: TraeRegion, position: TraeCreditPosition): Promise<void> => {
+    if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
+    setSavingSettings(true)
+    setWriteError(undefined)
+    try {
+      const regions = nextRegionCreditPosition(settingsScope.getSnapshot().value, item, position)
+      await writeSettingsField(
+        settingsScope,
+        'regions',
+        regions,
+        // The read-back must find the seat in THIS region's slot, which is what
+        // makes a silently-reverted write visible rather than a picker that
+        // claims a position the readout does not use.
+        readBack => regionCreditPositionOf(readBack, item) === position)
+      await refreshUsage(item)
+    } catch (error: unknown) {
+      if (mounted.current) setWriteError(error instanceof Error ? error.message : t('row.requestFailed'))
+    } finally {
+      if (mounted.current) setSavingSettings(false)
+    }
+  }
 
   void settingsRevision
   /**
@@ -1285,6 +1341,36 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     <span className="dsm-trae-pref-hint">
                       {t(activeRegion === 'cn' ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}
                     </span>
+                  </span>
+                </label>
+                {/* WHERE that readout sits (learned from workbuddy #62). It sits
+                    directly beside the show/hide box because the two answer one
+                    question together ("show it, and where"), and because a user
+                    only reaches for this when the default seat is unavailable —
+                    typically after installing another plugin that occupies the
+                    composer row. A region that is switched off gets a disabled
+                    control rather than none: it still has no readout to place,
+                    but the control's ABSENCE would look like the feature went
+                    away. The value comes from the committed settings document,
+                    the same source the readout's own gate reads (see
+                    `creditPositionOn`). */}
+                <label className="dsm-trae-pref dsm-trae-credit-position-pref" title={t('row.creditPositionHint')}>
+                  <select
+                    className="dsm-trae-credit-position"
+                    value={activeRegionOn ? creditPositionOn(activeRegion) : 'composer'}
+                    disabled={!activeRegionOn || settingsScope?.getSnapshot().writable !== true || savingSettings}
+                    aria-label={t('row.creditPositionAria', { region: activeRegion === 'cn' ? t('row.tabCn') : t('row.tabAi') })}
+                    onChange={event => {
+                      void changeCreditPosition(activeRegion, event.currentTarget.value === 'stats' ? 'stats' : 'composer')
+                    }}
+                  >
+                    <option value="composer">{t('row.creditPositionComposer')}</option>
+                    <option value="stats">{t('row.creditPositionStats')}</option>
+                  </select>
+                  <span>
+                    <b>{t('row.creditPositionLabel')}</b>
+                    {' '}
+                    <span className="dsm-trae-pref-hint">{t('row.creditPositionHint')}</span>
                   </span>
                 </label>
               </div>
