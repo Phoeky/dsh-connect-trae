@@ -52,6 +52,8 @@
 
   <img src="docs/assets/dsh-connect-trae-composer-credits.png" width="536" alt="Trae credits panel: a table of accounts with their general balance, and the composer readout below" />
 
+  **读数显示在哪里可以选**（学自同族 `dsh-connect-workbuddy` issue #62）。默认在**输入框工具栏**（即上面说的位置）；如果那里被别的插件占了、读数不显示，改成**输入框下方**——那是「轮次 / 步数 / token」统计所在的那一行，读数是**追加**在官方统计之后，不会顶掉它们。位置**按区域分别设置**（国内版与国际版各存各的），在卡片「设置」区紧挨「在输入框工具栏显示积分读数」那个勾选框。之所以要有第二个位置：输入框工具栏是**共享的 list 插槽**，外壳自己的控件和其他插件都注册在那里，而共享插槽**无法保证每个占用者都可见**——同族的报告者装了第三方插件后读数就整个消失了（本插件早年放在侧边栏底部时也被挤成过一个「Tr」的残片）。
+
 - **安全 loopback shim** —— 每区域一个随机端口 + 进程内随机 secret，真实 Trae token 不交给 pi-ai。
 
 ## 工作原理

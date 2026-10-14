@@ -51,6 +51,8 @@ A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bund
 
   <img src="docs/assets/dsh-connect-trae-composer-credits.png" width="536" alt="Trae credits panel: a table of accounts with their general balance, and the composer readout below" />
 
+  **Where that readout sits is a choice** (learned from the sibling `dsh-connect-workbuddy` issue #62). The default is the **composer toolbar** (the position described above); if another plugin occupies it and the readout does not appear, move it **below the input box** — the row carrying the round / step / token statistics, where the readout is APPENDED after the shipped figures rather than replacing them. The seat is set **per region** (CN and international are stored separately), in the card's settings block next to the "show credits in the composer row" checkbox. Why a second seat exists at all: the composer toolbar is a **shared list slot** that the shell's own controls and every other plugin register into, and a shared slot **cannot promise that every occupant is visible** — the report behind that issue is a readout that vanished entirely once a third-party plugin was installed (this plugin has been squeezed out of a shared row once before too, down to a clipped "Tr" at the sidebar foot).
+
 - **Secure loopback shim** — one random port + in-process random secret per region; the real Trae token is never handed to pi-ai.
 
 ## How it works
