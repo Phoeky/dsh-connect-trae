@@ -267,6 +267,51 @@ describe('mergeTraeModelSources', () => {
     expect(unmatched?.wireFunction).toBeUndefined()
     expect(unmatched?.wireConfigName).toBeUndefined()
   })
+
+  it('keeps the first wire row on same-name collisions instead of the lower-case tail row', () => {
+    // Issue #38. The reporter's CN wire lists the DeepSeek-V4 family three
+    // times: the `-Official` row, the plain row, and a metadata-poor lower-case
+    // tail row whose `id` AND `name` are `deepseek-v4-flash`. Under
+    // last-write-wins that tail row overwrote the display-name key, so the
+    // bridge rewrote `config_name` to the lower-case spelling and the selector
+    // rows were rejected with 4001 ("the param is invalid"). First write wins
+    // keeps the canonical camel-case row, so nothing is rewritten.
+    //
+    // This fixture is the SYNTHETIC roster quoted in the issue. The maintainer's
+    // own account was audited (2026-10-16) and its wire carries no lower-case
+    // tail row, so there this change is a no-op; the fixture pins the CN shape.
+    const remote: TraeDiscoveredModel[] = [
+      { id: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash', multimodal: false, reasoningSupported: true, maxContextWindow: 1_000_000 },
+      { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', multimodal: false, reasoningSupported: true, maxContextWindow: 200_000 },
+    ]
+    const wire = [
+      { id: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash', function: 'solo_work_remote' },
+      { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', function: 'solo_work_remote' },
+      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', function: 'solo_work_remote' },
+    ]
+    const merged = mergeTraeModelSources(remote, wire)
+    // Each row keeps its own id as the wire id → no `wireConfigName`, so the
+    // bridge sends the display id verbatim and the upstream accepts it.
+    expect(merged.map(model => model.wireConfigName)).toEqual([undefined, undefined])
+    expect(merged.map(model => model.wireFunction)).toEqual(['solo_work_remote', 'solo_work_remote'])
+    // The lower-case tail row must not have claimed the shared display name.
+    expect(merged.some(model => model.wireConfigName === 'deepseek-v4-flash')).toBe(false)
+  })
+
+  it('still resolves a genuine display-name join after the first-wins change', () => {
+    // Guard against over-correcting: first-wins must not break the tier-2 join
+    // for models whose wire id legitimately differs from the remote id.
+    const remote: TraeDiscoveredModel[] = [
+      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: false, reasoningSupported: false },
+    ]
+    const wire = [
+      { id: 'Doubao_1_6', name: 'Seed-Code', function: 'chat_v3' },
+      { id: 'Doubao_1_6_legacy', name: 'Seed-Code', function: 'chat_v3' },
+    ]
+    const merged = mergeTraeModelSources(remote, wire)
+    // The first row carrying that display name wins, deterministically.
+    expect(merged[0]?.wireConfigName).toBe('Doubao_1_6')
+  })
 })
 
 describe('region-scoped fallback directories', () => {

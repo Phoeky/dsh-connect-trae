@@ -249,9 +249,36 @@ export function mergeTraeModelSources(
 ): TraeModelInfo[] {
   const wireByName = new Map<string, TraeWireModel>()
   const wireById = new Map<string, TraeWireModel>()
+  // First write wins, per map (issue #38). The wire roster can list one display
+  // name across several ids, and it may include a metadata-poor tail row whose
+  // `id` AND `name` are the same lower-case string. A last-write-wins loop let
+  // such a tail row overwrite the *display-name* key, after which the bridge
+  // rewrote `config_name` to that lower-case spelling — a form the upstream can
+  // reject with 4001, because the wire id is the only `llm_utils_chat` name it
+  // publishes. The reporter's CN roster (in the #38 issue) carries that shape
+  // for DeepSeek-V4-Flash/-Pro; keeping the FIRST row per key leaves the
+  // canonical row in place, so no rewrite happens.
+  //
+  // Provenance of this guard, stated honestly (audited 2026-10-16):
+  //  - CONFIRMED: the collision is real, and the old loop resolved it by
+  //    arrival order; feeding one roster in forward vs reverse order flips the
+  //    resolved `config_name` AND `wireFunction` for colliding names.
+  //  - CONFIRMED: for the reporter's DeepSeek-V4 shape, first-wins restores the
+  //    camel-case id the upstream publishes.
+  //  - NOT VERIFIED LIVE: on the maintainer's own international account the wire
+  //    carries no lower-case tail row at all (the family appears once, as
+  //    `deepseek-v4-flash-0731`), so here first-wins and last-wins agree and
+  //    this change is a no-op. Treat it as a precautionary determinism fix for
+  //    the CN shape, not as a fix measured live on this account.
+  //  - UNPROVEN: for collisions whose ids are semantically different (custom
+  //    model vs paygo vs search-agent), first-wins is merely deterministic — it
+  //    cannot be shown to pick the row the gateway accepts. Do not assume the
+  //    winner is correct just because it is stable.
   for (const model of wire) {
-    wireByName.set(displayKey(model.name), model)
-    wireById.set(displayKey(model.id), model)
+    if (!wireById.has(displayKey(model.id))) wireById.set(displayKey(model.id), model)
+  }
+  for (const model of wire) {
+    if (!wireByName.has(displayKey(model.name))) wireByName.set(displayKey(model.name), model)
   }
   const result: TraeModelInfo[] = []
   for (const model of remote) {
