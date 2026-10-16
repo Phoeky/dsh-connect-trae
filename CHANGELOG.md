@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.5.1 (2026-10-16)
+
+> **DeepSeek-V4 四个模型行不再必然报 4001。** 本版修一处 wire 名单合并的方向错误：
+> 同名的多行里，旧代码让**最后**一行取胜，于是一个元数据残缺的小写尾行抢走了展示名，
+> 桥接层把 `config_name` 改写成了上游不认的小写拼写。改为**每张映射表先到先得**后，
+> 规范行留在原位，不再发生任何改写。
+
+### 修复
+
+- **DeepSeek-V4 四行（`DeepSeek-V4-Flash` / `-Flash-Official` / `-Pro` / `-Pro-Official`）选中发送必报 4001**（issue #38）：
+  - **上游名单的形状**：CN 区 wire（`get_detail_param`）把同一族列了**三行**，共享同一个展示名，其中尾行是
+    元数据残缺的小写行 —— `DeepSeek-V4-Flash` 展示名同时对应 `DeepSeek-V4-Flash-Official`、
+    `DeepSeek-V4-Flash`、`deepseek-v4-flash` 三个 id；`DeepSeek-V4-Pro` 完全同构。
+  - **改坏它的那一步**：`mergeTraeModelSources` 用 `wireByName.set(...)` / `wireById.set(...)`
+    **无条件写入**，所以后到的那一行会覆盖先到的同名键。尾行的 `name` 正好是小写 id，
+    于是 `displayKey("DeepSeek-V4-Flash")` 被它抢占，桥接层据此把 `config_name` 改写成
+    `deepseek-v4-flash`，上游回 `4001 the param is invalid`。
+  - **为什么 `-Official` 行也一起废**：`TraeSoloBridge` 在 catalog 取不到 `wireConfigName` 时
+    会退回 `wireResolver(entry?.name)`，而 `entry.name` 同样是 `DeepSeek-V4-Flash`，
+    于是又落到那一行上 —— **两行一起废**。
+  - **修法**：两张映射表都改成**先到先得**（`if (!map.has(key)) map.set(...)`）。
+    `displayKey("DeepSeek-V4-Flash")` 于是命中 id 完全相同的规范行，该行的 `config_name`
+    本就是 `DeepSeek-V4-Flash`（与展示名一致），**不再发生改写**。
+  - **本机 CN 实测**（插件真实请求形状 `{messages, model, config_name, function, stream}`）：
+    - 修前：`DeepSeek-V4-Flash` → 发出 `deepseek-v4-flash` → 流内 `4001`；`DeepSeek-V4-Pro` 同；
+    - 修后：四行发出 `DeepSeek-V4-Flash` / `DeepSeek-V4-Pro`（`-Official` 两行发出自身 id）→ **HTTP 200 + 完整正文**；
+    - 对照探测：大写能通、小写必 `4001`，`glm-5.2` 作基线正常 —— 证实「号码牌本身是好的，是被改写坏的」。
+
+  > 注意：`4001` 是**流内** `event:error`（外层 HTTP 仍是 200），所以只看状态码会把它误判成成功。
+
+### 测试
+
+- 新增 2 例回归：`mergeTraeModelSources` 在「同名 + 尾行小写」的 wire 上必须让规范行取胜；
+  以及「按展示名 join」在改为先到先得后仍然生效（防止过度修正）。
+  两例在旧代码上均失败、在新代码上通过。
+- 全仓 **619** 例测试通过。
+
 ## 3.5.0 (2026-10-14)
 
 > **积分读数不再只有一个固定位置。** 本版向同族 `dsh-connect-workbuddy` 学来它的 issue #62
