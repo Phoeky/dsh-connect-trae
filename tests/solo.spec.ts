@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { prepareSoloBody, TraeSoloUpstreamClient } from '../src/solo.ts'
+import { prepareSoloBody, TraeEmptySoloDirectory, TraeSoloUpstreamClient } from '../src/solo.ts'
 import { decodeTraeEvent } from '../src/sse.ts'
 import type { TraeCredential } from '../src/auth.ts'
 import type { TraeIdentity } from '../src/identity.ts'
@@ -328,5 +328,29 @@ describe('multi-function directory union (glm-5.3 regression, issue #7)', () => 
     expect(prepared['function']).toBe('solo_work_remote')
     const fallback = JSON.parse(prepareSoloBody(JSON.stringify({ model: 'glm-5.2', messages: [{ role: 'user', content: 'hi' }] })))
     expect(fallback['function']).toBe('solo_work_lite')
+  })
+
+  it('surfaces an EMPTY directory across every function as an upstream-side missing config (issue #39)', async () => {
+    // Issue #39's root signal: get_detail_param answered HTTP 200 with
+    // config_info_list: [] for EVERY requested SOLO function, so the merged
+    // roster is empty even though the account/credentials are fine. This must
+    // throw the dedicated error (upstream published no config, retry later),
+    // NOT the generic "contained no models" wording that reads like a local
+    // failure, and partial-failure empty results must keep the generic error.
+    const emptyDirectory = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({ config_info_list: [] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl: emptyDirectory as unknown as typeof fetch })
+    const error = await client.fetchModels().then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(TraeEmptySoloDirectory)
+    expect((error as TraeEmptySoloDirectory).message).toContain('empty directory for every requested function')
+    expect((error as TraeEmptySoloDirectory).message).not.toMatch(/sign in|re-login/)
+
+    // Every function ERRORING (not an empty 200 roster) keeps the generic error
+    // with the per-function failures — it is NOT the upstream-empty condition.
+    const allDown = vi.fn(async () => new Response('nope', { status: 500 }))
+    const failing = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl: allDown as unknown as typeof fetch })
+    const generic = await failing.fetchModels().then(() => null, (e: unknown) => e)
+    expect(generic).not.toBeInstanceOf(TraeEmptySoloDirectory)
+    expect((generic as Error).message).toContain('contained no models')
   })
 })

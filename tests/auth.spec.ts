@@ -58,7 +58,10 @@ describe('TraeCredentialStore', () => {
     if (process.platform !== 'win32') {
       expect((await stat(own)).mode & 0o777).toBe(0o600)
     }
-    expect(JSON.parse(await readFile(own, 'utf8')).credential.accessToken).toBe('fresh')
+    // Version 2 (issue #37): the file now holds an ARRAY of the region's
+    // credentials, so an imported account can coexist with a refreshed one.
+    // Version 1 files are still READ; they simply upgrade on the next write.
+    expect(JSON.parse(await readFile(own, 'utf8')).credentials[0].accessToken).toBe('fresh')
   })
 
   it('uses the FRESHER copy when the same account exists on both sides', async () => {
@@ -495,8 +498,8 @@ describe('TraeCredentialStore region scoping', () => {
     store.candidates = () => [{ edition: 'solo-sg', path: file, source: 'desktop' }]
 
     await expect(store.resolve()).resolves.toMatchObject({ accessToken: 'ai-refreshed', source: 'dsh' })
-    const saved = JSON.parse(await readFile(regionFile, 'utf8')) as { credential: { accessToken: string } }
-    expect(saved.credential.accessToken).toBe('ai-refreshed')
+    const saved = JSON.parse(await readFile(regionFile, 'utf8')) as { credentials: { accessToken: string }[] }
+    expect(saved.credentials[0]?.accessToken).toBe('ai-refreshed')
     // The legacy copy carried the other region and is untouched by this write.
     const untouched = JSON.parse(await readFile(legacy, 'utf8')) as { credential: { accessToken: string } }
     expect(untouched.credential.accessToken).toBe('legacy-cn')

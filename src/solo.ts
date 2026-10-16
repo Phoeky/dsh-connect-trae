@@ -201,6 +201,24 @@ export interface TraeSoloClientOptions {
   log?: (message: string, detail?: unknown) => void
 }
 
+/**
+ * Thrown by {@link TraeSoloUpstreamClient.fetchModels} when every requested
+ * directory function answered HTTP 200 but with an EMPTY `config_info_list`
+ * (no rows at all), so the aggregate roster is empty. This is issue #39's root
+ * signal: the upstream has published NO SOLO function config for this account /
+ * route. It is a server-side, usually transient gap — the reporter's roster
+ * returned empty and later self-resolved with rows per function — NOT a local
+ * credential, plugin or account fault, and not something to re-login for. The
+ * caller can catch this type to tell "the upstream published no config" apart
+ * from "all directory functions errored" (which surfaces as a generic failure).
+ */
+export class TraeEmptySoloDirectory extends Error {
+  override name = 'TraeEmptySoloDirectory'
+  constructor() {
+    super('Trae\u2019s server returned NO SOLO function config (an empty directory for every requested function) \u2014 an upstream-side gap that usually clears on its own; retry later instead of re-checking credentials or the plugin')
+  }
+}
+
 export class TraeSoloUpstreamClient {
   private readonly fetchImpl: typeof fetch
   constructor(private readonly options: TraeSoloClientOptions) { this.fetchImpl = options.fetchImpl ?? fetch }
@@ -253,7 +271,13 @@ export class TraeSoloUpstreamClient {
     }
     const models = [...byId.values()]
     if (models.length === 0) {
-      throw new Error(`Trae SOLO models response contained no models (${failures.join('; ') || 'empty directory'})`)
+      // No failures AND no rows: every requested function answered HTTP 200 with
+      // an empty config_info_list — the upstream published NO function config
+      // (issue #39's root signal), which is distinct from a transport failure.
+      // Surface it with the honest dedicated error so the caller can tell the
+      // two situations apart; otherwise keep the generic per-function message.
+      if (failures.length === 0) throw new TraeEmptySoloDirectory()
+      throw new Error(`Trae SOLO models response contained no models (${failures.join('; ')})`)
     }
     return models
   }

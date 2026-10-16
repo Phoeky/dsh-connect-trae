@@ -294,6 +294,24 @@ describe('describeTraeFailure: readable in-stream failure text (issue #19)', () 
       .toContain('does not recognise this model name')
   })
 
+  it('reads 2001 as an upstream-side missing function config, not a local fault (issue #39)', () => {
+    // The real upstream text from issue #39: the CN roster came back EMPTY
+    // (config_info_list: []) and every call failed this way, yet credentials and
+    // the model directory were fine and the condition later self-resolved. The
+    // wording must send the user to the UPSTREAM's missing config (retry), not
+    // to their credentials / re-login / a broken account.
+    const message = describeTraeFailure({
+      code: 2001,
+      message: 'no function config found for appId=6eefa01c-abc, function=solo_work_remote',
+    })
+    expect(message).toContain('has not published its function config for this route')
+    expect(message).toContain('an upstream condition, not a local credential or config problem')
+    expect(message).toContain('Trae code 2001')
+    // The whole point of issue #39: never send the user hunting for a local fault.
+    expect(message).not.toContain('sign in')
+    expect(message).not.toContain('re-login')
+  })
+
   it('falls back to a generic refusal for an unmeasured code, still naming it', () => {
     expect(describeTraeFailure({ code: 4955, message: 'quota exceeded' }))
       .toBe('Trae refused the request · Trae code 4955 · upstream: quota exceeded')

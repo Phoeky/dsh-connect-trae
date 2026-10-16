@@ -221,6 +221,32 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-expiry-week{border-color:var(--dsw-alias-border-l2,#3a3d45);background:var(--dsw-alias-bg-layer-3,#2c2f36);color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-expiry-lapsed{border-color:var(--dsw-alias-border-l2,#3a3d45);background:var(--dsw-alias-bg-layer-3,#2c2f36);color:var(--dsw-alias-label-tertiary,#999)}
 .dsm-trae-expiry-detail{font-size:11px;line-height:16px;opacity:.8}
+/* Account import / export (issue #37). A sub-block of the accounts section:
+   the transfer row, plus the two dialogs it opens in place. The file input is
+   hidden rather than absent — the button opens the system picker, and the input
+   must stay mounted to be clicked. */
+.dsm-trae-transfer{margin-top:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2))}
+.dsm-trae-transfer-label{margin:0 0 6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,GrayText)}
+.dsm-trae-transfer-actions{display:flex;flex-wrap:wrap;gap:8px}
+.dsm-trae-transfer-file{display:none}
+.dsm-trae-transfer-status{margin:6px 0 0;font-size:11px;line-height:16px}
+.dsm-trae-transfer-ok{color:var(--dsw-alias-state-success-primary,#16a34a)}
+.dsm-trae-transfer-error{color:var(--dsw-alias-state-error-primary,#dc2626)}
+.dsm-trae-transfer-dialog{
+  margin-top:8px;padding:10px;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.28));
+  border-radius:8px;font-size:12px;line-height:18px;
+}
+.dsm-trae-transfer-dialog>p{margin:0 0 6px}
+.dsm-trae-transfer-list{list-style:none;margin:6px 0;padding:0;max-height:180px;overflow:auto}
+.dsm-trae-transfer-list label{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer}
+.dsm-trae-transfer-list input{flex:none}
+.dsm-trae-transfer-dialog-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+/* A text-button rather than a boxed one: "select all" is a shortcut inside the
+   dialog, and a third button would compete with the two that act. */
+.dsm-trae-transfer-link{
+  margin-top:6px;padding:0;border:0;background:none;cursor:pointer;
+  color:var(--dsw-alias-brand-primary,#2563eb);font-size:11px;line-height:16px;
+}
 .dsm-trae-models-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
 /* Verdict badge. Only a real refusal is coloured as a warning; an unknown
    verdict stays neutral because an inconclusive probe is not evidence against

@@ -76,7 +76,24 @@ export interface TraeCandidateFailure {
 /** Host used for CLI tokens, which carry no host claim of their own. */
 const CLI_DEFAULT_HOST = 'https://api.trae.cn'
 
-const OWN_VERSION = 1
+/**
+ * On-disk format of the plugin-owned per-region file.
+ *
+ * Version 1 held exactly ONE credential (`{ version, credential }`), which was
+ * enough while every account came from a Trae install the plugin can discover
+ * itself. Import (issue #37) breaks that assumption: a user can hold several
+ * accounts as transferable files, and they have to live somewhere. Version 2
+ * keeps the same per-region file but stores `{ version, credentials: [...] }`
+ * instead, so the file stays the unit of region isolation (see
+ * {@link traeOwnAuthPath}) while holding as many accounts as were imported.
+ *
+ * Version 1 remains READ (see {@link parseOwn}), so an existing install keeps
+ * working and upgrades itself the next time a credential is written; it is
+ * never written again.
+ */
+const OWN_VERSION = 2
+/** The superseded single-credential layout, still read for migration. */
+const OWN_VERSION_SINGLE = 1
 export const TRAE_AUTH_FILENAME = '.trae-auth.json'
 
 /** Prefix of the plugin-owned per-region credential copies. */
@@ -153,20 +170,57 @@ export function traeAccountId(credential: Pick<TraeCredential, 'edition' | 'user
   return createHash('sha256').update(stable).digest('hex').slice(0, 24)
 }
 
-function parseOwn(text: string): TraeCredential | undefined {
+/** One stored credential, validated. Returns undefined for a malformed row. */
+function credentialOfStored(stored: unknown): TraeCredential | undefined {
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return undefined
+  const record = stored as Record<string, unknown>
+  const edition = record['edition']
+  if (edition !== 'cn' && edition !== 'sg' && edition !== 'solo' && edition !== 'solo-sg') return undefined
+  return normalizeTraeCredential({
+    token: record['accessToken'], refreshToken: record['refreshToken'], userId: record['userId'], host: record['host'],
+    userRegion: record['userRegion'],
+    account: record['accountName'] === undefined ? undefined : { username: record['accountName'] },
+    expiredAt: record['expiresAtMs'], refreshExpiredAt: record['refreshExpiredAtMs'],
+  }, edition, 'dsh')
+}
+
+/**
+ * Read the plugin-owned file into its stored credentials.
+ *
+ * Accepts BOTH layouts: version 2 (`credentials: [...]`, the import-capable
+ * shape) and the superseded version 1 (`credential: {...}`). A version-1 file
+ * keeps working until the next write upgrades it, so no migration step is
+ * needed and an older install's file is never rejected. A malformed row is
+ * dropped rather than failing the whole file — one bad imported account must
+ * not hide the rest.
+ */
+function parseOwn(text: string): TraeCredential[] {
   try {
-    const document = JSON.parse(text) as { version?: unknown; credential?: unknown }
-    if (document.version !== OWN_VERSION || typeof document.credential !== 'object' || document.credential === null) return undefined
-    const stored = document.credential as Record<string, unknown>
-    const edition = stored['edition']
-    if (edition !== 'cn' && edition !== 'sg' && edition !== 'solo' && edition !== 'solo-sg') return undefined
-    return normalizeTraeCredential({
-      token: stored['accessToken'], refreshToken: stored['refreshToken'], userId: stored['userId'], host: stored['host'],
-      userRegion: stored['userRegion'],
-      account: stored['accountName'] === undefined ? undefined : { username: stored['accountName'] },
-      expiredAt: stored['expiresAtMs'], refreshExpiredAt: stored['refreshExpiresAtMs'],
-    }, edition, 'dsh')
-  } catch { return undefined }
+    const document = JSON.parse(text) as { version?: unknown; credential?: unknown, credentials?: unknown }
+    if (document.version === OWN_VERSION) {
+      if (!Array.isArray(document.credentials)) return []
+      return document.credentials.map(credentialOfStored).filter((value): value is TraeCredential => value !== undefined)
+    }
+    if (document.version === OWN_VERSION_SINGLE) {
+      const single = credentialOfStored(document.credential)
+      return single === undefined ? [] : [single]
+    }
+    return []
+  } catch { return [] }
+}
+
+/**
+ * Write the plugin-owned file: every credential of the region, in the version-2
+ * array layout.
+ *
+ * One writer for both paths that persist to this file (a refresh, and an
+ * import) so the read-modify-write in `refreshNow` and the additive write in
+ * {@link TraeCredentialStore.importAccounts} cannot drift apart. Always writes
+ * `OWN_VERSION`, which is what upgrades a version-1 file on its first write.
+ */
+async function writeOwn(path: string, credentials: readonly TraeCredential[]): Promise<void> {
+  const document = { version: OWN_VERSION, credentials: credentials.map(credential => ({ ...credential })) }
+  await writeFileAtomic(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
 }
 
 export class TraeCredentialStore {
@@ -366,6 +420,48 @@ export class TraeCredentialStore {
     return credentials.find(credential => traeAccountId(credential) === accountId)
   }
 
+  /**
+   * Store imported credentials (issue #37), replacing any entry with the same
+   * account id and leaving every other entry alone.
+   *
+   * Why an additive write rather than the refresh path: an imported credential
+   * has NO desktop file behind it, so unlike a refresh result it cannot be
+   * rediscovered from the machine. If it were written the way a refresh is —
+   * as the whole document — importing account B would delete account A, and a
+   * later refresh would delete both. `readAll`'s desktop-first preference is
+   * therefore also not enough on its own: these entries survive only because
+   * `readOwns` reads them back and the dedupe keeps the longest-lived copy.
+   *
+   * Returns the account ids actually written, so the caller can report how many
+   * landed without re-reading the store.
+   */
+  async importAccounts(credentials: readonly Omit<TraeCredential, 'source'>[]): Promise<string[]> {
+    if (credentials.length === 0) return []
+    const ownPath = this.ownAuthPath()
+    const written: string[] = []
+    await withFileLock(ownPath, async () => {
+      // Merge onto what is already stored, so this never drops an account the
+      // user did not touch — including a refreshed copy this store wrote.
+      const existing = await readFile(ownPath, 'utf8').then(parseOwn, () => [])
+      const byId = new Map<string, TraeCredential>()
+      for (const item of existing) byId.set(traeAccountId(item), item)
+      for (const credential of credentials) {
+        const stored: TraeCredential = { ...credential, source: 'dsh' }
+        const id = traeAccountId(stored)
+        byId.set(id, stored)
+        written.push(id)
+      }
+      await writeOwn(ownPath, [...byId.values()])
+    })
+    // A newly imported account is now the one the user wants to use; bind it so
+    // the next request does not silently keep billing the previous account.
+    if (written.length > 0) {
+      this.accountId = written[written.length - 1]
+      this.inflight = undefined
+    }
+    return written
+  }
+
   async resolve(): Promise<TraeCredential> {
     const credential = await this.current()
     if (credential === undefined) throw new Error(`trae: no signed-in account found (${this.candidates().map(item => item.path).join(' or ')})`)
@@ -544,8 +640,9 @@ export class TraeCredentialStore {
     const copies: TraeCredential[] = []
     for (const path of this.ownCandidates()) {
       try {
-        const parsed = parseOwn(await readFile(path, 'utf8'))
-        if (parsed !== undefined) copies.push(parsed)
+        // A v2 file can hold several accounts, so this spreads rather than
+        // pushing the single credential a v1 file carried.
+        copies.push(...parseOwn(await readFile(path, 'utf8')))
       } catch {
         // absent or unreadable — the next candidate is tried
       }
@@ -571,7 +668,17 @@ export class TraeCredentialStore {
       }
       const ownPath = this.ownAuthPath()
       await withFileLock(ownPath, async () => {
-        await writeFileAtomic(ownPath, `${JSON.stringify({ version: OWN_VERSION, credential: refreshed }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+        // Read-modify-write, NOT overwrite. Since version 2 this file holds
+        // every account of the region — including imported ones that have no
+        // desktop file behind them and could not be re-discovered — so writing
+        // a single refreshed credential as the whole document would silently
+        // delete the others. The account whose token was just refreshed
+        // replaces its own entry; every other entry is carried over verbatim.
+        const existing = await readFile(ownPath, 'utf8').then(parseOwn, () => [])
+        const refreshedId = traeAccountId(refreshed)
+        const entries = existing.filter(item => traeAccountId(item) !== refreshedId)
+        entries.push(refreshed)
+        await writeOwn(ownPath, entries)
       })
       return refreshed
     } catch (error: unknown) {

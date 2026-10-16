@@ -25,8 +25,12 @@ import {
   TRAE_CHECKIN_PATH,
   TRAE_MODELS_REFRESH_PATH,
   TRAE_MODELS_TEST_PATH,
+  TRAE_TRANSFER_PATH,
   TRAE_USAGE_PATH,
+  transferActionOf,
 } from './status-paths.ts'
+import { mergeTransferRecords, parseTransferFile, previewTransferFile, traeTransferRecordOf } from './transfer.ts'
+import type { TraeTransferRecord } from './transfer.ts'
 import type { TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCreditExpiry, TraeWebCredits, TraeWebExpiringCredits, TraeWebUsage, TraeWebPayStatus } from './status-paths.ts'
 import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 
@@ -187,9 +191,38 @@ async function readAccountBody(req: IncomingMessage): Promise<string> {
   return accountId.trim()
 }
 
+/**
+ * Read a transfer-file POST body: the raw file TEXT plus the record indexes the
+ * user selected, or (for `export`) the account ids to include.
+ *
+ * The ceiling is much larger than the other readers' because this body IS a
+ * user-chosen file rather than a couple of ids — a credential export from a
+ * sibling tool can legitimately be hundreds of kilobytes. It is still bounded so
+ * a malformed or hostile request cannot make the Host buffer without limit.
+ */
+async function readTransferBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer
+    size += buffer.byteLength
+    if (size > 4 * 1024 * 1024) throw new Error('request body too large')
+    chunks.push(buffer)
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim()
+  if (text === '') return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text) as unknown
+  } catch {
+    throw new Error('invalid JSON body')
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('body must be a JSON object')
+  return parsed as Record<string, unknown>
+}
+
 /** Loopback browser origins only; other devices are refused until trusted origins exist. */
-function loopbackOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin
+function loopbackOrigin(req: IncomingMessage): boolean {  const origin = req.headers.origin
   if (origin === undefined) return true
   try {
     const { hostname } = new URL(origin)
@@ -631,10 +664,76 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
       },
     })
+    /**
+     * Batch credential export / import (issue #37).
+     *
+     * The Host owns every byte of the credential store; the browser only receives
+     * parsed answers. `preview` necessarily returns identifiers the card shows
+     * (uid / nickname / email) plus a `hasToken` boolean — never a token — and
+     * `import` re-parses the file server-side rather than trusting the preview,
+     * so a tampered browser cannot smuggle in a record the preview never showed.
+     */
+    const disposeTransfer = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_TRANSFER_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        const region = requestRegion(req, res)
+        if (region === undefined) return
+        const action = transferActionOf(req.url ?? '')
+        if (action === undefined) return json(res, 400, { error: 'unknown transfer action' })
+        try {
+          const body = await readTransferBody(req)
+          if (action === 'export') {
+            const wanted = new Set(Array.isArray(body['accountIds']) ? body['accountIds'].filter((id): id is string => typeof id === 'string') : [])
+            const store = deps.store(region)
+            const records: TraeTransferRecord[] = []
+            for (const account of await store.accounts()) {
+              if (!wanted.has(account.id)) continue
+              const credential = await store.credentialOf(account.id).catch(() => undefined)
+              if (credential === undefined) continue
+              records.push(traeTransferRecordOf(credential, {
+                auth: {
+                  accessToken: credential.accessToken,
+                  ...credential.refreshToken === undefined ? {} : { refreshToken: credential.refreshToken },
+                  expiresAt: credential.expiresAtMs > 0 ? Math.floor(credential.expiresAtMs / 1000) : 0,
+                  ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAt: Math.floor(credential.refreshExpiresAtMs / 1000) },
+                  host: credential.host,
+                  ...credential.userRegion === undefined ? {} : { userRegion: credential.userRegion },
+                },
+                account: {
+                  userId: credential.userId,
+                  ...credential.accountName === undefined ? {} : { username: credential.accountName },
+                  edition: credential.edition,
+                },
+              }))
+            }
+            return json(res, 200, { accounts: records })
+          }
+          const text = typeof body['text'] === 'string' ? body['text'] : ''
+          if (action === 'preview') return json(res, 200, previewTransferFile(text))
+          const indexes = Array.isArray(body['indexes'])
+            ? body['indexes'].filter((index): index is number => typeof index === 'number' && Number.isInteger(index))
+            : []
+          // Parse FIRST so a malformed file fails the request before any write,
+          // and so the region gate sees the same records the preview showed.
+          const records = parseTransferFile(text)
+          const { changes, imported, skipped } = mergeTransferRecords(records, indexes, region)
+          // Only touch the store when the gate accepted something: an import in
+          // which every record was skipped must not rewrite the credential file
+          // (and `importAccounts([])` deliberately returns early anyway, so this
+          // keeps the route's intent explicit rather than relying on that).
+          if (changes.size > 0) await deps.store(region).importAccounts([...changes.values()])
+          json(res, 200, { imported, skipped })
+        } catch (error: unknown) {
+          json(res, 400, { error: safeMessage(error) })
+        }
+      },
+    })
     const disposeRefresh = ctx.webServer.register({
       kind: 'exact',
-      path: TRAE_MODELS_REFRESH_PATH,
-      handler: async (req: IncomingMessage, res: ServerResponse) => {
+      path: TRAE_MODELS_REFRESH_PATH,      handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         if (deps.discoverModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
@@ -798,6 +897,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
     return () => {
       disposeCheckin()
       disposeRefresh()
+      disposeTransfer()
       disposeModelsTest()
       disposeAccounts()
       disposeAccountCredits()

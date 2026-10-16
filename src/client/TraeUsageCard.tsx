@@ -32,6 +32,7 @@ import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import { BusyOverlay } from './BusyOverlay.tsx'
+import { AccountTransfer } from './AccountTransfer.tsx'
 import { planVerdict as payVerdict } from './plan-text.ts'
 import type { TraeSettingsKey } from './locales.ts'
 
@@ -1548,6 +1549,28 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                   </div>
                   : null}
                 {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
+                {/*
+                  Import / export (issue #37). Rendered on BOTH sign-in states,
+                  and outside the `signed-in` branch above on purpose: a machine
+                  that has never signed in is exactly where importing a file
+                  exported elsewhere matters most, and the export button simply
+                  stays disabled while there is nothing to select.
+                */}
+                <AccountTransfer
+                  t={t}
+                  region={activeRegion}
+                  accounts={status.status === 'signed-in'
+                    ? status.accounts.map(account => ({ id: account.id, accountName: account.accountName }))
+                    : []}
+                  onChanged={async () => {
+                    // Re-read this region's snapshot so an imported account
+                    // appears without the user closing and reopening settings.
+                    // `refreshUsage` is the same read the card's normal poll
+                    // uses, and it also returns the fresh accounts list.
+                    const fresh = await refreshUsage(activeRegion)
+                    if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))
+                  }}
+                />
               </section>
               {status.status === 'signed-in'
                 ? <>

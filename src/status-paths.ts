@@ -46,6 +46,26 @@ export const TRAE_ACCOUNT_STATUS_PATH = '/plugins/dsh-connect-trae/account-statu
  * account row.
  */
 export const TRAE_CHECKIN_PATH = '/plugins/dsh-connect-trae/checkin'
+/**
+ * Plugin-owned account transfer endpoint: batch export and import of a region's
+ * stored credentials (issue #37).
+ *
+ * One route with an `action` query parameter (`export` | `preview` | `import`),
+ * mirroring the sibling `dsh-connect-workbuddy` plugin's transfer route so the
+ * two cards behave the same way for a user who has both installed. The vault
+ * document never leaves the Host: the browser receives parsed answers, and a
+ * preview carries display fields only — never token material.
+ */
+export const TRAE_TRANSFER_PATH = '/plugins/dsh-connect-trae/transfer'
+/** The transfer endpoint's steps. */
+export type TraeTransferAction = 'export' | 'preview' | 'import'
+/** Read the transfer action off a request URL; unknown/absent means undefined. */
+export function transferActionOf(url: string): TraeTransferAction | undefined {
+  const at = url.indexOf('?')
+  if (at === -1) return undefined
+  const value = new URLSearchParams(url.slice(at + 1)).get('action')
+  return value === 'export' || value === 'preview' || value === 'import' ? value : undefined
+}
 
 /** Query parameter naming the region a card request addresses. */
 export const TRAE_REGION_PARAM = 'region'
@@ -59,6 +79,19 @@ export const TRAE_REGIONS: readonly TraeRegion[] = ['cn', 'ai']
  */
 export function withTraeRegion(path: string, region: TraeRegion): string {
   return `${path}?${TRAE_REGION_PARAM}=${region}`
+}
+
+/**
+ * Address one region's transfer route with its step, e.g.
+ * `/plugins/dsh-connect-trae/transfer?region=cn&action=export`.
+ *
+ * Separate from {@link withTraeRegion} because this route carries a second
+ * query parameter: a caller that appended `&action=` by hand would be one typo
+ * away from a 400, which is exactly the failure the sibling workbuddy plugin
+ * hit (#42) when five requests dropped that parameter.
+ */
+export function withTraeTransferAction(path: string, region: TraeRegion, action: TraeTransferAction): string {
+  return `${path}?${TRAE_REGION_PARAM}=${region}&action=${action}`
 }
 
 /**
@@ -329,6 +362,34 @@ export interface TraeWebCreditAlternative {
   edition: TraeWebAccount['edition']
   workAvailable: number
   generalAvailable: number
+}
+
+/**
+ * One entry of the transfer PREVIEW: display fields only.
+ *
+ * `hasToken` is a boolean rather than the token itself because this crosses
+ * into the browser. The card uses it to pre-select only records that can
+ * actually be imported, so a credential-less row is visibly skipped instead of
+ * silently counting as an import.
+ */
+export interface TraeTransferPreviewEntry {
+  index: number
+  uid: string
+  nickname: string
+  email: string
+  hasToken: boolean
+}
+
+/** The parsed shape of an import file, as the card's confirmation step shows it. */
+export interface TraeTransferPreview {
+  accounts: TraeTransferPreviewEntry[]
+  total: number
+}
+
+/** The answer to a transfer `import`: how many records landed and how many were skipped. */
+export interface TraeTransferImportAnswer {
+  imported: number
+  skipped: number
 }
 
 /** One probed candidate path and why it did not yield an account. */

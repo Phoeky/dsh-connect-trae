@@ -46,9 +46,20 @@ interface TraeFailure {
  *    two different statements, and a user hits the second without touching the
  *    first (issue #33).
  *  - `4023` — the model name is unknown on the route that was asked.
+ *  - `2001` — the upstream has not published its function config for the route
+ *    that was asked. Evidence is issue #39: on a live CN account every SOLO
+ *    function's `get_detail_param` answered HTTP 200 with `config_info_list:
+ *    []` (an empty directory), and each chat call failed with
+ *    `{"code":2001,"message":"no function config found for appId=...,
+ *    function=solo_work_remote"}` (and the variant `[LLMUtilsChat.resolveByUsage]
+ *    function is empty, cannot resolve model by usage=`). The roster came back
+ *    empty and then self-resolved later with rows per function, so this is a
+ *    TRANSIENT server-side gap the user can wait out or retry — never a local
+ *    credential, plugin or account fault, and not something to re-login for.
  */
 const TRAE_ERROR_HINTS: Readonly<Record<number, string>> = {
   1005: 'Trae requires a paid plan for this model; the current account\'s plan does not cover it',
+  2001: 'Trae has not published its function config for this route (an upstream condition, not a local credential or config problem)',
   4001: 'Trae does not serve this model under the SOLO function the request used (config_name rejected)',
   4008: 'Trae reports the account\'s SOLO quota is exhausted for this request',
   4011: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance)',
