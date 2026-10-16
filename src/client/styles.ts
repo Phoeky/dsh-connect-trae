@@ -51,6 +51,13 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-usage-account{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-usage-account-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dsm-trae-usage-expiry{padding-left:19px;color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:18px}
+/* Refresh-token countdown (issue #37 follow-up). Sits under the access-token
+   line and aligns with it, so the two read as one stack: "token renews" then
+   "but this is when renewal itself ends". Only rendered when it is close or
+   already past, so a healthy account is unchanged. */
+.dsm-trae-refresh-warn{padding-left:19px;font-size:12px;line-height:18px}
+.dsm-trae-refresh-warn-soon{color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-refresh-warn-lapsed{color:var(--dsw-alias-state-error-primary,#dc2626)}
 .dsm-trae-account-picker{display:block}
 /* The 璁剧疆 block: label + hint on the left, control on the right, one save for
    the whole block. It replaces the bare checkbox rows that used to write on

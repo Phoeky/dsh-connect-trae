@@ -145,6 +145,38 @@ function formatDateTime(value: number): string {
   }).format(new Date(value))
 }
 
+/** How close a refresh token must be to lapsing before the card warns, in days. */
+const REFRESH_WARN_DAYS = 30
+
+/**
+ * The refresh-token warning for one account, or undefined when there is nothing
+ * worth saying.
+ *
+ * The access token renews itself every few minutes, so its own expiry answers
+ * "when does this need attention" with "never, until the refresh token lapses".
+ * The refresh token is therefore the only honest countdown on this card, and it
+ * has to be shown BEFORE it runs out: once it lapses the plugin cannot renew at
+ * all and the only recovery is signing in to Trae again, which a user who has
+ * been reading "auto-renewal" for months has no reason to expect.
+ *
+ * Three tones, matching the credit-expiry notice: `lapsed` (renewal already
+ * dead), `soon` (inside the warning window), and nothing otherwise — a healthy
+ * token must not add a line to every account row forever.
+ */
+function refreshTokenWarning(
+  expiresAtMs: number | undefined,
+  nowMs: number,
+  t: (key: TraeSettingsKey, params?: Record<string, unknown>) => string,
+  formatTime: (value: number) => string,
+): { tone: 'lapsed' | 'soon', text: string } | undefined {
+  if (expiresAtMs === undefined) return undefined
+  const text = formatTime(expiresAtMs)
+  if (expiresAtMs <= nowMs) return { tone: 'lapsed', text: t('row.refreshTokenLapsed', { expiresAt: text }) }
+  const days = Math.ceil((expiresAtMs - nowMs) / 86_400_000)
+  if (days > REFRESH_WARN_DAYS) return undefined
+  return { tone: 'soon', text: t('row.refreshTokenExpiring', { expiresAt: text, days }) }
+}
+
 function formatCapacity(value: number | undefined, unknown: string): string {
   if (value === undefined) return unknown
   if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`
@@ -1459,6 +1491,21 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                                   <i aria-hidden="true">·</i>
                                   {sourceLabel(account.source)}
                                 </span>
+                                {/* The countdown that actually ends automatic
+                                    renewal. Per ACCOUNT, because the expiry is
+                                    a property of each credential (a CLI token
+                                    carries none at all), and rendered only when
+                                    it is close or already past — a healthy
+                                    token must not add a permanent line to every
+                                    row (issue #37 follow-up). */}
+                                {(() => {
+                                  const warning = refreshTokenWarning(account.refreshExpiresAtMs, Date.now(), t, formatDateTime)
+                                  return warning === undefined
+                                    ? null
+                                    : <span className={`dsm-trae-refresh-warn dsm-trae-refresh-warn-${warning.tone}`} role="status">
+                                        {warning.text}
+                                      </span>
+                                })()}
                                 {error === undefined
                                   ? null
                                   : <span className="dsm-trae-account-note" role="alert">{t('row.checkinError', { message: error })}</span>}

@@ -438,6 +438,10 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
     accountId: accounts.find(item => item.selected)?.id ?? '',
     accountName: credential.accountName ?? credential.userId,
     tokenExpiresAtMs: credential.expiresAtMs,
+    // The horizon that matters: the access token above renews itself until the
+    // refresh token lapses, so a card that only reports the former says
+    // "auto-renewal" right up to the moment renewal silently stops working.
+    ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: credential.refreshExpiresAtMs },
     region,
     enabled,
     accounts,

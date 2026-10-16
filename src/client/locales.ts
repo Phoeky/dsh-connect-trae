@@ -28,6 +28,11 @@ export const en = {
   'row.sourceCli': 'Trae CLI',
   'row.signedIn': 'Signed in: {accountName}',
   'row.tokenExpiry': 'Access token expires {expiresAt} (auto-renewal)',
+  // The refresh token is the real horizon: the access token above renews itself
+  // until this one lapses, at which point auto-renewal stops for good. Shown
+  // only when close, because a healthy token needs no line.
+  'row.refreshTokenExpiring': 'Sign in to Trae again by {expiresAt} ({days} day(s) left) — automatic renewal stops after that.',
+  'row.refreshTokenLapsed': 'Automatic renewal has stopped: the Trae sign-in expired {expiresAt}. Sign in to Trae again to restore it.',
   'row.requestFailed': 'Request failed',
   'row.creditsAvailableLabel': 'Available',
   'row.workCreditsLabel': 'Work credits',
@@ -217,6 +222,10 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.sourceCli': 'Trae CLI',
   'row.signedIn': '已登录：{accountName}',
   'row.tokenExpiry': '访问令牌 {expiresAt} 过期（自动续期）',
+  // 刷新令牌才是真正的期限：上面那个访问令牌会一直自动续期，直到刷新令牌到期为止。
+  // 只在临近到期时显示，健康的令牌不占一行。
+  'row.refreshTokenExpiring': '请在 {expiresAt} 前重新登录一次 Trae（还剩 {days} 天），此后将无法自动续期。',
+  'row.refreshTokenLapsed': '自动续期已停止：Trae 登录凭据已于 {expiresAt} 过期。请重新登录一次 Trae 以恢复。',
   'row.requestFailed': '请求失败',
   'row.creditsAvailableLabel': '可用',
   'row.workCreditsLabel': 'Work 积分',

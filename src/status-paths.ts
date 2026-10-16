@@ -283,6 +283,18 @@ export interface TraeWebAccount {
   region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
   tokenExpiresAtMs: number
+  /**
+   * When this account's REFRESH token expires, when the credential carries one.
+   *
+   * The access token above is renewed automatically — the plugin refreshes it
+   * five minutes before it lapses — so by itself it answers "when does this
+   * need attention", which is "never, while the refresh token lives". The
+   * refresh token is the real horizon: once IT expires the automatic renewal
+   * stops working and the user must sign in to Trae again. Before this field the
+   * card could only say "auto-renewal", which stays true right up to the moment
+   * it silently stops being true.
+   */
+  refreshExpiresAtMs?: number
   selected: boolean
 }
 
@@ -675,6 +687,13 @@ export type TraeWebUsage =
     accountId: string
     accountName: string
     tokenExpiresAtMs: number
+    /**
+     * When the BOUND account's refresh token expires (absent when the credential
+     * carries none). See {@link TraeWebAccount.refreshExpiresAtMs} — this is the
+     * horizon that actually matters, because the access token above renews
+     * itself until this one lapses.
+     */
+    refreshExpiresAtMs?: number
     /** Which per-region model directory and selection this account owns. */
     region: TraeRegion
     /** Whether this region's provider is currently offered to DSH. */

@@ -58,6 +58,13 @@ export interface TraeAccountChoice {
   region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
   tokenExpiresAtMs: number
+  /**
+   * When this account's refresh token lapses, when the credential carries one.
+   * The access token above renews itself automatically until this expires; see
+   * the mirror field on `TraeWebAccount` in status-paths.ts for why the card
+   * needs it.
+   */
+  refreshExpiresAtMs?: number
   selected: boolean
 }
 
@@ -368,6 +375,7 @@ export class TraeCredentialStore {
       region: regionOfCredential(live),
       source: live.source,
       tokenExpiresAtMs: live.expiresAtMs,
+      ...live.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: live.refreshExpiresAtMs },
       selected: false,
     }
   }
@@ -383,6 +391,7 @@ export class TraeCredentialStore {
       region: regionOfCredential(credential),
       source: credential.source,
       tokenExpiresAtMs: credential.expiresAtMs,
+      ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: credential.refreshExpiresAtMs },
       selected: selectedExists ? traeAccountId(credential) === this.accountId : credential === defaultSelected,
     }))
   }
