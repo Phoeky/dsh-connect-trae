@@ -67,6 +67,17 @@ export interface TraeCredentialStoreOptions {
    * TENANT account instead of being silently honoured.
    */
   requireTenant?: boolean
+  /**
+   * Withhold TENANT (enterprise) accounts from this store's account list.
+   *
+   * Set on the consumer panels: an enterprise login belongs to the enterprise
+   * panel, and offering it here would let a tenant account be bound to the
+   * personal pool without the user ever seeing which pool they picked. A
+   * machine that has ONLY a tenant login still resolves it — an empty list must
+   * not turn a working install into "signed out" — so the filter is applied to
+   * the OFFERED list, never to the resolved credential.
+   */
+  hideTenantAccounts?: boolean
   /** Legacy single-copy path read as a migration source; injectable for tests. */
   legacyOwnPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
@@ -287,6 +298,7 @@ export class TraeCredentialStore {
   private accountId: string | undefined
   private readonly region: TraeRegion | undefined
   private readonly requireTenant: boolean
+  private readonly hideTenantAccounts: boolean
   private readonly ownPathExplicit: string | undefined
   private readonly legacyOwnPath: string
   private readonly legacyOwnPathExplicit: string | undefined
@@ -300,6 +312,7 @@ export class TraeCredentialStore {
     this.accountId = options.accountId
     this.region = options.region
     this.requireTenant = options.requireTenant === true
+    this.hideTenantAccounts = options.hideTenantAccounts === true
     this.ownPathExplicit = options.ownPath
     this.legacyOwnPath = options.legacyOwnPath ?? legacyTraeOwnAuthPath()
     this.legacyOwnPathExplicit = options.legacyOwnPath
@@ -439,7 +452,17 @@ export class TraeCredentialStore {
   }
 
   async accounts(): Promise<TraeAccountChoice[]> {
-    const credentials = await this.readAll()
+    const discovered = await this.readAll()
+    /**
+     * Tenant accounts are withheld from a consumer panel's OFFERED list, but a
+     * machine whose only login is a tenant one keeps working: the filter backs
+     * off when it would hide everything, so "signed out" is never invented for
+     * a user who is signed in. Resolution (`current`/`resolve`) is untouched.
+     */
+    const visible = this.hideTenantAccounts
+      ? discovered.filter(credential => !isEnterpriseAccount(credential))
+      : discovered
+    const credentials = visible.length > 0 ? visible : discovered
     const selectedExists = this.accountId !== undefined && credentials.some(credential => traeAccountId(credential) === this.accountId)
     const defaultSelected = this.preferred(credentials)
     return credentials.map(credential => ({

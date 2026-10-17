@@ -1192,3 +1192,25 @@ describe('enterprise panel only offers accounts that can bill it', () => {
     expect(result.accounts).toEqual([])
   })
 })
+
+describe('enterprise panel exposes no credit figure', () => {
+  it('reports the absence explicitly instead of the consumer packs', async () => {
+    // The consumer snapshot is the PERSONAL balance. Rendering it under an
+    // enterprise heading would be read as the tenant's spend, so the panel does
+    // not read it at all and says why.
+    const deps = makeRoute({ fetchImpl: async () => new Response(JSON.stringify({ summary: { total_amount: 999, consumed_amount: 1 }, packs: [] }), { status: 200 }) })
+    deps.store = () => ({
+      async accounts() { return [{ id: 'tenant-1', accountName: 'Tenant User', edition: 'cn', enterprise: true, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
+      async status() { return { state: 'signed-in', edition: 'cn', expiresAtMs: Date.now() + 1000, source: 'desktop' } },
+      async resolve() { return { ...credential, edition: 'cn' } },
+      async liveLogin() { return undefined },
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    const result = await traeWebUsage(deps, 'enterprise')
+    expect(result.status).toBe('signed-in')
+    if (result.status !== 'signed-in') return
+    expect(result.creditsUnavailable).toBe('enterprise')
+    expect(result.credits).toBeUndefined()
+    expect(result.creditsError).toBeUndefined()
+    expect(result.checkin).toBeUndefined()
+  })
+})

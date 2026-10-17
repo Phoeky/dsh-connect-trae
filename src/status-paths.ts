@@ -734,6 +734,15 @@ export type TraeWebUsage =
     credits?: TraeWebCredits
     creditsError?: string
     /**
+     * Set when this panel has no readable balance by design, rather than by
+     * failure. Only `enterprise` does: a tenant's spend is not reported by any
+     * endpoint the plugin can reach (every tenant quota path answers 404), so
+     * the figure exists solely in the enterprise console. The card must say so
+     * instead of rendering the consumer packs, which belong to the personal
+     * balance and would be read as the tenant's.
+     */
+    creditsUnavailable?: 'enterprise'
+    /**
      * Present only when the bound account is out of credit AND another account
      * on this machine has some (issue #25). The card then offers a one-click
      * switch instead of leaving a permanently empty panel. Absent in every

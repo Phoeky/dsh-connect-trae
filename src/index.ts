@@ -710,6 +710,15 @@ export function apply(ctx: Context, config: Config): void {
   const stacks = {} as Record<TraePanel, TraeRegionStack>
   for (const panel of TRAE_PANELS) {
     const region = regionOfPanel(panel)
+    /**
+     * Whether tenant (enterprise) accounts are also offered by the CONSUMER
+     * panels.
+     *
+     * Off by default, so a published build offers an enterprise login only
+     * under the enterprise panel. Opt-in per machine, and intentionally not
+     * surfaced in user-facing documentation.
+     */
+    const tenantLocal = process.env['DSH_TRAE_TENANT_IN_CONSUMER'] === '1'
     const catalog = new TraeCatalog(region)
     const wire = wireState[panel]
     /**
@@ -782,7 +791,7 @@ export function apply(ctx: Context, config: Config): void {
       // tenant account) and never picks one by default — the tenant gateway
       // hands a personal account a full directory, so this is the only place
       // the difference can be enforced before a turn fails with `4019`.
-      ...panel === 'enterprise' ? { requireTenant: true } : {},
+      ...panel === 'enterprise' ? { requireTenant: true } : { hideTenantAccounts: !tenantLocal },
       ...unwrapVolatile(config.authFile) === undefined ? {} : { storagePath: unwrapVolatile(config.authFile) },
       edition: unwrapVolatile(config.edition) ?? 'auto',
       // The refresh callback resolves the device identity lazily so an

@@ -473,6 +473,24 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
       return { status: 'signed-in', ...account, payStatusError: safeMessage(error) }
     }
   }
+  /**
+   * The enterprise panel shows NO credit figure, deliberately.
+   *
+   * `client.snapshot()` reads the CONSUMER packs, and that is the personal
+   * balance — not what a tenant turn spends. There is no enterprise counterpart
+   * to read: every tenant quota endpoint answers 404 (probed 2026-10-17), and
+   * the tenant console at console.enterprise.trae.cn is the only place the
+   * enterprise balance exists. Showing the personal number under an enterprise
+   * heading would be actively misleading, so the panel reports the absence
+   * explicitly and the card explains where the real figure lives.
+   */
+  if (panel === 'enterprise') {
+    return {
+      status: 'signed-in',
+      ...account,
+      creditsUnavailable: 'enterprise',
+    }
+  }
   // Credits and check-in are independent reads, so they settle independently:
   // a broken check-in endpoint still leaves the credit panel usable, and vice
   // versa. Each failure degrades to its own error field rather than taking the

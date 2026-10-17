@@ -1187,6 +1187,12 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
         </span>
       )
     }
+    // The enterprise panel reports no figure by design: tenant spend is not
+    // exposed by any endpoint the plugin can reach. Rendering the consumer
+    // packs here would put a PERSONAL balance under an enterprise heading.
+    if (activeRegion === 'enterprise') {
+      return <span className="dsm-trae-account-value dsm-trae-account-value-muted">{t('row.balanceConsoleOnly')}</span>
+    }
     const figure = state?.credits?.generalAvailable
     if (figure === undefined) return undefined
     return <span className="dsm-trae-account-value">{t('row.accountBalance', { credits: formatNumber(figure) })}</span>
@@ -1550,6 +1556,13 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                         )
                       })}
                     </div>}
+                {/* The enterprise tab has no balance by design: nothing the
+                    plugin can reach reports tenant spend, so the figure lives
+                    only in the enterprise console. Said plainly instead of
+                    leaving an empty area the user would read as a failure. */}
+                {status.status === 'signed-in' && status.creditsUnavailable === 'enterprise'
+                  ? <p className="dsm-trae-credits-unavailable" role="note">{t('row.enterpriseCreditsNotice')}</p>
+                  : null}
                 {status.status === 'signed-in' && status.alternatives !== undefined && status.alternatives.length > 0
                   ? <div className="dsm-trae-usage-alternative" role="status">
                     <p className="dsm-trae-usage-alternative-text">

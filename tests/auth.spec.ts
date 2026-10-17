@@ -600,3 +600,44 @@ describe('tenant scoping for the enterprise panel', () => {
     await expect(store.current()).resolves.toMatchObject({ userId: 'tenant-user' })
   })
 })
+
+describe('consumer panels withhold tenant logins', () => {
+  function tenantStorageLocal(token: string, expiresAt: number, userId: string, tenantId = '272193024'): string {
+    return JSON.stringify({ [TRAE_AUTH_STORAGE_KEY]: JSON.stringify({
+      token, refreshToken: 'rt', userId,
+      account: { username: userId, tenant_id: tenantId, scope: 'saas' },
+      host: 'https://api.trae.cn', expiredAt: new Date(expiresAt).toISOString(), refreshExpiredAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }) })
+  }
+
+  it('offers only the personal account by default, and both when opted in', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, tenantStorageLocal('tenant', Date.now() + 3_600_000, 'tenant-user'))
+    await writeFile(solo, storage('personal', Date.now() + 3_600_000, undefined, 'personal-user'))
+    const candidates = (): TraeStorageCandidate[] => [
+      { edition: 'cn', path: cn, source: 'desktop' },
+      { edition: 'solo', path: solo, source: 'desktop' },
+    ]
+
+    const filtered = new TraeCredentialStore({ ownPath: join(dir, 'own-a'), hideTenantAccounts: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    filtered.candidates = candidates
+    expect((await filtered.accounts()).map(account => account.accountName)).toEqual(['personal-user'])
+
+    const optedIn = new TraeCredentialStore({ ownPath: join(dir, 'own-b'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    optedIn.candidates = candidates
+    expect((await optedIn.accounts()).map(account => account.accountName)).toEqual(['tenant-user', 'personal-user'])
+  })
+
+  it('still resolves a tenant login when it is the only account on the machine', async () => {
+    // Withholding every account would render a working install as "signed out",
+    // so the filter backs off rather than emptying the list.
+    const dir = await temp()
+    const cn = join(dir, 'cn.json')
+    await writeFile(cn, tenantStorageLocal('tenant', Date.now() + 3_600_000, 'tenant-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), hideTenantAccounts: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn, source: 'desktop' }]
+    expect((await store.accounts()).map(account => account.accountName)).toEqual(['tenant-user'])
+    await expect(store.current()).resolves.toMatchObject({ userId: 'tenant-user' })
+  })
+})
