@@ -1,8 +1,8 @@
 # PR: 新增 CN 企业版（租户）provider
 
 > 分支：`feat/enterprise-provider`（基于 `main` = v3.7.0）
-> 提交：`feat(cn): expose the enterprise (tenant) gateway as a second provider`
-> 自测：`pnpm run check` 全绿（696 项，此前 670）
+> 提交：13 个（首个为 provider 拆分，其余为面板、租户作用域与运行时映射修复）
+> 自测：`pnpm run check` 全绿（708 项，此前 670）
 
 ---
 
@@ -150,6 +150,17 @@ if (event === 'error') return { ok: false, status: 200, kind: 'client', message:
 | shim 分派 | 两条路由 secret 不同、按 bearer 分派、未知 bearer 401、单 client 旧形式仍可用 |
 
 `tests/settings-integration.spec.ts` 3 处断言从「cn 只发 1 个 provider」更新为 2 个。
+
+后续修复各自带测试：
+
+| 文件 | 覆盖 |
+|---|---|
+| `tests/auth.spec.ts` | 租户声明读取；**tenant store 只列企业账号**、consumer store 只列个人账号；只有企业号时仍能解析（不谎报未登录）；显式绑定到个人号则回落到企业号 |
+| `tests/web-status.spec.ts` | 企业面板只列租户口（**signed-out 分支也覆盖** —— 只过滤 signed-in 正是上次漏掉的地方）；企业面板不读消费快照、显式报 `creditsUnavailable` |
+| `tests/catalog.spec.ts` | `traeModelDisplayName(withRate=false)` 去掉费率，`true` 保留 |
+| `tests/solo-bridge.spec.ts` | `4222` 在**上游 message 为空**时仍有可读原因，且不与 `4008` 混淆 |
+
+合计 **708 项**（此前 670）。
 
 ## 4. 实机验证（真实 `tob_online` 帐号）
 
