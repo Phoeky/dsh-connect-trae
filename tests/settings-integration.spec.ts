@@ -334,7 +334,9 @@ describe('per-region provider switch (issue #11)', () => {
       // Give the (no-op) ai registration path the same window the cn side got.
       await new Promise(resolve => setTimeout(resolve, 50))
       expect(ctx.llm.listProviders().map(provider => provider.id)).not.toContain('trae-global')
-      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae', 'trae-enterprise'])
+      // The enterprise panel defaults OFF (a consumer-only account cannot use
+      // that pool), so the directory carries only the consumer entry here.
+      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae'])
       // The enabled side still serves models.
       expect((await ctx.llm.listModels('trae')).length).toBeGreaterThan(0)
     } finally { await restore() }
@@ -359,7 +361,7 @@ describe('per-region provider switch (issue #11)', () => {
       await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { regions: { cn: { enabled: true }, ai: { enabled: true } } })
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
-      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae', 'trae-enterprise', 'trae-global'])
+      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae', 'trae-global'])
     } finally { await restore() }
   })
 
@@ -373,7 +375,7 @@ describe('per-region provider switch (issue #11)', () => {
     try {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
-      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae', 'trae-enterprise', 'trae-global'])
+      expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae', 'trae-global'])
     } finally { await restore() }
   })
 })
@@ -558,7 +560,7 @@ describe('settingsNamespaceOf', () => {
       // point (the directory is what the harness looks up by EXACT match).
       await expect.poll(() => {
         const entries = ctx.llm.listConfigurableProviders()
-        return entries.length === 3 && entries.every(entry => entry.settingsNs === Trae.settingsNamespaceOf(ctx))
+        return entries.length === 2 && entries.every(entry => entry.settingsNs === Trae.settingsNamespaceOf(ctx))
       }).toBe(true)
     } finally { await restore() }
   })

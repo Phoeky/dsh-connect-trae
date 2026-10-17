@@ -3,7 +3,7 @@
  * Mirrors the `dsh-workbuddy-connect` status-route pattern so the plugin card
  * stays consistent with that project's external presentation.
  */
-import type { TraeRegion } from './region.ts'
+import { TRAE_PANELS, type TraePanel, type TraeRegion } from './region.ts'
 
 /** Plugin-owned usage endpoint consumed by its browser half. */
 export const TRAE_USAGE_PATH = '/plugins/dsh-connect-trae/usage'
@@ -74,11 +74,21 @@ export const TRAE_REGION_PARAM = 'region'
 export const TRAE_REGIONS: readonly TraeRegion[] = ['cn', 'ai']
 
 /**
+ * Every PANEL, in card tab order: the sections the card renders and the
+ * settings slots it writes (see {@link TraePanel}).
+ *
+ * Re-exported here because the card is a separate build target and this module
+ * is already its single source of routing/locale truth; `region.ts` stays the
+ * definition site.
+ */
+export { TRAE_PANELS, type TraePanel }
+
+/**
  * Address one region's status route. The two regions are separate provider
  * stacks; every card request carries the region whose tab the user is on.
  */
-export function withTraeRegion(path: string, region: TraeRegion): string {
-  return `${path}?${TRAE_REGION_PARAM}=${region}`
+export function withTraeRegion(path: string, panel: TraePanel): string {
+  return `${path}?${TRAE_REGION_PARAM}=${panel}`
 }
 
 /**
@@ -90,8 +100,8 @@ export function withTraeRegion(path: string, region: TraeRegion): string {
  * away from a 400, which is exactly the failure the sibling workbuddy plugin
  * hit (#42) when five requests dropped that parameter.
  */
-export function withTraeTransferAction(path: string, region: TraeRegion, action: TraeTransferAction): string {
-  return `${path}?${TRAE_REGION_PARAM}=${region}&action=${action}`
+export function withTraeTransferAction(path: string, panel: TraePanel, action: TraeTransferAction): string {
+  return `${path}?${TRAE_REGION_PARAM}=${panel}&action=${action}`
 }
 
 /**
@@ -99,11 +109,13 @@ export function withTraeTransferAction(path: string, region: TraeRegion, action:
  * tab (`cn`); a present-but-unknown value returns undefined so the route can
  * answer 400 instead of guessing.
  */
-export function regionOfTraeStatusUrl(url: string): TraeRegion | undefined {
+export function regionOfTraeStatusUrl(url: string): TraePanel | undefined {
   const at = url.indexOf('?')
   const value = at === -1 ? null : new URLSearchParams(url.slice(at + 1)).get(TRAE_REGION_PARAM)
   if (value === null || value === '') return 'cn'
-  return (TRAE_REGIONS as readonly string[]).includes(value) ? value as TraeRegion : undefined
+  // The query parameter is still spelled `region` for link compatibility, but
+  // it now addresses a PANEL: `?region=enterprise` is the enterprise tab.
+  return (TRAE_PANELS as readonly string[]).includes(value) ? value as TraePanel : undefined
 }
 
 /** One credit pack and its remaining credit. */
@@ -500,7 +512,7 @@ export function followAppLoginEnabled(configured: unknown): boolean {
  */
 export function nextRegionSlots<Slot extends object>(
   regions: unknown,
-  region: TraeRegion,
+  panel: TraePanel,
   slot: Slot,
 ): Record<string, unknown> {
   // Deep-unwrap first: on DSH 0.1.7 each slot is a `{get(): T}` live reference,
@@ -510,7 +522,7 @@ export function nextRegionSlots<Slot extends object>(
   const base = typeof unwrapped === 'object' && unwrapped !== null && !Array.isArray(unwrapped)
     ? unwrapped as Record<string, unknown>
     : {}
-  return { ...base, [region]: slot }
+  return { ...base, [panel]: slot }
 }
 
 /**
@@ -538,8 +550,8 @@ function regionsMapOf(value: unknown): Record<string, unknown> {
 }
 
 /** One region's stored slot as a plain object; any other shape reads as empty. */
-function regionSlotOf(value: unknown, region: TraeRegion): Record<string, unknown> {
-  const slot = unwrapVolatile(regionsMapOf(value)[region])
+function regionSlotOf(value: unknown, panel: TraePanel): Record<string, unknown> {
+  const slot = unwrapVolatile(regionsMapOf(value)[panel])
   return typeof slot === 'object' && slot !== null && !Array.isArray(slot)
     ? slot as Record<string, unknown>
     : {}
@@ -555,8 +567,14 @@ function regionSlotOf(value: unknown, region: TraeRegion): Record<string, unknow
  * `value` may be the whole settings section or the `regions` map (see
  * {@link regionsMapOf}).
  */
-export function regionEnabledOf(value: unknown, region: TraeRegion): boolean {
-  return regionSlotOf(value, region)['enabled'] !== false
+export function regionEnabledOf(value: unknown, panel: TraePanel): boolean {
+  // Mirrors the Host's `regionEnabled` EXACTLY, including its one exception:
+  // the enterprise panel defaults OFF (a consumer-only account cannot use that
+  // pool). Card and Host disagreeing here would make the switch render one
+  // state while the route is in the other.
+  const stored = regionSlotOf(value, panel)['enabled']
+  if (typeof stored === 'boolean') return stored
+  return panel !== 'enterprise'
 }
 
 /**
@@ -577,10 +595,10 @@ export function regionEnabledOf(value: unknown, region: TraeRegion): boolean {
  */
 export function nextRegionEnabled(
   value: unknown,
-  region: TraeRegion,
+  panel: TraePanel,
   enabled: boolean,
 ): Record<string, unknown> {
-  return nextRegionSlots(regionsMapOf(value), region, { ...regionSlotOf(value, region), enabled })
+  return nextRegionSlots(regionsMapOf(value), panel, { ...regionSlotOf(value, panel), enabled })
 }
 
 /**
@@ -616,8 +634,8 @@ export type TraeCreditPosition = 'composer' | 'stats'
  * `value` may be the whole settings section or the `regions` map (see
  * {@link regionsMapOf}).
  */
-export function regionCreditPositionOf(value: unknown, region: TraeRegion): TraeCreditPosition {
-  return regionSlotOf(value, region)['creditPosition'] === 'stats' ? 'stats' : 'composer'
+export function regionCreditPositionOf(value: unknown, panel: TraePanel): TraeCreditPosition {
+  return regionSlotOf(value, panel)['creditPosition'] === 'stats' ? 'stats' : 'composer'
 }
 
 /**
@@ -633,10 +651,10 @@ export function regionCreditPositionOf(value: unknown, region: TraeRegion): Trae
  */
 export function nextRegionCreditPosition(
   value: unknown,
-  region: TraeRegion,
+  panel: TraePanel,
   position: TraeCreditPosition,
 ): Record<string, unknown> {
-  return nextRegionSlots(regionsMapOf(value), region, { ...regionSlotOf(value, region), creditPosition: position })
+  return nextRegionSlots(regionsMapOf(value), panel, { ...regionSlotOf(value, panel), creditPosition: position })
 }
 
 /** Subscription status of an international (ai) account, rendered instead of the CN credit packs. */

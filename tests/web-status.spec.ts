@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { TraeCredential } from '../src/auth.ts'
 import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
-import type { TraeRegion } from '../src/region.ts'
+import type { TraePanel, TraeRegion } from '../src/region.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
 import { toCredits, traeAccountCredits, traeWebUsage } from '../src/web-status.ts'
 import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_MODELS_TEST_PATH, TRAE_USAGE_PATH } from '../src/status-paths.ts'
@@ -28,10 +28,10 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
       async resolve() { return credential },
     }) as unknown as ReturnType<TraeUsageRouteOptions['store']>,
     client: () => client,
-    displayModels: (_region: TraeRegion) => [
+    displayModels: (_panel: TraePanel) => [
       { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
     ],
-    enabledModelIds: (_region: TraeRegion) => ['DeepSeek-V4-Flash'],
+    enabledModelIds: (_panel: TraePanel) => ['DeepSeek-V4-Flash'],
     regionEnabled: () => true,
     rawDiagnostic: () => ({ state: 'protocol-gated', status: 400, checkedAtMs: 123 }),
   }
@@ -194,7 +194,7 @@ describe('traeWebUsage', () => {
   })
 
   it('asks the switch for the requested region only', async () => {
-    const asked: TraeRegion[] = []
+    const asked: TraePanel[] = []
     const deps = makeRoute()
     deps.regionEnabled = region => { asked.push(region); return region === 'cn' }
     await traeWebUsage(deps, 'cn')
@@ -217,7 +217,7 @@ describe('traeWebUsage region routing', () => {
 
   function makeIntlRoute(payAnswer: () => Response): TraeUsageRouteOptions {
     const client = new TraeUsageClient({ credential: async () => intlCredential, fetchImpl: async () => payAnswer() })
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     return {
       store: () => ({
         async accounts() { return [{ id: 'account-intl', accountName: 'IntlLaoDing', edition: 'solo-sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
@@ -315,7 +315,7 @@ describe('registerTraeUsageRoute region dispatch', () => {
   }
 
   it('routes each region query to that region\'s store, defaulting to cn', async () => {
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     const captured = await mountRoutes({
       store: region => {
         seenRegions.push(region)
@@ -339,7 +339,7 @@ describe('registerTraeUsageRoute region dispatch', () => {
   })
 
   it('refuses an unknown region with 400 before touching the store', async () => {
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     const captured = await mountRoutes({
       store: region => {
         seenRegions.push(region)

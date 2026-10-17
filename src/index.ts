@@ -26,7 +26,7 @@ import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MO
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
-import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
+import { panelOfProvider, providerOfPanel, regionOfCredential, regionOfEdition, regionOfHost, regionOfPanel, regionOfUserRegion, REGION_GATEWAYS, TRAE_PANELS, type TraePanel, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
 import type { TraeShim, TraeShimRoute } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
@@ -72,11 +72,17 @@ export {
   type TraeCredential,
 } from './auth.ts'
 export {
+  panelOfKey,
+  panelOfProvider,
+  providerOfPanel,
   regionOfCredential,
   regionOfEdition,
   regionOfHost,
+  regionOfPanel,
   regionOfUserRegion,
   REGION_GATEWAYS,
+  TRAE_PANELS,
+  type TraePanel,
   type TraeRegion,
   type TraeRegionGateways,
 } from './region.ts'
@@ -235,7 +241,7 @@ export interface Config {
    * Per-region account selections, keyed `cn` | `ai`. Each region's tab writes
    * its own slot; tokens remain outside settings.
    */
-  accounts?: Partial<Record<TraeRegion, string>>
+  accounts?: Partial<Record<TraePanel, string>>
   /**
    * Show the credit readout in the composer tool row: `Trae CN · <n>`, rendered
    * ONLY while the session's selected model belongs to this plugin, clickable
@@ -278,7 +284,7 @@ export interface Config {
    * expose different rosters, so each keeps its own directory and selection
    * and switching accounts never drops the other region's picks.
    */
-  regions?: Partial<Record<TraeRegion, TraeRegionState>>
+  regions?: Partial<Record<TraePanel, TraeRegionState>>
   /**
    * @deprecated Legacy single-slot fields from before the region split. They
    * predate international support and are read as the CN region's state when
@@ -296,23 +302,29 @@ export interface Config {
 }
 
 /**
- * One region's saved state. A config written before the region split has only
+ * One panel's saved state. A config written before the region split has only
  * the flat fields: those were always captured from the CN endpoint (the
  * plugin had no international support), so they are read as the CN state and
  * only when no explicit CN slot exists. The ai region never inherits them —
  * that inheritance is exactly the bug where a stale CN directory would be
  * intersected with the international catalog and silently drop the user's
  * picks (the same failure workbuddy fixed with its region split).
+ *
+ * Keyed by PANEL (`cn` | `enterprise` | `ai`), because each panel carries its
+ * own switch, account binding and model selection. `enterprise` has no legacy
+ * equivalent: it starts from an EMPTY state (its own directory, its own model
+ * picks) and never inherits CN's, so switching it on cannot silently activate
+ * a model list the user never chose for the tenant pool.
  */
-export function regionStateOf(config: Config, region: TraeRegion): TraeRegionState {
+export function regionStateOf(config: Config, panel: TraePanel): TraeRegionState {
   // Unwrap first: on DSH 0.1.7 a volatile-marked field arrives as a `{get(): T}`
   // live reference, so `config.regions?.[region]` would read `undefined` and
   // every region would silently fall back to its defaults ("settings written
   // but not read back").
   const regions = unwrapVolatile(config.regions)
-  const stored = unwrapVolatile(regions?.[region])
+  const stored = unwrapVolatile(regions?.[panel])
   if (stored !== undefined) return stored
-  if (region !== 'cn') return {}
+  if (panel !== 'cn') return {}
   return {
     ...config.lastCatalog === undefined ? {} : { lastCatalog: config.lastCatalog },
     ...config.enabledModelIds === undefined ? {} : { enabledModelIds: config.enabledModelIds },
@@ -322,15 +334,23 @@ export function regionStateOf(config: Config, region: TraeRegion): TraeRegionSta
 }
 
 /**
- * Whether one region's provider is switched on (issue #11). Opt-out semantics:
+ * Whether one panel's provider is switched on (issue #11). Opt-out semantics:
  * only an explicit `false` disables it, so every config written before this
  * switch existed — including the pre-region-split flat fields, which never
  * carry `enabled` — keeps both providers running exactly as before. The card
  * reads the same rule through `regionEnabledOf`, so the two halves can never
  * disagree about a region's state.
+ *
+ * The ENTERPRISE panel is the one deliberate exception: it defaults OFF. A
+ * consumer-only account (`tenant 7o2d894p7dr0o4`) cannot use that pool at all,
+ * so opting every existing user into a second CN provider would put a route in
+ * their model picker that fails on first use. It is switched on from its card
+ * tab, by someone whose account actually belongs to a tenant.
  */
-export function regionEnabled(config: Config, region: TraeRegion): boolean {
-  return regionStateOf(config, region).enabled !== false
+export function regionEnabled(config: Config, panel: TraePanel): boolean {
+  const stored = regionStateOf(config, panel).enabled
+  if (stored !== undefined) return stored !== false
+  return panel !== 'enterprise'
 }
 
 /**
@@ -402,8 +422,16 @@ const modelConfig = z.object({
   multimodal: z.boolean(),
 })
 
+/**
+ * One panel's saved state. Panels are keyed `cn | enterprise | ai` — see
+ * {@link TraePanel}; `enterprise` is a second CN provider with its own switch,
+ * account binding and model selection.
+ */
 const regionStateConfig = z.object({
-  enabled: z.boolean().default(true).description('Whether this region\'s provider is offered to DSH (opt-out; false withdraws it entirely)'),
+  // Enterprise defaults OFF: a consumer-only account cannot use that pool, so
+  // opting every existing user into it would put a failing route in their model
+  // picker. Everything else keeps opt-out semantics (`false` withdraws it).
+  enabled: z.boolean().description('Whether this panel\'s provider is offered to DSH (false withdraws it entirely)'),
   lastCatalog: z.array(modelConfig).default([]),
   enabledModelIds: z.array(z.string()).default([]),
   imageModelIds: z.array(z.string()).default([]),
@@ -421,6 +449,10 @@ const regionStateConfig = z.object({
 const accountSelectionConfig = z.object({
   cn: z.string().description('Selected domestic (CN) account id (never a token)'),
   ai: z.string().description('Selected international account id (never a token)'),
+  // The enterprise panel draws on the SAME cn credentials but keeps its own
+  // binding: pointing the consumer tab at a personal account must not move the
+  // tenant tab. Absent means "this region's default", exactly like the others.
+  enterprise: z.string().description('Selected account id for the CN enterprise pool (never a token)'),
 })
 
 export const Config: z<Config> = z.object({
@@ -446,8 +478,8 @@ export const Config: z<Config> = z.object({
   // written before this field existed keeps the strict bind it shipped with.
   followAppLogin: asVolatile(z.boolean().default(false).description('跟随 Trae 桌面端当前登录账号换绑（打开后每次配置生效时重绑到 App 现在登录的账号）')),
 
-  accounts: asVolatile(accountSelectionConfig.description('Per-region account selections, keyed cn | ai')) as z<Partial<Record<TraeRegion, string>>>,
-  regions: asVolatile(z.dict(regionStateConfig).default({}).description('Per-region model directory and selection, keyed cn | ai')),
+  accounts: asVolatile(accountSelectionConfig.description('Per-panel account selections, keyed cn | enterprise | ai')) as z<Partial<Record<TraePanel, string>>>,
+  regions: asVolatile(z.dict(regionStateConfig).default({}).description('Per-panel model directory and selection, keyed cn | enterprise | ai')),
   lastCatalog: z.array(modelConfig).description('Deprecated: pre-region-split CN model directory') as z<TraeModelInfo[]>,
   enabledModelIds: z.array(z.string()).default([]).description('Deprecated: pre-region-split CN selection'),
   contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Deprecated: pre-region-split CN context budgets'),
@@ -536,8 +568,8 @@ export function apply(ctx: Context, config: Config): void {
   // read as unconfigured (issue #13-class regression, workbuddy 2.0.16).
   const settingsNs = settingsNamespaceOf(ctx)
   let current = () => config
-  const enabledSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).enabledModelIds ?? [])
-  const imageSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).imageModelIds ?? [])
+  const enabledSet = (value: Config, panel: TraePanel): ReadonlySet<string> => new Set(regionStateOf(value, panel).enabledModelIds ?? [])
+  const imageSet = (value: Config, panel: TraePanel): ReadonlySet<string> => new Set(regionStateOf(value, panel).imageModelIds ?? [])
   /**
    * Per-region wire state. Each region's discovery owns its own maps: the CN
    * and international rosters overlap (and spell some ids differently), so a
@@ -549,7 +581,7 @@ export function apply(ctx: Context, config: Config): void {
    * `glm-5.3`) and must never be served — even from a stale saved
    * `lastCatalog` / `models` / `enabledModelIds` that still lists it.
    */
-  const wireState = {} as Record<TraeRegion, {
+  const wireState = {} as Record<TraePanel, {
     callableKeys: Set<string>
     /**
      * Whether discovery has actually produced a directory this run. Only a
@@ -561,14 +593,14 @@ export function apply(ctx: Context, config: Config): void {
     byId: Map<string, TraeWireTarget>
     byName: Map<string, TraeWireTarget>
   }>
-  for (const region of REGION_KEYS) {
-    wireState[region] = { callableKeys: new Set(), resolved: false, byId: new Map(), byName: new Map() }
+  for (const panel of TRAE_PANELS) {
+    wireState[panel] = { callableKeys: new Set(), resolved: false, byId: new Map(), byName: new Map() }
   }
   // Drop dead rows from a (possibly stale) saved directory. No-op when that
   // region's wire map has not been resolved yet, so a transient network
   // failure never hides the whole catalog.
-  const dropDeadModels = (rows: readonly TraeModelInfo[], region: TraeRegion): readonly TraeModelInfo[] => {
-    const wire = wireState[region]
+  const dropDeadModels = (rows: readonly TraeModelInfo[], panel: TraePanel): readonly TraeModelInfo[] => {
+    const wire = wireState[panel]
     if (!wire.resolved) return rows
     return rows.filter(model =>
       wire.callableKeys.has(model.id.trim().toLowerCase()) || wire.callableKeys.has(model.name.trim().toLowerCase()))
@@ -586,29 +618,34 @@ export function apply(ctx: Context, config: Config): void {
   // precisely when it is needed. Its ids are the well-known Trae model names.
   // Region-scoped: the two regions expose different rosters, so an account
   // must never see the other region's fallback list.
-  const fallbackModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] =>
-    applyImageSelection(fallbackModelsFor(region), imageSet(value, region))
-  const derive = (value: Config, raw: readonly TraeModelInfo[], region: TraeRegion): readonly TraeModelInfo[] => {
-    const selectedImages = imageSet(value, region)
-    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw, region)), selectedImages), enabledSet(value, region), regionStateOf(value, region).contextBudgets ?? {})
-    return derived.length > 0 ? derived : fallbackModels(value, region)
+  // The static fallback list is per REGION (the rosters differ), not per panel:
+  // the enterprise panel reuses the CN list, which is the closest safety net it
+  // has when its own directory has never been refreshed.
+  const fallbackModels = (value: Config, panel: TraePanel): readonly TraeModelInfo[] =>
+    applyImageSelection(fallbackModelsFor(regionOfPanel(panel)), imageSet(value, panel))
+  const derive = (value: Config, raw: readonly TraeModelInfo[], panel: TraePanel): readonly TraeModelInfo[] => {
+    const selectedImages = imageSet(value, panel)
+    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw, panel)), selectedImages), enabledSet(value, panel), regionStateOf(value, panel).contextBudgets ?? {})
+    return derived.length > 0 ? derived : fallbackModels(value, panel)
   }
   // Runtime catalog for one region: that region's saved directory (explicit
   // slot, else the pre-split flat fields which are CN-only), else the legacy
   // `models` list (also CN-only), else the region's fallback.
-  const configuredModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
-    const state = regionStateOf(value, region)
-    return state.lastCatalog?.length ? derive(value, state.lastCatalog, region)
-      : region === 'cn' && value.models?.length ? derive(value, value.models, region)
-        : fallbackModels(value, region)
+  const configuredModels = (value: Config, panel: TraePanel): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, panel)
+    // The legacy flat `models` list is CN-only AND consumer-only: the
+    // enterprise pool has no legacy equivalent, so it must not inherit it.
+    return state.lastCatalog?.length ? derive(value, state.lastCatalog, panel)
+      : panel === 'cn' && value.models?.length ? derive(value, value.models, panel)
+        : fallbackModels(value, panel)
   }
   // What the plugin card displays: the region's last-refreshed raw directory,
   // so the user re-reads the current Trae catalog rather than a stale snapshot.
-  const displayModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
-    const state = regionStateOf(value, region)
-    return state.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(state.lastCatalog), region)
-      : region === 'cn' && value.models?.length ? dropDeadModels(sanitizeCatalog(value.models), region)
-        : fallbackModelsFor(region)
+  const displayModels = (value: Config, panel: TraePanel): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, panel)
+    return state.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(state.lastCatalog), panel)
+      : panel === 'cn' && value.models?.length ? dropDeadModels(sanitizeCatalog(value.models), panel)
+        : fallbackModelsFor(regionOfPanel(panel))
   }
   /**
    * Legacy migration for the pre-split single `accountId`: its region is
@@ -618,12 +655,25 @@ export function apply(ctx: Context, config: Config): void {
    * inheriting a selection that belongs to the other side of the split.
    */
   let legacyAccountRegion: TraeRegion | undefined
-  const effectiveAccountFor = (region: TraeRegion, value: Config): string | undefined => {
+  /**
+   * Which account a panel is bound to.
+   *
+   * Keyed by PANEL: the enterprise pool draws on the same CN credentials but
+   * keeps its OWN binding, so pointing the consumer tab at a personal account
+   * never moves the enterprise tab (and vice versa). A panel with no explicit
+   * binding falls through to that REGION's default selection, which is the
+   * store's own "preferred account for this region".
+   */
+  const effectiveAccountFor = (panel: TraePanel, value: Config): string | undefined => {
     // `accounts` is volatile on the 0.1.7 line: the raw value is a live
-    // reference, so `value.accounts?.[region]` would read `undefined` and the
+    // reference, so `value.accounts?.[panel]` would read `undefined` and the
     // user's saved account selection would be silently ignored.
-    const explicit = unwrapVolatile(value.accounts)?.[region]
+    const explicit = unwrapVolatile(value.accounts)?.[panel]
     if (explicit !== undefined) return explicit
+    const region = regionOfPanel(panel)
+    // The legacy pre-split selection belongs to its own region's CONSUMER tab,
+    // never to the enterprise one.
+    if (panel === 'enterprise') return undefined
     return legacyAccountRegion === region ? value.accountId : undefined
   }
 
@@ -647,10 +697,20 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  const stacks = {} as Record<TraeRegion, TraeRegionStack>
-  for (const region of REGION_KEYS) {
+  /**
+   * One stack per PANEL.
+   *
+   * `cn` and `enterprise` share a credential REGION but not a directory, a wire
+   * map or a model selection: the two pools publish different rosters, so a
+   * shared catalog would let one pool's answer filter the other's models. Each
+   * panel therefore gets its own catalog, wire state, clients and shim routes,
+   * and the credential store below is the only thing they have in common.
+   */
+  const stacks = {} as Record<TraePanel, TraeRegionStack>
+  for (const panel of TRAE_PANELS) {
+    const region = regionOfPanel(panel)
     const catalog = new TraeCatalog(region)
-    const wire = wireState[region]
+    const wire = wireState[panel]
     /**
      * Best-effort device identity for this region's installation. Prefer the
      * selected credential's own edition so an international account reads its
@@ -833,7 +893,7 @@ export function apply(ctx: Context, config: Config): void {
       deviceId: async () => (await identity()).deviceId,
     })
 
-    stacks[region] = {
+    stacks[panel] = {
       region,
       store,
       catalog,
@@ -1001,9 +1061,10 @@ export function apply(ctx: Context, config: Config): void {
    * never moves from here — the card's hint and the follow switch below are
    * the only writers.
    */
-  const liveLoginOf = async (region: TraeRegion): Promise<TraeWebAppLogin | undefined> => {
+  const liveLoginOf = async (panel: TraePanel): Promise<TraeWebAppLogin | undefined> => {
+    const region = regionOfPanel(panel)
     try {
-      const live = await stacks[region].store.liveLogin()
+      const live = await stacks[panel].store.liveLogin()
       if (live === undefined || live.region !== region) return undefined
       return { id: live.id, accountName: live.accountName, edition: live.edition, region: live.region }
     } catch {
@@ -1024,12 +1085,14 @@ export function apply(ctx: Context, config: Config): void {
    * event (`loader/volatile-update`) is what re-runs `applySelection` with the
    * updated document — the same channel every card write already uses.
    */
-  const followAppLogin = async (region: TraeRegion): Promise<TraeWebAppLogin | undefined> => {
-    const live = await liveLoginOf(region)
+  const followAppLogin = async (panel: TraePanel): Promise<TraeWebAppLogin | undefined> => {
+    const live = await liveLoginOf(panel)
     if (live === undefined || writeSettings === undefined) return undefined
     const configured = configuredAccountsOf(current())
-    if (configured[region] === live.id) return live
-    await writeSettings({ accounts: { ...configured, [region]: live.id } })
+    // The binding key is the PANEL, so following the app's sign-in on the
+    // consumer tab never rewrites the enterprise tab's own binding.
+    if (configured[panel] === live.id) return live
+    await writeSettings({ accounts: { ...configured, [panel]: live.id } })
     return live
   }
 
@@ -1037,27 +1100,27 @@ export function apply(ctx: Context, config: Config): void {
   // tab it belongs to; the region-scoped accessors below then read (and the
   // save writes back into) that region's own slot.
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
-    store: region => stacks[region].store,
-    client: region => stacks[region].usageClient,
-    displayModels: region => displayModels(current(), region),
-    enabledModelIds: region => regionStateOf(current(), region).enabledModelIds ?? [],
-    regionEnabled: region => regionEnabled(current(), region),
-    discoverModels: (region, signal) => stacks[region].discoverModels(signal),
-    probeModels: (region, ids) => stacks[region].probeModels(ids),
-    rawDiagnostic: region => stacks[region].rawDiagnostic(),
+    store: panel => stacks[panel].store,
+    client: panel => stacks[panel].usageClient,
+    displayModels: panel => displayModels(current(), panel),
+    enabledModelIds: panel => regionStateOf(current(), panel).enabledModelIds ?? [],
+    regionEnabled: panel => regionEnabled(current(), panel),
+    discoverModels: (panel, signal) => stacks[panel].discoverModels(signal),
+    probeModels: (panel, ids) => stacks[panel].probeModels(ids),
+    rawDiagnostic: panel => stacks[panel].rawDiagnostic(),
     // CN credit balance of an account that is NOT the bound one, read through a
     // throwaway client so the store's selection (and every in-flight chat
     // request using it) is left alone (issue #25).
-    creditsOfAccount: (region, accountId) => stacks[region].creditsOfAccount(accountId),
+    creditsOfAccount: (panel, accountId) => stacks[panel].creditsOfAccount(accountId),
     // Per-account status for one row of the card's account table (check-in /
     // balances / subscription), read without disturbing which account is bound.
-    accountStateOf: (region, accountId) => stacks[region].accountStateOf(accountId),
+    accountStateOf: (panel, accountId) => stacks[panel].accountStateOf(accountId),
     // Claim today's check-in FOR one named account, leaving the binding alone.
-    claimCheckinOf: (region, accountId) => stacks[region].claimCheckinOf(accountId),
+    claimCheckinOf: (panel, accountId) => stacks[panel].claimCheckinOf(accountId),
     // The follow hint's read half (issue #29): a pure report the usage
     // document carries when the app's sign-in differs. Degrades to `undefined`
     // (no hint) rather than failing a status read.
-    liveLogin: region => liveLoginOf(region),
+    liveLogin: panel => liveLoginOf(panel),
   }))
 
   /**
@@ -1069,25 +1132,17 @@ export function apply(ctx: Context, config: Config): void {
    * actually removes the region's models from DSH's model picker — hiding the
    * card tab alone would leave every model selectable.
    */
-  const registration: Record<TraeRegion, {
-    /**
-     * ONE handle per published provider id.
-     *
-     * A registration handle binds a single adapter instance (its `replace`
-     * swaps routes for THAT adapter), and a region can offer several providers
-     * over the same catalog (CN: consumer + enterprise) with a separate pi-ai
-     * adapter each. They are switched together, because a disabled region
-     * withdraws every pool that shares its credential binding.
-     */
+  const registration: Record<TraePanel, {
+    /** The handle publishing this panel's provider id. */
     adapters: { provider: string; handle: AdapterRegistrationHandle }[]
     directory?: DirectoryRegistrationHandle
-  }> = { cn: { adapters: [] }, ai: { adapters: [] } }
+  }> = { cn: { adapters: [] }, enterprise: { adapters: [] }, ai: { adapters: [] } }
 
   /** Release every live registration this apply() created. */
   const disposeRegistration = (): void => {
-    for (const region of REGION_KEYS) {
-      for (const entry of registration[region].adapters) entry.handle()
-      registration[region].adapters.length = 0
+    for (const panel of TRAE_PANELS) {
+      for (const entry of registration[panel].adapters) entry.handle()
+      registration[panel].adapters.length = 0
     }
     registration.cn.directory?.()
     delete registration.cn.directory
@@ -1103,41 +1158,41 @@ export function apply(ctx: Context, config: Config): void {
    * lands immediately.
    */
   const syncRegionRegistration = (value: Config): void => {
-    for (const region of REGION_KEYS) {
-      // Each provider keeps its OWN registration, so a per-region switch
-      // replaces every one of them: withdrawing the adapter route is what
-      // actually removes the region's models from DSH's picker.
-      const enabled = regionEnabled(value, region)
-      for (const entry of registration[region].adapters) entry.handle.replace(enabled ? [entry.provider] : [])
+    for (const panel of TRAE_PANELS) {
+      // Each panel keeps its OWN registration, so a per-panel switch replaces
+      // exactly that panel: withdrawing the adapter route is what actually
+      // removes its models from DSH's picker.
+      const enabled = regionEnabled(value, panel)
+      for (const entry of registration[panel].adapters) entry.handle.replace(enabled ? [entry.provider] : [])
     }
-    // The directory is ONE registration holding BOTH entries: `replace` sets
-    // the complete entry set, so it is called once with the full enabled list.
-    // Replacing per region would make the last region win and silently drop the
-    // other's entry — a disabled region would take its enabled sibling with it.
-    registration.cn.directory?.replace(REGION_KEYS
-      .filter(region => regionEnabled(value, region))
-      .flatMap(region => TRAE_PROVIDER_IDS[region].map(provider => ({
-        provider,
-        displayName: displayNameOfTraeProvider(provider),
+    // The directory is ONE registration holding every panel's entry: `replace`
+    // sets the complete entry set, so it is called once with the full enabled
+    // list. Replacing per panel would make the last one win and silently drop
+    // the others — a disabled panel would take its enabled siblings with it.
+    registration.cn.directory?.replace(TRAE_PANELS
+      .filter(panel => regionEnabled(value, panel))
+      .map(panel => ({
+        provider: providerOfPanel(panel),
+        displayName: displayNameOfTraeProvider(providerOfPanel(panel)),
         settingsNs,
         settingsPath: [],
         declared: false,
-      }))))
+      })))
   }
 
-  /** Push the current config into every region's store selection and catalog. */
+  /** Push the current config into every panel's store selection and catalog. */
   const applySelection = (value: Config): void => {
-    for (const region of REGION_KEYS) {
-      const stack = stacks[region]
+    for (const panel of TRAE_PANELS) {
+      const stack = stacks[panel]
       // Unwrap the volatile fields here too: `current()` hands them over as
       // live references, so passing one through would make the storage path an
       // object and the edition a truthy non-enum.
       stack.store.setSource(
         unwrapVolatile(value.authFile),
         unwrapVolatile(value.edition) ?? 'auto',
-        effectiveAccountFor(region, value),
+        effectiveAccountFor(panel, value),
       )
-      stack.catalog.set(configuredModels(value, region))
+      stack.catalog.set(configuredModels(value, panel))
       stack.invalidateAdapter()
     }
     syncRegionRegistration(value)
@@ -1251,9 +1306,9 @@ export function apply(ctx: Context, config: Config): void {
     if (followInFlight || !followAppLoginEnabled(current())) return
     followInFlight = true
     try {
-      for (const region of REGION_KEYS) {
-        if (!regionEnabled(current(), region)) continue
-        await followAppLogin(region)
+      for (const panel of TRAE_PANELS) {
+        if (!regionEnabled(current(), panel)) continue
+        await followAppLogin(panel)
       }
     } catch (error: unknown) {
       // A refused write (read-only profile, conflict) must not crash the
@@ -1273,10 +1328,10 @@ export function apply(ctx: Context, config: Config): void {
   let stopped = false
   ctx.effect(() => () => {
     stopped = true
-    for (const region of REGION_KEYS) void stacks[region].shim.close()
+    for (const panel of TRAE_PANELS) void stacks[panel].shim.close()
   })
 
-  void Promise.all(REGION_KEYS.map(region => stacks[region].shim.ready)).then(async () => {
+  void Promise.all(TRAE_PANELS.map(panel => stacks[panel].shim.ready)).then(async () => {
     if (stopped) return
     try {
       // Mixed-generation installs are the silent kind of broken (issue #27):
@@ -1288,44 +1343,33 @@ export function apply(ctx: Context, config: Config): void {
         `dsh-connect-trae: pi-ai ${piAi.version ?? 'unknown'} (${piAi.generation} generation)`
         + `${piAi.inspected ? '' : ' — not resolved locally, the host supplies it'}`,
       )
-      for (const region of REGION_KEYS) {
-        const stack = stacks[region]
-        const adapters: ReturnType<typeof createTraeAdapter>[] = []
-        /**
-         * One adapter per published provider id.
-         *
-         * A region can offer more than one chat pool (CN: consumer + enterprise)
-         * over the SAME catalog and credential. Each adapter is bound to its
-         * provider's bearer secret, so a turn reaches exactly the pool whose
-         * provider the model was requested under.
-         */
-        for (const provider of TRAE_PROVIDER_IDS[region]) {
-          const entry = stack.routeClients[provider]
-          if (entry === undefined) continue
-          const trae = createTraeAdapter({
-            shim: stack.shim,
-            catalog: stack.catalog,
-            provider,
-            displayName: displayNameOfTraeProvider(provider),
-            secret: entry.secret,
-            resolveAttachments: () => ctx.get('attachments'),
-          })
-          adapters.push(trae)
-          // Always register the route first: an empty INITIAL registration is
-          // invalid (`INVALID_ADAPTER`), while `replace([])` on a live one is
-          // explicitly legal. `syncRegionRegistration` below then withdraws the
-          // route for a region the user has switched off, in the same synchronous
-          // section, so nothing observes the transient route.
-          registration[region].adapters.push({ provider, handle: ctx.llm.registerAdapter([provider], trae.adapter) })
-        }
-        stack.invalidateAdapter = () => { for (const trae of adapters) trae.invalidate() }
+      for (const panel of TRAE_PANELS) {
+        const stack = stacks[panel]
+        const provider = providerOfPanel(panel)
+        const entry = stack.routeClients[provider]
+        if (entry === undefined) continue
+        const trae = createTraeAdapter({
+          shim: stack.shim,
+          catalog: stack.catalog,
+          provider,
+          displayName: displayNameOfTraeProvider(provider),
+          secret: entry.secret,
+          resolveAttachments: () => ctx.get('attachments'),
+        })
+        stack.invalidateAdapter = () => { trae.invalidate() }
+        // Always register the route first: an empty INITIAL registration is
+        // invalid (`INVALID_ADAPTER`), while `replace([])` on a live one is
+        // explicitly legal. `syncRegionRegistration` below then withdraws the
+        // route for a panel the user has switched off, in the same synchronous
+        // section, so nothing observes the transient route.
+        registration[panel].adapters.push({ provider, handle: ctx.llm.registerAdapter([provider], trae.adapter) })
       }
       ctx.llm.registerModelDiscovery(settingsNs, async (request, signal) => {
-        const region = regionOfTraeProvider(request.provider ?? '')
-        if (region === undefined) return []
-        // A switched-off region advertises nothing: its route is withdrawn, so
+        const panel = panelOfProvider(request.provider ?? '')
+        if (panel === undefined) return []
+        // A switched-off panel advertises nothing: its route is withdrawn, so
         // this is defence in depth against a stale model-picker refresh.
-        if (!regionEnabled(current(), region)) return []
+        if (!regionEnabled(current(), panel)) return []
         // Discovery must advertise the same image capability as the live
         // adapter catalog. The upstream flag is deliberately ignored; only the
         // user's explicit `imageModelIds` selection is authoritative.
@@ -1335,8 +1379,8 @@ export function apply(ctx: Context, config: Config): void {
         // request object, so read both.
         const cancellation = signal ?? (request as { signal?: AbortSignal }).signal
         const next = applyImageSelection(
-          await stacks[region].discoverModels(cancellation),
-          imageSet(current(), region),
+          await stacks[panel].discoverModels(cancellation),
+          imageSet(current(), panel),
         )
         return next.map(model => ({
           id: model.id,
@@ -1349,9 +1393,9 @@ export function apply(ctx: Context, config: Config): void {
           inputModalities: traeInputModalities(model),
         }))
       })
-      registration.cn.directory = ctx.llm.registerConfigurableProviders(REGION_KEYS.map(region => ({
-        provider: TRAE_PROVIDERS[region],
-        displayName: TRAE_PROVIDER_DISPLAY_NAMES[region],
+      registration.cn.directory = ctx.llm.registerConfigurableProviders(TRAE_PANELS.map(panel => ({
+        provider: providerOfPanel(panel),
+        displayName: displayNameOfTraeProvider(providerOfPanel(panel)),
         settingsNs,
         settingsPath: [],
         declared: false,

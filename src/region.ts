@@ -17,6 +17,44 @@ import type { TraeEdition } from './paths.ts'
 /** Storage/routing bucket: the CN service or the international (ai) service. */
 export type TraeRegion = 'cn' | 'ai'
 
+/**
+ * One section of the plugin card: a provider the user can switch, bind an
+ * account to, and pick models for, INDEPENDENTLY.
+ *
+ * A panel is not a region. `cn` and `ai` happen to be one-to-one with regions,
+ * but the CN enterprise pool shares the `cn` credential while billing a
+ * different account and serving a different roster — it needs its own switch,
+ * its own account binding and its own model selection, which is exactly what a
+ * panel is. Keeping panels a separate concept from regions is what lets
+ * `enterprise` be handled by the same settings plumbing with no new storage
+ * shape: each panel is just one more slot in the `regions` map.
+ */
+export type TraePanel = 'cn' | 'ai' | 'enterprise'
+
+/** Every panel, in card tab order. */
+export const TRAE_PANELS: readonly TraePanel[] = ['cn', 'enterprise', 'ai']
+
+/** The region whose credential/account pool a panel draws on. */
+export function regionOfPanel(panel: TraePanel): TraeRegion {
+  return panel === 'ai' ? 'ai' : 'cn'
+}
+
+/** The provider id a panel publishes. */
+export function providerOfPanel(panel: TraePanel): string {
+  if (panel === 'enterprise') return 'trae-enterprise'
+  return panel === 'ai' ? 'trae-global' : 'trae'
+}
+
+/** The panel that owns a provider id, or undefined for an unknown id. */
+export function panelOfProvider(provider: string): TraePanel | undefined {
+  return TRAE_PANELS.find(panel => providerOfPanel(panel) === provider)
+}
+
+/** Narrow a stored settings key to a panel. */
+export function panelOfKey(value: unknown): TraePanel | undefined {
+  return (TRAE_PANELS as readonly string[]).includes(value as string) ? value as TraePanel : undefined
+}
+
 /** One region's upstream gateway bases. */
 export interface TraeRegionGateways {
   /** Chat + agent API base (the `llm_utils_chat` / raw-chat family). */

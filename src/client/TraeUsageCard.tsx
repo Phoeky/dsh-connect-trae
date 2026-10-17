@@ -21,14 +21,14 @@ import {
   TRAE_CHECKIN_PATH,
   TRAE_MODELS_REFRESH_PATH,
   TRAE_MODELS_TEST_PATH,
-  TRAE_REGIONS,
+  TRAE_PANELS,
   TRAE_USAGE_PATH,
   unwrapVolatileDeep,
   withTraeRegion,
 } from '../status-paths.ts'
 import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebCreditExpiry, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import type { TraeCreditPosition } from '../status-paths.ts'
-import type { TraeRegion } from '../region.ts'
+import type { TraePanel } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import { BusyOverlay } from './BusyOverlay.tsx'
@@ -279,10 +279,11 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   // summary row stays a one-liner.
   const [open, setOpen] = useState(view === 'page')
   /** The region whose tab is on screen; each tab is its own provider stack. */
-  const [activeRegion, setActiveRegion] = useState<TraeRegion>('cn')
+  const [activeRegion, setActiveRegion] = useState<TraePanel>('cn')
   /** Last-known usage per region, so tab dots survive tab switches. */
-  const [statusByRegion, setStatusByRegion] = useState<Partial<Record<TraeRegion, TraeWebUsage>>>({
+  const [statusByRegion, setStatusByRegion] = useState<Partial<Record<TraePanel, TraeWebUsage>>>({
     cn: { status: 'signed-out', accounts: [] },
+    enterprise: { status: 'signed-out', accounts: [] },
     ai: { status: 'signed-out', accounts: [] },
   })
   const [busy, setBusy] = useState(false)
@@ -292,18 +293,18 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * persisted "not served" would keep claiming that long after upstream changed
    * its mind.
    */
-  const [probeByRegion, setProbeByRegion] = useState<Record<TraeRegion, Record<string, { verdict: TraeModelProbeVerdict; detail: string }>>>({ cn: {}, ai: {} })
+  const [probeByRegion, setProbeByRegion] = useState<Record<TraePanel, Record<string, { verdict: TraeModelProbeVerdict; detail: string }>>>({ cn: {}, enterprise: {}, ai: {} })
   const [testing, setTesting] = useState<{ done: number; total: number } | undefined>(undefined)
   const [testError, setTestError] = useState<string | undefined>(undefined)
   const [testSummary, setTestSummary] = useState<string | undefined>(undefined)
   const [settingsRevision, setSettingsRevision] = useState(0)
   /** Per-region unsaved model edits; a draft on one tab is never dropped by
    * switching to the other tab, only by that tab's discard/save. */
-  const [drafts, setDrafts] = useState<Partial<Record<TraeRegion, TraeDraft>>>({})
+  const [drafts, setDrafts] = useState<Partial<Record<TraePanel, TraeDraft>>>({})
   const [saving, setSaving] = useState(false)
   const [switchingAccount, setSwitchingAccount] = useState(false)
   /** Region whose on/off checkbox write is in flight, so its box can't race. */
-  const [togglingRegion, setTogglingRegion] = useState<TraeRegion | undefined>(undefined)
+  const [togglingRegion, setTogglingRegion] = useState<TraePanel | undefined>(undefined)
   /**
    * Outcome of the last "refresh accounts" press (issue #25).
    *
@@ -339,7 +340,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * load (or that has not been read yet) simply renders without its figure,
    * exactly as the composer table treats a missing balance.
    */
-  const [accountStatusByRegion, setAccountStatusByRegion] = useState<Record<TraeRegion, Record<string, TraeWebAccountState>>>({ cn: {}, ai: {} })
+  const [accountStatusByRegion, setAccountStatusByRegion] = useState<Record<TraePanel, Record<string, TraeWebAccountState>>>({ cn: {}, enterprise: {}, ai: {} })
   /** Which account row is claiming right now, so only its button spins. */
   const [claimingFor, setClaimingFor] = useState<string | undefined>(undefined)
   /**
@@ -347,7 +348,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * shown next to the row that caused it rather than in one global error line,
    * because the check-in button now lives per account.
    */
-  const [claimErrorByRegion, setClaimErrorByRegion] = useState<Record<TraeRegion, Record<string, string>>>({ cn: {}, ai: {} })
+  const [claimErrorByRegion, setClaimErrorByRegion] = useState<Record<TraePanel, Record<string, string>>>({ cn: {}, enterprise: {}, ai: {} })
   /**
    * Whether this MACHINE has spent today's check-in for a given account — the
    * "device is spent but this account was never rewarded" state, per account so
@@ -356,7 +357,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * rule, and rendering it through the "签到失败：…" line would present a normal
    * rule as a plugin fault.
    */
-  const [deviceSpentByRegion, setDeviceSpentByRegion] = useState<Record<TraeRegion, Record<string, boolean>>>({ cn: {}, ai: {} })
+  const [deviceSpentByRegion, setDeviceSpentByRegion] = useState<Record<TraePanel, Record<string, boolean>>>({ cn: {}, enterprise: {}, ai: {} })
   /**
    * A refused or unpersisted settings write, surfaced instead of silently
    * reverting. On 0.1.7 a rejected write resolves normally, so without this
@@ -471,7 +472,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * re-renders when the scope notifies, so a write made elsewhere (another
    * window, the DSH settings form) converges here.
    */
-  const creditPositionOn = (item: TraeRegion): TraeCreditPosition =>
+  const creditPositionOn = (item: TraePanel): TraeCreditPosition =>
     regionCreditPositionOf(settingsScope?.getSnapshot().value, item)
 
   /**
@@ -484,7 +485,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * here — the control renders the Host's answer, so without it the picker
    * keeps showing the seat it had and the change looks like it did nothing.
    */
-  const changeCreditPosition = async (item: TraeRegion, position: TraeCreditPosition): Promise<void> => {
+  const changeCreditPosition = async (item: TraePanel, position: TraeCreditPosition): Promise<void> => {
     if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
     setSavingSettings(true)
     setWriteError(undefined)
@@ -520,12 +521,12 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * `section['cn']`, found nothing, and reported `true` forever — the checkbox
    * stayed checked and clicking it appeared dead while the write succeeded).
    */
-  const regionOn = (item: TraeRegion): boolean =>
+  const regionOn = (item: TraePanel): boolean =>
     regionEnabledOf(settingsScope?.getSnapshot().value, item)
   const activeRegionOn = regionOn(activeRegion)
 
   const refreshUsage = useCallback(async (
-    region: TraeRegion,
+    region: TraePanel,
     signal?: AbortSignal,
   ): Promise<TraeWebUsage | undefined> => {
     try {
@@ -693,7 +694,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * subscription) and cache it for the row. Called when the table renders and
    * again after a claim so the reward/refusal lands on the row that owns it.
    */
-  const loadAccountStatus = async (accountId: string, region: TraeRegion = activeRegion): Promise<TraeWebAccountState | undefined> => {
+  const loadAccountStatus = async (accountId: string, region: TraePanel = activeRegion): Promise<TraeWebAccountState | undefined> => {
     try {
       const url = `${withTraeRegion(TRAE_ACCOUNT_STATUS_PATH, region)}&accountId=${encodeURIComponent(accountId)}`
       const response = await fetch(url, { headers: { accept: 'application/json' }, credentials: 'same-origin' })
@@ -723,7 +724,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * still genuinely claimable (the device was not spent by this claim) keeps
    * its button.
    */
-  const reloadAccountStatuses = async (region: TraeRegion): Promise<void> => {
+  const reloadAccountStatuses = async (region: TraePanel): Promise<void> => {
     // `accounts` exists only on the signed-in variant. Every caller is reached
     // from a rendered account row, so this is a narrowing guard, not a branch.
     if (status.status !== 'signed-in') return
@@ -827,7 +828,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * round trip. The Host withdraws or restores the provider route on the next
    * `onChange`, which is what actually removes it from DSH's model picker.
    */
-  const toggleRegion = async (item: TraeRegion, enabled: boolean): Promise<void> => {
+  const toggleRegion = async (item: TraePanel, enabled: boolean): Promise<void> => {
     if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
     setTogglingRegion(item)
     setWriteError(undefined)
@@ -978,7 +979,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   // pre-region-split flat fields are only read for cn (the Host reads them the
   // same way, see regionStateOf), so a budget set on one region's model is
   // never applied to the other's.
-  const region: TraeRegion = activeRegion
+  const region: TraePanel = activeRegion
   const configuredRegions = typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { regions?: unknown }).regions === 'object' && (settingsValue as { regions?: unknown }).regions !== null
     ? (settingsValue as { regions: Record<string, { contextBudgets?: unknown; imageModelIds?: unknown[] }> }).regions
     : {}
@@ -1263,7 +1264,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
         {open
           ? <div className="dsm-trae-usage">
               <div className="dsm-trae-tabs" role="tablist" aria-label={title}>
-                {TRAE_REGIONS.map(item => {
+                {TRAE_PANELS.map(item => {
                   const regionStatus = statusByRegion[item]
                   const on = regionOn(item)
                   return (
@@ -1284,7 +1285,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                         {regionStatus === undefined
                           ? null
                           : <span aria-hidden="true" className="dsm-trae-tab-dot" style={dotStyle(regionStatus.status)} />}
-                        {item === 'cn' ? t('row.tabCn') : t('row.tabAi')}
+                        {item === 'cn' ? t('row.tabCn') : item === 'enterprise' ? t('row.tabEnterprise') : t('row.tabAi')}
                       </button>
                       {/* Same knob as the settings switches: a raw accent
                           checkbox next to a styled toggle read as two different
@@ -1294,7 +1295,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           type="checkbox"
                           checked={on}
                           disabled={settingsScope?.getSnapshot().writable !== true || togglingRegion !== undefined}
-                          aria-label={t('row.tabSwitchAria', { region: item === 'cn' ? t('row.tabCn') : t('row.tabAi') })}
+                          aria-label={t('row.tabSwitchAria', { region: item === 'cn' ? t('row.tabCn') : item === 'enterprise' ? t('row.tabEnterprise') : t('row.tabAi') })}
                           onChange={event => { void toggleRegion(item, event.currentTarget.checked) }}
                         />
                       </label>
@@ -1605,7 +1606,9 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                 */}
                 <AccountTransfer
                   t={t}
-                  region={activeRegion}
+                  // Import/export moves CREDENTIALS, which belong to a region,
+                  // not a billing pool: the enterprise tab shares the cn store.
+                  region={activeRegion === 'ai' ? 'ai' : 'cn'}
                   accounts={status.status === 'signed-in'
                     ? status.accounts.map(account => ({ id: account.id, accountName: account.accountName }))
                     : []}
