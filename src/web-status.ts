@@ -393,7 +393,18 @@ export function toCheckin(status: {
 export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<TraeWebUsage> {
   const store = deps.store(panel)
   const enabled = deps.regionEnabled(panel)
-  const accounts = await store.accounts()
+  /**
+   * Accounts this panel may actually bill.
+   *
+   * Filtered ONCE, at the source, because this list is spliced into every
+   * response shape below (`signed-out`, `signed-in`, the credits route). The
+   * enterprise pool can only bill a tenant account, and the tenant gateway does
+   * not make that obvious: it answers a personal token's DIRECTORY read in
+   * full and only refuses its chat (`4019`). Listing a personal account there
+   * would offer a binding that cannot work.
+   */
+  const accounts = (await store.accounts())
+    .filter(account => panel !== 'enterprise' || account.enterprise)
   const authStatus = await store.status()
   if (authStatus.state !== 'signed-in') {
     // A bare "signed out" is undiagnosable on a machine whose layout differs
