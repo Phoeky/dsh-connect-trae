@@ -67,7 +67,7 @@
 - 计费一致性新增 2 例：`accounts()` 里 `selected` 的那一行必须就是 `current()` 计费的那个账号；
   被隐藏的账号正在计费时仍须留在列表里。两例在修复前均变红（`expected 'tenant-user' to be 'personal-user'`）。
 - 用真实 `tob_online` 帐号实测：企业路由返回 PONG、带 `session_id`、个人 `consumed_amount` 不变。
-- 全仓 **712** 例通过，双 tsconfig 类型检查通过。
+- 全仓 **710** 例通过，双 tsconfig 类型检查通过。
 
 ## 3.7.1 (2026-10-18)
 
