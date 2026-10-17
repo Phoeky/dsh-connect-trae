@@ -516,6 +516,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
 .dsm-trae-pool-save-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
 .dsm-trae-pool-save-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.dsm-trae-pool-save-row .dsm-btn{padding:5px 14px;font-size:13px;line-height:1.5}
 .dsm-trae-pool-dirty{padding:0 6px;border-radius:999px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:10px;line-height:16px}
 .dsm-trae-pool-save-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-target{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}

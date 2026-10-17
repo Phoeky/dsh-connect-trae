@@ -224,6 +224,11 @@ describe('the save bar uses the card\'s normal button size', () => {
     const compact = /\.dsm-trae-pool-select-actions \.dsm-btn[^{]*\{/.exec(TRAE_CARD_CSS)
     expect(compact).not.toBeNull()
     expect(compact?.[0]).not.toContain('pool-save-row')
+    // Stated positively as well: whatever else the card sets, the bar's buttons
+    // keep the plain `.dsm-btn` metrics (32px tall at 13px type).
+    const bar = /\.dsm-trae-pool-save-row \.dsm-btn\{([^}]*)\}/.exec(TRAE_CARD_CSS)
+    expect(bar?.[1]).toContain('padding:5px 14px')
+    expect(bar?.[1]).toContain('font-size:13px')
   })
 })
 

@@ -108,8 +108,14 @@ addEventListener('load', () => {
   out.rowCells = Array.from(document.querySelectorAll('.dsm-trae-pool-row:not(.dsm-trae-pool-row-head)')).slice(0,2).map(row =>
     Array.from(row.children).map(el => ({ cls: el.className.split(' ')[0], ...box(el) })))
   out.controls = Array.from(document.querySelectorAll('.dsm-trae-pool-set-ctl')).map(el => ({ ...box(el), child: box(el.firstElementChild) }))
+  // Button metrics: the save bar must agree with the card's other buttons.
+  out.buttons = Array.from(document.querySelectorAll('.dsm-btn')).map(el => ({
+    cls: el.className, text: (el.textContent || '').trim().slice(0, 8),
+    h: Math.round(el.getBoundingClientRect().height), w: Math.round(el.getBoundingClientRect().width),
+    padT: cs(el,'padding-top'), padL: cs(el,'padding-left'), font: cs(el,'font-size'),
+  }))
   out.tags = ['.dsm-trae-pool-tag-current','.dsm-trae-pool-tag','.dsm-trae-pool-claim','.dsm-trae-pool-warn-tag'].map(sel => { const el = document.querySelector(sel); return el ? { sel, ...box(el), radius: cs(el,'border-radius'), font: cs(el,'font-size') } : { sel, missing: true } })
-  out.buttons = Array.from(document.querySelectorAll('.dsm-trae-pool-row-actions .dsm-btn')).slice(0,2).map(el => ({ text: el.textContent, ...box(el), font: cs(el,'font-size') }))
+  out.rowButtons = Array.from(document.querySelectorAll('.dsm-trae-pool-row-actions .dsm-btn')).slice(0,2).map(el => ({ text: el.textContent, ...box(el), font: cs(el,'font-size') }))
   const pre = document.createElement('pre'); pre.id = 'audit'; pre.textContent = 'AUDIT' + JSON.stringify(out, null, 1); document.body.appendChild(pre)
 })
 </script>`
