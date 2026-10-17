@@ -1,5 +1,127 @@
 # Changelog
 
+## 3.8.0 (2026-10-18)
+
+> **国内区多了一个面板：企业版。** 同一张 CN 凭据若属于 `tob_online` 租户，会被两个网关
+> 同时服务——消费池扣个人积分，租户池扣企业额度。同一模型、两种付费方，所以「谁付钱」
+> 必须由你选，不能由插件猜。同时修好 `config_name` 大小写导致的 `4001`，以及企业网关
+> 用 HTTP 200 + `event:error` 拒绝时被当成「这轮助手什么都没说」的问题。
+
+### 新增
+
+- **卡片新增「企业版」面板**：供应商开关从「按区域」改为「按面板」，国内版、企业版、
+  国际版三者并列，各有**独立开关、独立账号绑定、独立模型选择**。
+
+  | 面板 | provider | 默认开关 |
+  |---|---|---|
+  | 国内版 | `trae` | 开 |
+  | 企业版 | `trae-enterprise` | **关**（原来两个面板的用户不受影响） |
+  | 国际版 | `trae-global` | 开 |
+
+  关掉企业版不会影响国内版；两个 CN 池的模型选择也不再互相覆盖。企业版默认关闭，
+  因为纯个人账号用不了企业池——默认放开等于给所有人塞一条一用就失败的 provider。
+
+- **`trae-enterprise`（显示名「Trae 企业版」）**：现在 `cn` 区并列发布两个 provider：
+
+  | provider | 计费池 | 说明 |
+  |---|---|---|
+  | `trae` | 消费 SOLO | 行为与此前完全一致，永不碰企业网关 |
+  | `trae-enterprise` | 企业租户 | **不回落**，失败如实报错 |
+
+  `TRAE_PROVIDER_IDS` 描述每个区发布哪些 id，`routeOfTraeProvider` 把 id 映射到计费池；
+  **路由在构建 provider 的客户端时固定**，不存在「按调用猜一次」。shim 为每个 provider
+  提供一条 bearer 路由并按 bearer 分派，未知 token 直接 401，不会退回第一条路由。
+
+### 修复
+
+- **计费账号与卡片显示可能不是同一个（本版最重要的一个）**：`accounts()` 从**已经为展示
+  过滤过**的列表推导 `selected`，而 `current()` 从**全量**登录里解析真正计费的凭据。
+  开着 `hideTenantAccounts` 且企业号排序在前时，两者分歧——卡片高亮个人号，聊天扣企业池，
+  而卡片里的 `rescanAccounts` 还会把这个错误绑定**存下来**。现在 `inUse` 拆成两个入参：
+  显式绑定走全量（展示过滤不得缩小「用户选的号」的查找范围），无绑定时默认值走过滤后列表
+  （隐藏企业号是计费决定，不是展示细节）；`current()` 与 `accounts()` 传同一对参数，
+  结构上不可能再分歧，正在计费的账号也永不会被从列表里隐藏。
+
+- **`deepseek-v4.1-flash` 等模型报 `4001`（`param is invalid`）**：网关的 `config_name`
+  **区分大小写**，而 Remote 目录给的是小写、网关只认 `DeepSeek-V4.1-Flash`。三处一起修：
+
+  1. `modelConfig` 补上 `wireConfigName`。DSH 设置通道用它重建文档，未声明的字段会在
+     **每次保存时被丢掉**——映射一丢，该模型就要等到下一次发现才能用。
+  2. `fetchModels` 改为从**客户端所钉的那条网关**读名录。两个池的名录不同
+     （`DeepSeek-V4.1-Flash` 只有企业池列），原本钉在企业池的客户端去读消费池名录，
+     永远发现不了自己池的独占模型。
+  3. `TraeSoloBridge` 查表改为大小写不敏感，映射都落空时退回目录行自己的 id。
+
+- **企业网关的拒绝形态**：它是 **HTTP 200**，但首帧是 `event:error`（`code 4001`）。
+  现在会被转成真正的客户端错误，正常流则逐字节重放给调用方——否则拒绝会表现成
+  「这一轮助手什么都没说」。
+
+- **企业网关要求每次调用带 `session_id`**，而消费网关会拒绝带它的请求体，所以只在该路由上加。
+
+### 自测
+
+- 企业版相关新增 **38** 项（`enterprise-provider` 17、`card-enterprise-panel` 9、auth 租户
+  作用域 4、web-status 过滤 3、catalog 费率 1、solo-bridge 错误码 1……详见 PR 描述第 3 节）。
+  覆盖按 bearer 分派、`session_id` 只在该路由、200/`event:error` 识别、流原样透传、
+  名录按路由读取、大小写映射与 schema 往返、租户账号作用域、4222 可读等。
+- 计费一致性新增 2 例：`accounts()` 里 `selected` 的那一行必须就是 `current()` 计费的那个账号；
+  被隐藏的账号正在计费时仍须留在列表里。两例在修复前均变红（`expected 'tenant-user' to be 'personal-user'`）。
+- 用真实 `tob_online` 帐号实测：企业路由返回 PONG、带 `session_id`、个人 `consumed_amount` 不变。
+- 全仓 **712** 例通过，双 tsconfig 类型检查通过。
+
+## 3.7.1 (2026-10-18)
+
+> **对齐 DSH 0.2.1-rc.2，并把发布后核验收敛为一条命令。** 宿主 rc.1 → rc.2 对本插件消费的
+> API 是**零变化**（逐字节核对确认），所以本版没有行为改动——它做的是两件事：把开发树钉到
+> 用户实际运行的那份宿主上，以及让「npm 上的包是否等于 tag 指向的源码」不再依赖手工核对。
+
+### 变更
+
+- **对齐宿主 DSH 0.2.1-rc.2**：13 个 `@deepseek-ai/dsh-*` devDependency 从 `0.2.1-rc.1`
+  推进到 `0.2.1-rc.2`。`cordis` / `schemastery` / `pi-ai`（仍 `1.1.0`）均未变。
+- **peer 范围无需改动**：`0.2.1-rc.2` 对 `>=0.1.7-rc.1 <0.3.0-0` 已判通过（实测）。
+
+### 新增
+
+- **`pnpm run verify:release`**（`scripts/verify-release.mjs`）：把 RELEASING.md 第 8 步
+  从手工核验变成一条命令，21 项检查一次做完 —— tag 版本、tag 之后的提交、工作树状态、registry 收录、
+  `latest` 指向、**发布包每一个文件**与 tag 逐字节比对、`lib/` 由 tag 源码重建后比对。
+  退出码即结论：`0` 一致 / `1` 不一致 / `2` 前置条件不满足。
+
+  > 手工版本的三个已知盲点被闭合：核对清单只写了 8 个文件而发布包有 15 个
+  > （`icons/`、`docs/assets/`、`scripts/verify-windows.mjs` 从未被核对）；
+  > 拿本地 `lib/` 当基准会掩盖「构建自未提交工作树」；`git show` 默认按 UTF-8 解码，
+  > 把 PNG 当文本会得到假的不一致 —— 本脚本第一版就踩了这个坑，三个图片文件全部误报。
+
+### 文档
+
+- RELEASING.md 第 8 步改为脚本优先，手工等价步骤保留在折叠区并注明其局限。
+- **新增 `docs/PENDING_CHANGELOG.md` 暂存机制**：`CHANGELOG.md` 是随包文件，在已发布的 tag
+  之后改动它会让 `verify:release` 正确地报「tag 之后改动了发布内容」。未发布版本的条目因此
+  暂存在 `docs/`（`docs/*.md` 不进包），发版时并入 CHANGELOG 再删除。RELEASING.md 第 3 步
+  已加入对应指引。
+
+### 测试
+
+- `tests/dsh-peer-range.spec.ts` 的 `MUST_ADMIT` 补入 `0.2.1-rc.1` / `0.2.1-rc.2` / `0.2.1`。
+  此前这份「必须放行的版本」清单里**没有当前正在使用的版本**——范围若被误收窄到
+  当前宿主之外，测试仍会全绿。变异验证：把上界改到 `<0.2.1-rc.2` → 对应用例立刻变红。
+- 新增 7 例（`tests/verify-release.spec.ts`），用 PATH 上的假 `npm`/`tar` 提供受控发布包，
+  子进程跑**真脚本**：一致→0、篡改→1、多出文件→1、无 tag→2、未发布→2、二进制逐字节比对、
+  tag 之后有提交仍→0。
+- **变异验证**：把 `git show` 改回 UTF-8 解码 → 2 例变红；让比对恒返回「一致」→ 1 例变红。
+- 全仓 **670** 例通过。
+
+### 已核对确认无变化
+
+- 逐字节比对插件消费的宿主包（`.d.ts` 与 `lib/*.js`）——`dsh-llm`、`dsh-llm-pi-ai`、
+  `dsh-settings`、`dsh-host-webserver`、`dsh-atomic-write`、`dsh-home-paths`、
+  `dsh-attachment`、`dsh-client-ui-renderer`，以及 `dsh-app-boot` 的 peer 门禁：**全部相同**。
+- pi-ai 仍为 `1.1.0`，`openai-completions.js` 与 `utils/transcript.js` 未变，
+  上一轮的双向适配结论原样成立。
+- 线上请求体探针在真实 rc.2 栈上复跑，结果与 rc.1 一致。
+
+
 ## 3.7.0 (2026-10-17)
 
 > **对齐 DSH 0.2.1-rc.1。** 宿主把 `@earendil-works/pi-ai` 从 `^0.85.1` 抬到 `^1.1.0`，

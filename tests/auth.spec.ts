@@ -653,8 +653,9 @@ describe('consumer panels withhold tenant logins', () => {
     const current = await store.current()
     const marked = accounts.filter(account => account.selected)
     expect(marked).toHaveLength(1)
-    expect(marked[0].id).toBe(traeAccountId(current!))
-    return marked[0].accountName!
+    const [only] = marked
+    expect(only?.id).toBe(traeAccountId(current!))
+    return only!.accountName!
   }
 
   it('marks the account it bills, not the first one the filter happens to keep', async () => {
