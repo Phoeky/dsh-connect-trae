@@ -2,7 +2,7 @@
 
 > 分支：`feat/enterprise-provider`（基于 `main` = v3.7.0）
 > 提交：`feat(cn): expose the enterprise (tenant) gateway as a second provider`
-> 自测：`pnpm run check` 全绿（687 项，此前 670）
+> 自测：`pnpm run check` 全绿（696 项，此前 670）
 
 ---
 
@@ -19,6 +19,30 @@
 当前插件只有一个 `trae` provider，只能走第一个网关，企业账号的企业额度完全用不上。
 
 ## 2. 改动内容
+
+### 2.0 界面：企业版是并列的第三个面板
+
+卡片原来按 **区域** 分栏（国内版 / 国际版），企业版虽然已是独立 provider，界面上却
+没有自己的开关、账号和模型列表 —— 关掉企业版会把国内版一起关掉，两个池也只能共用
+一份模型选择。现在引入 **panel**（面板）概念：
+
+| 面板 | provider | 凭据区域 | 默认开关 | 说明 |
+|---|---|---|---|---|
+| `cn` | `trae` | cn | **开** | 个人 SOLO 池，行为不变 |
+| `enterprise` | `trae-enterprise` | cn | **关** | 企业租户池，独立开关/账号/模型 |
+| `ai` | `trae-global` | ai | **开** | 国际版，行为不变 |
+
+- `TRAE_PANELS` / `regionOfPanel` / `providerOfPanel` 定义映射；每个面板只是
+  `regions` 设置映射里多一个槽位，**没有新增存储形状**。`accounts` 增加
+  `enterprise` 键，使企业版能绑定自己的账号。
+- Host 侧凡是按区域做键的地方（stacks、wire 映射、目录、注册、发现）全部改为按面板，
+  两个 CN 池因此各自保留名录（它们确实不同：`DeepSeek-V4.1-Flash` 仅企业池有）。
+- **企业版默认关闭，两侧（`regionEnabled` 与卡片的 `regionEnabledOf`）保持一致**：
+  纯个人账号用不了这个池，默认放开等于给所有用户塞一条一用就失败的 provider。
+  用户在它自己的标签页里打开。
+- 状态路由接受 `?region=enterprise`（参数名保持不变以兼容既有链接），卡片按
+  国内版 → 企业版 → 国际版 的顺序渲染三个标签。
+
 
 ### 2.1 两个并列 provider（不是模式开关）
 
@@ -111,6 +135,9 @@ if (event === 'error') return { ok: false, status: 200, kind: 'client', message:
 
 ## 3. 测试
 
+`tests/card-enterprise-panel.spec.tsx`（9 项）：第三个标签、默认关闭、开关只写自己
+的槽位（兄弟槽位逐字节不变）、两个池的模型选择互不串味。
+
 `tests/enterprise-provider.spec.ts`（17 项）：
 
 | 组 | 覆盖 |
@@ -147,8 +174,10 @@ PascalCase:              ok=true host=console.enterprise.trae.cn
 
 ## 6. 审阅建议路径
 
-1. `src/adapter.ts` — provider 常量与路由表（先看这个，其余都是它的下游）
-2. `src/solo.ts` — `route` 选项、`session_id`、200/`event:error`、`fetchModels` 用 `chatBaseOf`
-3. `src/shim.ts` — 多路由与 bearer 分派
-4. `src/index.ts` — 每 provider 一个 client/adapter/registration
-5. `src/solo-bridge.ts` — 大小写查表与兜底
+1. `src/region.ts` — `TraePanel` 与面板/区域/provider 的三方映射（先看这个，
+   其余都是它的下游：卡片标签、设置槽位、注册与发现全部由它派生）
+2. `src/adapter.ts` — provider 常量与路由表
+3. `src/index.ts` — 每面板一个 stack / adapter / registration，企业版默认关闭
+4. `src/solo.ts` — `route` 选项、`session_id`、200/`event:error`、`fetchModels` 用 `chatBaseOf`
+5. `src/shim.ts` — 多路由与 bearer 分派
+6. `src/solo-bridge.ts` — 大小写查表与兜底
