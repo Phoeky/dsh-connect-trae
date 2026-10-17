@@ -508,6 +508,7 @@ async function creditAlternatives(
   if (deps.creditsOfAccount === undefined) return undefined
   const candidates = accounts
     .filter(account => !account.selected && account.region === regionOfPanel(panel))
+    .filter(account => panel !== 'enterprise' || account.enterprise)
     .slice(0, TRAE_CREDIT_ALTERNATIVE_LIMIT)
   if (candidates.length === 0) return undefined
   const found = await Promise.all(candidates.map(async account => {
@@ -548,7 +549,12 @@ export async function traeAccountCredits(
   deps: TraeUsageRouteOptions,
   panel: TraePanel,
 ): Promise<TraeWebAccountCredit[]> {
-  const accounts = (await deps.store(panel).accounts()).filter(account => account.region === regionOfPanel(panel))
+  const accounts = (await deps.store(panel).accounts())
+    .filter(account => account.region === regionOfPanel(panel))
+    // A personal account cannot bill the tenant pool: the tenant gateway even
+    // hands it a full directory, and only the first chat reveals that it will
+    // answer `4019`. Listing it here would be an invitation to a dead end.
+    .filter(account => panel !== 'enterprise' || account.enterprise)
   if (accounts.length === 0) return []
   return Promise.all(accounts.map(async account => {
     let generalAvailable: number | undefined
@@ -662,7 +668,11 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         const panel = requestRegion(req, res)
         if (panel === undefined) return
         try {
-          json(res, 200, { accounts: await deps.store(panel).accounts() })
+          // Same tenant gate as the status document: a personal account in the
+          // enterprise tab could only ever answer `4019`.
+          const accounts = (await deps.store(panel).accounts())
+            .filter(account => panel !== 'enterprise' || account.enterprise)
+          json(res, 200, { accounts })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }

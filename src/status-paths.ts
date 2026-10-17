@@ -291,6 +291,13 @@ export interface TraeWebAccount {
   id: string
   accountName: string
   edition: 'cn' | 'sg' | 'solo' | 'solo-sg'
+  /**
+   * Whether this account belongs to a Trae tenant, i.e. may bill the enterprise
+   * pool. The enterprise tab lists only these, because the tenant gateway
+   * serves a directory to any CN token but refuses a personal account's chat
+   * with `4019` — so nothing else reveals the difference until a turn fails.
+   */
+  enterprise: boolean
   /** Routing bucket of this account, derived from its credential. */
   region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'

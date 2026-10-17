@@ -12,6 +12,19 @@ export interface TraeCredential {
   refreshToken?: string
   userId: string
   accountName?: string
+  /**
+   * Trae tenant this account belongs to (`account.tenant_id`, e.g. `272193024`
+   * for a `tob_online` enterprise), absent for a personal account.
+   *
+   * This is what decides whether the ENTERPRISE pool can serve the account at
+   * all. The tenant gateway accepts any CN token for its DIRECTORY read — a
+   * personal account gets the full 49-model roster back — so "the roster
+   * loaded" proves nothing about billing rights. Its chat endpoint is what
+   * refuses: a personal account answers `4019` (risk control), a tenant account
+   * streams normally. Because the two are indistinguishable from the roster,
+   * the account list itself has to carry the flag.
+   */
+  tenantId?: string
   host: string
   /**
    * Region claim from the decrypted storage document (`userRegion.region`,
@@ -44,6 +57,16 @@ export interface TraeCredentialStoreOptions {
    * stores run side by side without seeing each other's accounts.
    */
   region?: TraeRegion
+  /**
+   * Only consider credentials that belong to a Trae tenant.
+   *
+   * The enterprise panel's store runs with this on: a personal account cannot
+   * bill that pool, and because the tenant gateway still serves it a directory,
+   * binding it here would fail only at the first chat (`4019`). With the flag
+   * set, an explicit binding to a personal account falls through to the preferred
+   * TENANT account instead of being silently honoured.
+   */
+  requireTenant?: boolean
   /** Legacy single-copy path read as a migration source; injectable for tests. */
   legacyOwnPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
@@ -54,6 +77,16 @@ export interface TraeAccountChoice {
   id: string
   accountName: string
   edition: TraeEdition
+  /**
+   * Whether this account may bill the CN ENTERPRISE pool.
+   *
+   * Derived from the credential's own tenant claim, because nothing else can
+   * tell: the tenant gateway answers a directory read for ANY CN token, so a
+   * personal account looks perfectly serviceable right up to its first chat,
+   * which it answers with `4019`. The enterprise panel filters its account list
+   * and its default binding on this flag.
+   */
+  enterprise: boolean
   /** Routing bucket of this account (`cn` | `ai`), derived from its credential. */
   region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
@@ -158,11 +191,14 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
     ? value['account'] as Record<string, unknown>
     : undefined
   const accountName = optionalString(account?.['username'])
+  // `tenant_id` is a number or a string depending on the client that wrote it.
+  const tenantId = optionalString(account?.['tenant_id']) ?? (typeof account?.['tenant_id'] === 'number' ? String(account['tenant_id']) : undefined)
   return {
     accessToken,
     ...refreshToken === undefined ? {} : { refreshToken },
     userId: optionalString(value['userId']) ?? '',
     ...accountName === undefined ? {} : { accountName },
+    ...tenantId === undefined ? {} : { tenantId },
     host: optionalString(value['host']) ?? '',
     ...userRegion === undefined ? {} : { userRegion },
     expiresAtMs,
@@ -170,6 +206,19 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
     edition,
     source,
   }
+}
+
+/**
+ * Whether this account belongs to a Trae tenant, i.e. may bill the enterprise
+ * pool.
+ *
+ * Evidence (2026-10-17, live): the tenant's own account carries
+ * `account.tenant_id` / `tenant_name` and `scope: 'saas'`; the personal SOLO
+ * account carries neither and reports `scope: 'marscode'`. Only the tenant one
+ * streams on the enterprise gateway — the other answers `4019` risk control.
+ */
+export function isEnterpriseAccount(credential: Pick<TraeCredential, 'tenantId'> | undefined): boolean {
+  return credential?.tenantId !== undefined && credential.tenantId.trim() !== ''
 }
 
 export function traeAccountId(credential: Pick<TraeCredential, 'edition' | 'userId' | 'accountName'>): string {
@@ -186,7 +235,9 @@ function credentialOfStored(stored: unknown): TraeCredential | undefined {
   return normalizeTraeCredential({
     token: record['accessToken'], refreshToken: record['refreshToken'], userId: record['userId'], host: record['host'],
     userRegion: record['userRegion'],
-    account: record['accountName'] === undefined ? undefined : { username: record['accountName'] },
+    account: record['accountName'] === undefined && record['tenantId'] === undefined
+      ? undefined
+      : { ...record['accountName'] === undefined ? {} : { username: record['accountName'] }, ...record['tenantId'] === undefined ? {} : { tenant_id: record['tenantId'] } },
     expiredAt: record['expiresAtMs'], refreshExpiredAt: record['refreshExpiredAtMs'],
   }, edition, 'dsh')
 }
@@ -235,6 +286,7 @@ export class TraeCredentialStore {
   private edition: TraeEdition | 'auto'
   private accountId: string | undefined
   private readonly region: TraeRegion | undefined
+  private readonly requireTenant: boolean
   private readonly ownPathExplicit: string | undefined
   private readonly legacyOwnPath: string
   private readonly legacyOwnPathExplicit: string | undefined
@@ -247,6 +299,7 @@ export class TraeCredentialStore {
     this.edition = options.edition ?? 'auto'
     this.accountId = options.accountId
     this.region = options.region
+    this.requireTenant = options.requireTenant === true
     this.ownPathExplicit = options.ownPath
     this.legacyOwnPath = options.legacyOwnPath ?? legacyTraeOwnAuthPath()
     this.legacyOwnPathExplicit = options.legacyOwnPath
@@ -345,7 +398,11 @@ export class TraeCredentialStore {
    * the plugin performed is never discarded by this preference.
    */
   private preferred(credentials: TraeCredential[]): TraeCredential | undefined {
-    return credentials.find(credential => credential.source === 'desktop') ?? credentials[0]
+    const eligible = this.requireTenant
+      ? credentials.filter(credential => isEnterpriseAccount(credential))
+      : credentials
+    if (eligible.length === 0) return undefined
+    return eligible.find(credential => credential.source === 'desktop') ?? eligible[0]
   }
 
   /**
@@ -372,6 +429,7 @@ export class TraeCredentialStore {
       id: liveId,
       accountName: live.accountName ?? (live.userId || `${live.edition} account`),
       edition: live.edition,
+      enterprise: isEnterpriseAccount(live),
       region: regionOfCredential(live),
       source: live.source,
       tokenExpiresAtMs: live.expiresAtMs,
@@ -388,6 +446,7 @@ export class TraeCredentialStore {
       id: traeAccountId(credential),
       accountName: credential.accountName ?? (credential.userId || `${credential.edition} account`),
       edition: credential.edition,
+      enterprise: isEnterpriseAccount(credential),
       region: regionOfCredential(credential),
       source: credential.source,
       tokenExpiresAtMs: credential.expiresAtMs,
@@ -400,6 +459,11 @@ export class TraeCredentialStore {
     const credentials = await this.readAll()
     if (this.accountId === undefined) return this.preferred(credentials)
     const selected = credentials.find(credential => traeAccountId(credential) === this.accountId)
+    // A tenant-scoped store cannot bill through a personal account, and the
+    // tenant gateway only reveals that at the first chat (`4019`). Honour the
+    // binding when it is eligible; otherwise fall back to the preferred tenant
+    // account, which is the one the user's enterprise tab is meant to use.
+    if (this.requireTenant && !isEnterpriseAccount(selected)) return this.preferred(credentials)
     // A saved account can disappear when Trae replaces its local login. Do NOT
     // silently fall back to a different account: that would bill a different
     // account than the one the user explicitly selected. Return undefined so the

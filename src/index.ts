@@ -65,6 +65,7 @@ export {
 } from './adapter.ts'
 export { decidePiAiGeneration, generationOf, piAiRuntimeInfo, type PiAiGeneration, type PiAiRuntimeInfo } from './pi-ai-runtime.ts'
 export {
+  isEnterpriseAccount,
   legacyTraeOwnAuthPath,
   normalizeTraeCredential,
   traeOwnAuthPath,
@@ -776,6 +777,12 @@ export function apply(ctx: Context, config: Config): void {
     }
     const store = new TraeCredentialStore({
       region,
+      // The enterprise panel may only bill through a TENANT account. Its store
+      // therefore refuses a personal binding (falls back to the preferred
+      // tenant account) and never picks one by default — the tenant gateway
+      // hands a personal account a full directory, so this is the only place
+      // the difference can be enforced before a turn fails with `4019`.
+      ...panel === 'enterprise' ? { requireTenant: true } : {},
       ...unwrapVolatile(config.authFile) === undefined ? {} : { storagePath: unwrapVolatile(config.authFile) },
       edition: unwrapVolatile(config.edition) ?? 'auto',
       // The refresh callback resolves the device identity lazily so an
@@ -1441,17 +1448,22 @@ export function apply(ctx: Context, config: Config): void {
     // A switched-off region is skipped entirely: its route is withdrawn, so the
     // request would be pure waste — and skipping it is also what keeps a
     // disabled region from contributing an error to the log on every start.
-    for (const region of REGION_KEYS) {
-      if (!regionEnabled(current(), region)) continue
+    for (const panel of TRAE_PANELS) {
+      if (!regionEnabled(current(), panel)) continue
       void (async () => {
-        const stack = stacks[region]
+        const stack = stacks[panel]
         try {
           const models = await stack.discoverModels()
           if (stopped) return
-          stack.catalog.set(derive(current(), models, region))
+          // Reconcile the CATALOG, not just the wire map: `wireConfigName` is
+          // what the bridge needs to spell a case-sensitive `config_name`, and
+          // a saved row that predates it carries `wireFunction` alone. Writing
+          // the discovered rows straight in is what makes the very first turn
+          // after a restart resolve correctly, with no refresh-and-save.
+          stack.catalog.set(derive(current(), models, panel))
         } catch (error: unknown) {
-          ctx.logger.warn(`dsh-connect-trae: live ${region} model directory unavailable; serving the configured catalog`, error)
-          stack.catalog.set(configuredModels(current(), region))
+          ctx.logger.warn(`dsh-connect-trae: live ${panel} model directory unavailable; serving the configured catalog`, error)
+          stack.catalog.set(configuredModels(current(), panel))
         }
         stack.invalidateAdapter()
       })()

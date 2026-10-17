@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { normalizeTraeCredential, TraeCredentialStore } from '../src/auth.ts'
+import { isEnterpriseAccount, normalizeTraeCredential, traeAccountId, TraeCredentialStore } from '../src/auth.ts'
+import type { TraeStorageCandidate } from '../src/paths.ts'
 import { TRAE_AUTH_STORAGE_KEY } from '../src/decrypt.ts'
 
 const cleanup: string[] = []
@@ -520,5 +521,82 @@ describe('TraeCredentialStore region scoping', () => {
     await store.logout()
     await expect(readFile(regionFile, 'utf8')).rejects.toThrow()
     await expect(readFile(legacy, 'utf8')).rejects.toThrow()
+  })
+})
+
+describe('tenant scoping for the enterprise panel', () => {
+  /** A storage document for an account that belongs to a Trae tenant. */
+  function tenantStorage(token: string, expiresAt: number, userId: string, tenantId = '272193024'): string {
+    return JSON.stringify({ [TRAE_AUTH_STORAGE_KEY]: JSON.stringify({
+      token, refreshToken: 'rt', userId,
+      account: { username: userId, tenant_id: tenantId, tenant_name: 'Some Tenant Co.', scope: 'saas' },
+      host: 'https://api.trae.cn', expiredAt: new Date(expiresAt).toISOString(), refreshExpiredAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }) })
+  }
+
+  it('reads the tenant claim off the credential, and reports none for a personal account', () => {
+    const tenant = normalizeTraeCredential(
+      { token: 'at', account: { username: 'tenant-user', tenant_id: 272193024 } }, 'cn', 'desktop')
+    expect(tenant?.tenantId).toBe('272193024')
+    expect(isEnterpriseAccount(tenant)).toBe(true)
+
+    const personal = normalizeTraeCredential(
+      { token: 'at', account: { username: 'personal-user', scope: 'marscode' } }, 'cn', 'desktop')
+    expect(personal?.tenantId).toBeUndefined()
+    expect(isEnterpriseAccount(personal)).toBe(false)
+  })
+
+  it('marks each account choice with whether it can bill the enterprise pool', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, tenantStorage('tenant-token', Date.now() + 3_600_000, 'tenant-user'))
+    await writeFile(solo, storage('personal-token', Date.now() + 3_600_000, undefined, 'personal-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn, source: 'desktop' }, { edition: 'solo', path: solo, source: 'desktop' }]
+    const accounts = await store.accounts()
+    expect(accounts.map(account => [account.accountName, account.enterprise])).toEqual([
+      ['tenant-user', true],
+      ['personal-user', false],
+    ])
+  })
+
+  it('never resolves to a personal account when the store requires a tenant', async () => {
+    // The desktop credential is the personal one, so a plain store prefers it —
+    // exactly the binding that answers `4019` on the enterprise gateway.
+    const dir = await temp()
+    const personal = join(dir, 'personal.json'); const tenant = join(dir, 'tenant.json')
+    await writeFile(personal, storage('personal-token', Date.now() + 3_600_000, undefined, 'personal-user'))
+    await writeFile(tenant, tenantStorage('tenant-token', Date.now() + 3_600_000, 'tenant-user'))
+    const candidates = (): TraeStorageCandidate[] => [
+      { edition: 'solo', path: personal, source: 'desktop' },
+      { edition: 'cn', path: tenant, source: 'desktop' },
+    ]
+
+    const plain = new TraeCredentialStore({ ownPath: join(dir, 'own-a'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    plain.candidates = candidates
+    await expect(plain.current()).resolves.toMatchObject({ userId: 'personal-user' })
+
+    const enterprise = new TraeCredentialStore({ ownPath: join(dir, 'own-b'), requireTenant: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    enterprise.candidates = candidates
+    await expect(enterprise.current()).resolves.toMatchObject({ userId: 'tenant-user' })
+  })
+
+  it('ignores an explicit binding to a personal account instead of honouring it', async () => {
+    const dir = await temp()
+    const personal = join(dir, 'personal.json'); const tenant = join(dir, 'tenant.json')
+    await writeFile(personal, storage('personal-token', Date.now() + 3_600_000, undefined, 'personal-user'))
+    await writeFile(tenant, tenantStorage('tenant-token', Date.now() + 3_600_000, 'tenant-user'))
+    const candidates = (): TraeStorageCandidate[] => [
+      { edition: 'solo', path: personal, source: 'desktop' },
+      { edition: 'cn', path: tenant, source: 'desktop' },
+    ]
+
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), requireTenant: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = candidates
+    const personalId = traeAccountId({ edition: 'solo', userId: 'personal-user' })
+    store.selectAccount(personalId)
+    // Falls through to the tenant account: a personal binding could only ever
+    // fail at the first chat, which is strictly worse than swapping it here.
+    await expect(store.current()).resolves.toMatchObject({ userId: 'tenant-user' })
   })
 })
