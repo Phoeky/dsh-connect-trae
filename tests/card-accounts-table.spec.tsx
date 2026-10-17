@@ -292,4 +292,55 @@ describe('the stale-binding hint', () => {
     const button = screen.getByRole('button', { name: /^row\.appLoginFollow/ })
     expect(button.textContent).toContain('SecondCN')
   })
+
+  /**
+   * A signed-out panel is NOT an empty panel.
+   *
+   * The Host answers a signed-out region WITH the roster it found: that is how
+   * "your bound account's token cannot be refreshed" reaches the card, and why
+   * the reason and the rows arrive in the same response. The card used to keep
+   * only the reason — the table rendered on `status === 'signed-in'` alone — so
+   * a dead binding produced a message with no rows under it, and the one press
+   * that fixes it (bind this other account) did not exist on screen.
+   *
+   * This is the shape of the 2026-10-18 report ("accounts can no longer be
+   * refreshed at all"): the roster was there the whole time and the card was
+   * dropping it.
+   */
+  it('still lists the roster when the bound account cannot be used', async () => {
+    stubFetch(usageDocument({
+      status: 'signed-out',
+      accountId: undefined,
+      accountName: undefined,
+      tokenExpiresAtMs: undefined,
+      credits: undefined,
+      message: 'trae: token refresh failed and access token is expired',
+    }))
+    const holder = makeScope()
+    await renderOpen(holder.scope)
+
+    // The reason stays where the card has always put it (its own line under the
+    // table), because it is the only thing that says WHY.
+    expect(screen.getByText(/token refresh failed and access token is expired/)).toBeTruthy()
+
+    // …and the rows stay with it: header plus both accounts.
+    const rows = within(accountBlock()).getAllByRole('row')
+    expect(rows).toHaveLength(3)
+    expect(accountRow('LaoDing')).toBeTruthy()
+
+    // The bound account is still named as the bound one — the roster's own
+    // `selected` flag is the only source for that when the document carries no
+    // `accountId` — and it still offers no redundant action.
+    expect(accountRow('LaoDing').className).toContain('dsm-trae-account-row-current')
+    expect(within(accountRow('LaoDing')).queryByRole('button', { name: 'row.accountSwitch' })).toBeNull()
+
+    // The OTHER row is the way out, and it has to actually work: one press
+    // rebinds the slot to an account that is still usable.
+    const action = within(accountRow('SecondCN')).getByRole('button', { name: 'row.accountSwitch' })
+    expect((action as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(action)
+
+    await vi.waitFor(() => { expect(holder.writes.length).toBeGreaterThan(0) })
+    expect(holder.writes[0]).toEqual({ field: 'accounts', value: { cn: 'account-2' } })
+  })
 })

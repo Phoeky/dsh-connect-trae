@@ -1447,6 +1447,16 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
                   </button>
                 </div>
+                {/* A signed-out panel still lists what the Host FOUND, and the
+                    reason it refuses to use it. Dropping the table in this
+                    state is what made a dead binding a dead end: the Host
+                    returns the roster alongside the reason, and the card used
+                    to throw the roster away — so "the bound account's token
+                    cannot be refreshed" arrived with no rows to act on, and
+                    the only way out was editing the settings file by hand.
+                    The status line stays (it carries the reason), the rows now
+                    stay with it, so a dead account is followed by the one
+                    press that fixes it. */}
                 {status.status !== 'signed-in' || status.accounts.length === 0
                   ? <div className="dsm-trae-usage-account" role="status">
                       <div className="dsm-trae-usage-account-copy">
@@ -1461,7 +1471,9 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           : null}
                       </div>
                     </div>
-                  : <div className={`dsm-trae-account-table${isCnPool ? ' dsm-trae-account-table-checkin' : ''}`}>
+                  : null}
+                {status.status !== 'error' && status.accounts.length > 0
+                  ? <div className={`dsm-trae-account-table${isCnPool ? ' dsm-trae-account-table-checkin' : ''}`}>
                       {/* Column header, as the sibling WorkBuddy card has one:
                           four values line up in four fixed tracks, so the eye
                           reads DOWN a column instead of re-finding the field on
@@ -1478,7 +1490,15 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                         <span />
                       </div>
                       {status.accounts.map(account => {
-                        const current = status.status === 'signed-in' && account.id === status.accountId
+                        {/* `accountId` exists only on the signed-in variant.
+                            A signed-out panel still knows which account the
+                            binding points AT (the roster's own `selected`
+                            flag), and naming that row is the difference
+                            between "this panel is broken" and "THAT binding is
+                            the broken one, switch to another row". */}
+                        const current = status.status === 'signed-in'
+                          ? account.id === status.accountId
+                          : account.selected === true
                         const state = accountStatusByRegion[activeRegion][account.id]
                         const error = claimErrorByRegion[activeRegion][account.id]
                         return (
@@ -1555,7 +1575,8 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           </div>
                         )
                       })}
-                    </div>}
+                    </div>
+                  : null}
                 {/* The enterprise tab has no balance by design: nothing the
                     plugin can reach reports tenant spend, so the figure lives
                     only in the enterprise console. Said plainly instead of
