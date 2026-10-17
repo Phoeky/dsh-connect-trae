@@ -13,7 +13,7 @@ export const TRAE_CARD_CSS = `
 .dsm-plugin-card-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:-2px}
 .dsm-plugin-card-head{flex-direction:column;flex:1;gap:6px;min-width:0;display:flex}
 .dsm-plugin-card-title{color:var(--dsw-alias-label-primary,#e6e6e6);font-size:15px;font-weight:600;line-height:1.4}
-.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:12.5px;line-height:1.55;max-width:76ch}
+.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:12.5px;line-height:1.55;max-width:720px}
 /* Pure-CSS caret: the host primitives' chevron icon names are not part of any
    stable contract across DSH releases, so no static import is used 鈥?a border
    caret in the plugin's own CSS is version-proof. */
@@ -52,7 +52,7 @@ export const TRAE_CARD_CSS = `
    differs, so it sits inside the tab cell without crowding the label. */
 .dsm-trae-tab-switch{flex:none;margin-left:auto;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
 .dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:baseline}
-.dsm-trae-tab-hint{margin:0;padding:0 2px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px;max-width:76ch}
+.dsm-trae-tab-hint{margin:0;padding:0 2px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px;max-width:720px}
 .dsm-trae-credits-unavailable{margin:10px 0 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
 .dsm-trae-account-value-muted{color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px}
 .dsm-trae-tab-off-notice{margin:0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
@@ -88,12 +88,20 @@ export const TRAE_CARD_CSS = `
    does, then what it means. */
 .dsm-trae-pref-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dsm-trae-pref-label{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-pref-lead{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
-.dsm-trae-pref-lead .dsm-trae-pref-label{flex:1;min-width:0}
+/* The select sits NEXT TO its label ("显示位置 [输入框工具栏 ▾]"), not at the far
+   right of the card. Pushing it to the opposite edge split one sentence into
+   two objects with half a card of empty space between them, and left the reader
+   to guess which label the control belonged to. The row packs from the left;
+   nothing in it stretches. */
+.dsm-trae-pref-lead{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-width:0}
+.dsm-trae-pref-lead .dsm-trae-pref-label{flex:none}
 .dsm-trae-pref input:disabled{cursor:default}
 .dsm-trae-pref:has(input:disabled){opacity:.6;cursor:default}
 .dsm-trae-pref b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:17px;max-width:76ch}
+/* A px cap, not a ch cap: with a CJK font one ch is the full-width zero
+   (~12px at 12px type), so 76ch allowed ~900px lines and the cap never bit.
+   620px is about 50 hanzi — a comfortable measure at this size. */
+.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:17px;max-width:620px}
 .dsm-trae-pref span{min-width:0}
 /* The credit readout's seat picker (learned from workbuddy #62). Its OWN label
    class, deliberately not the plain .dsm-trae-pref the two checkboxes use: a
@@ -106,7 +114,9 @@ export const TRAE_CARD_CSS = `
    padding — its label must start on the same left edge as the two labels
    above it (15px box + 10px gap). */
 .dsm-trae-credit-position-pref{align-items:flex-start;padding-left:25px}
-.dsm-trae-credit-position{flex:none;max-width:150px;margin-top:0;padding:3px 8px;font-size:12px;line-height:16px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:7px;background:var(--dsw-alias-bg-layer-3,#2a2c33);color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer}
+/* Sized by its own two options, not stretched: the control answers one short
+   question and sits beside the words that ask it. */
+.dsm-trae-credit-position{flex:none;max-width:none;margin-top:0;padding:3px 8px;font-size:12px;line-height:16px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:7px;background:var(--dsw-alias-bg-layer-3,#2a2c33);color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer}
 .dsm-trae-credit-position:disabled{cursor:default}
 /* The card's checkboxes are the platform's own, styled only with
    accent-color 鈥?the SAME idiom .dsm-trae-mainui-switch-label above already
