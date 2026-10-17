@@ -301,6 +301,11 @@ export interface TraeWebPool {
    * free model at all).
    */
   targetModelSource: 'preferred' | 'free' | 'none' | 'stale'
+  /**
+   * How much text a pool test sends (0 = the minimal probe). Always a number so
+   * the card's select has a value to show; the saved preference is the default.
+   */
+  probeInputTokens: number
   /** The saved target id that this panel's catalog no longer offers. */
   staleTargetModelId?: string
   /** The account ids the user has checked into this panel's pool. */
@@ -408,6 +413,16 @@ export interface TraePoolPreferences {
    * as immutable; only the owner of a draft copies it.
    */
   memberAccountIds?: string[]
+  /**
+   * How much text a pool TEST sends, in tokens. `0` (the default) keeps the
+   * minimal one-word probe.
+   *
+   * Exists because a verdict earned by a one-word request says nothing about the
+   * long turn the user is about to send: an upstream that refuses large requests
+   * answers the small one happily. Padding the probe therefore buys a truthful
+   * "works at my size" answer at the cost of spending real credit per test.
+   */
+  probeInputTokens?: number
 }
 
 /**

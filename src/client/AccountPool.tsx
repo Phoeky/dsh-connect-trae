@@ -35,6 +35,27 @@ import type {
 import { writeSettingsField } from './TraeUsageCard.tsx'
 import type { TraeSettingsKey } from './locales.ts'
 
+/**
+ * A finite number or the fallback.
+ *
+ * The usage document is served by a Host that may be OLDER than this bundle (the
+ * card ships in the client bundle and updates on refresh, the Host only on
+ * restart), so a field the Host does not send yet must degrade to a usable default
+ * instead of rendering `undefined` into a select.
+ */
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+/**
+ * Probe sizes the card offers, in tokens. `0` is the minimal one-word probe.
+ *
+ * Deliberately a short, coarse list: the number is a spend decision (a probe at
+ * 50k tokens costs real credit on every account in the batch), and offering a
+ * free-text field invites values the upstream rounds away anyway.
+ */
+const PROBE_INPUT_TOKEN_CHOICES: readonly number[] = [0, 10_000, 20_000, 30_000, 50_000, 100_000]
+
 /** Facts the pool document does not carry, joined from the card's roster by id. */
 export interface TraePoolRowDetail {
   /** edition · credential source, already worded by the card. */
@@ -263,13 +284,17 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
       enabled: base.enabled === true,
       targetModelId: base.targetModelId ?? pool.targetModelId ?? pool.staleTargetModelId ?? '',
       memberAccountIds: [...(base.memberAccountIds ?? [])],
+      // 0 is a real choice ("minimal probe"), so it must not fall back to the
+      // document's value: only an ABSENT field means "never touched".
+      probeInputTokens: numberOr(base.probeInputTokens, numberOr(pool.probeInputTokens, 0)),
     }
-  }, [settingsTick, settingsScope, panel, pool.targetModelId, pool.staleTargetModelId])
+  }, [settingsTick, settingsScope, panel, pool.targetModelId, pool.staleTargetModelId, pool.probeInputTokens])
 
   // The draft the user edits. The membership checkbox binds HERE (NON-NEGOTIABLE
   // #4), never to `account.member`.
   const [enabled, setEnabled] = useState(saved.enabled)
   const [targetModelId, setTargetModelId] = useState(saved.targetModelId ?? '')
+  const [probeInputTokens, setProbeInputTokens] = useState(saved.probeInputTokens)
   const [selected, setSelected] = useState(() => new Set(saved.memberAccountIds ?? []))
   const [busy, setBusy] = useState<'checkin' | 'test' | 'remove' | 'save' | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
@@ -287,8 +312,12 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
 
   const pushLog = (tone: LogEntry['tone'], text: string) => {
     if (!mountRef.current) return
+    // Take the id OUTSIDE the updater: React may call an updater twice (StrictMode,
+    // or a re-render of a batched update), and a mutable ref read inside it hands
+    // the same id to two entries — which shows up as duplicate React keys.
     logId.current += 1
-    setLog(prev => [...prev.slice(-49), { id: logId.current, tone, text }])
+    const id = logId.current
+    setLog(prev => [...prev.slice(-49), { id, tone, text }])
   }
 
   // Ghost members: saved but resolving to no local sign-in. They MUST still
@@ -306,16 +335,18 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   // Dirty compares enabled / targetModelId / membership ids ORDER-INSENSITIVELY (#3).
   const dirty = enabled !== saved.enabled
     || (targetModelId ?? '') !== (saved.targetModelId ?? '')
+    || probeInputTokens !== saved.probeInputTokens
     || !sameIds([...selected], saved.memberAccountIds)
 
   const writable = settingsScope?.getSnapshot().writable === true
 
   // Reset the draft when the saved preferences change identity (after a save or
   // a settings re-read elsewhere).
-  const savedKey = useMemo(() => `${panel}:${saved.enabled}:${saved.targetModelId ?? ''}:${[...(saved.memberAccountIds ?? [])].sort().join('\u0000')}`, [panel, saved])
+  const savedKey = useMemo(() => `${panel}:${saved.enabled}:${saved.targetModelId ?? ''}:${saved.probeInputTokens}:${[...(saved.memberAccountIds ?? [])].sort().join('\u0000')}`, [panel, saved])
   useEffect(() => {
     setEnabled(saved.enabled)
     setTargetModelId(saved.targetModelId ?? '')
+    setProbeInputTokens(saved.probeInputTokens)
     setSelected(new Set(saved.memberAccountIds ?? []))
     setSaveError(undefined)
   }, [savedKey]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -337,6 +368,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   const discard = () => {
     setEnabled(saved.enabled)
     setTargetModelId(saved.targetModelId ?? '')
+    setProbeInputTokens(saved.probeInputTokens)
     setSelected(new Set(saved.memberAccountIds ?? []))
     setSaveError(undefined)
     pushLog('info', t('row.poolLogDiscarded'))
@@ -352,6 +384,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         enabled,
         ...(targetModelId === '' ? {} : { targetModelId }),
         memberAccountIds: [...selected],
+        probeInputTokens,
       }
       await writeSettingsField(
         settingsScope,
@@ -362,6 +395,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           return readPool.enabled === (next.enabled ?? false)
             && sameIds(readPool.memberAccountIds, next.memberAccountIds)
             && (readPool.targetModelId ?? '') === (next.targetModelId ?? '')
+            && (readPool.probeInputTokens ?? 0) === probeInputTokens
         },
       )
       pushLog('ok', t('row.poolLogSaved'))
@@ -656,6 +690,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           <span className="dsm-trae-pool-set-ctl">
           <select
             className="dsm-trae-select"
+            aria-label={t('row.poolTargetLabel')}
             value={targetModelId}
             disabled={busy !== undefined || !writable}
             onChange={(e) => { setTargetModelId(e.target.value) }}
@@ -685,13 +720,52 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             ? <p className="dsm-trae-pool-target-none" role="status">{t('row.poolTargetNone')} — {t('row.poolTargetNoneHint')}</p>
             : null}
 
+        <div className="dsm-trae-pool-set">
+          <span className="dsm-trae-pool-set-copy">
+            <b>{t('row.poolProbeSizeLabel')}</b>
+            <span>{t('row.poolProbeSizeHint')}</span>
+          </span>
+          <span className="dsm-trae-pool-set-ctl">
+            <select
+              className="dsm-trae-select"
+              aria-label={t('row.poolProbeSizeLabel')}
+              value={String(probeInputTokens)}
+              disabled={busy !== undefined || !writable}
+              onChange={(e) => { setProbeInputTokens(Number(e.target.value)) }}
+            >
+              {PROBE_INPUT_TOKEN_CHOICES.map(choice => (
+                <option key={choice} value={String(choice)}>
+                  {choice === 0
+                    ? t('row.poolProbeSizeDefault')
+                    : t('row.poolProbeSizeOption', { wan: choice / 10_000 })}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+
+        {/* The problem, if the last save failed. Inside the box: it belongs to the
+            thing that failed to be written. */}
         {saveError === undefined ? null : <p className="dsm-trae-pool-save-error" role="alert">{saveError}</p>}
-        <div className="dsm-trae-pool-settings-save">
+        </div>
+
+        {/* Save bar OUTSIDE the preference box, on the line below it: the two
+            buttons apply to everything above, so they must not look like a row of
+            the box they would be the last row of. The star link sits on the left
+            of the same line, where the sibling card keeps it. */}
+        <div className="dsm-trae-pool-save-row">
+          <a
+            className="dsm-trae-pool-star"
+            href="https://github.com/dingminhua/dsh-connect-trae"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {t('row.poolStar')} ★
+          </a>
           <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || busy !== undefined} onClick={discard}>{t('row.poolDiscard')}</button>
           <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || busy !== undefined} onClick={() => { void save() }}>
             {busy === 'save' ? t('row.poolSaving') : t('row.poolSaved')}
           </button>
-        </div>
         </div>
       </div>
 

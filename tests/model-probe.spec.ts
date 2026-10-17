@@ -142,10 +142,32 @@ describe('classifyProbeResult', () => {
 describe('probeOneModel', () => {
   it('sends a minimal one-word prompt and no tools', () => {
     const body = JSON.parse(probeBody('glm-5.2')) as Record<string, unknown>
+    // The default probe is still the one-word request: padding spends credit and
+    // must be an explicit choice.
     expect(body['model']).toBe('glm-5.2')
     expect(body['messages']).toEqual([{ role: 'user', content: 'ping' }])
     expect(body).not.toHaveProperty('tools')
     expect(JSON.stringify(body).length).toBeLessThan(200)
+  })
+
+  it('pads the probe to the requested size and caps it', () => {
+    const contentOf = (tokens: number): string => {
+      const body = JSON.parse(probeBody('glm-5.2', tokens)) as { messages: { content: string }[] }
+      return body.messages[0]?.content ?? ''
+    }
+    // Roughly one token per `x`, so 2k tokens is ~4k characters of padding.
+    const padded = contentOf(2_000)
+    expect(padded.length).toBeGreaterThan(3_900)
+    expect(padded.length).toBeLessThan(4_200)
+    // A hand-edited config cannot turn one click into a multi-megabyte upload.
+    expect(contentOf(10_000_000).length).toBeLessThan(210_000)
+    // Junk degrades to the minimal probe instead of throwing.
+    expect(contentOf(Number.NaN)).toBe('ping')
+    expect(contentOf(-5)).toBe('ping')
+    // Padding never changes the model or adds tools: it is the same call, bigger.
+    const body = JSON.parse(probeBody('glm-5.2', 1_000)) as Record<string, unknown>
+    expect(body['model']).toBe('glm-5.2')
+    expect(body).not.toHaveProperty('tools')
   })
 
   it('records the model id alongside the verdict', async () => {

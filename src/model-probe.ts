@@ -167,9 +167,36 @@ async function readProbeOutput(response: Response): Promise<{ output: boolean; e
   }
 }
 
-/** The minimal chat call one probe makes. */
-export function probeBody(model: string): string {
-  return JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }] })
+/**
+ * The chat call one probe makes.
+ *
+ * `inputTokens` pads the user turn so the probe carries roughly as much text as
+ * a real conversation. Size matters because an upstream that refuses LARGE
+ * requests will happily answer a one-word probe, and a verdict earned by a
+ * 1-token request says nothing about the 30k-token turn the user is about to
+ * send. `0` keeps the historical minimal probe (one word) — that is the default
+ * because it spends the least credit and answers the question the pool ranks on
+ * ("can this account talk at all").
+ *
+ * The filler is `x` words: one ASCII word is about one token, so the body size
+ * is predictable (tokens ≈ inputTokens × 2 characters) without a tokenizer.
+ */
+/**
+ * The largest probe this plugin will pad.
+ *
+ * A 100k-token probe is already ~200 KB of JSON; anything above that is a request
+ * the user's real turn would not plausibly reach in this product, and a config
+ * file edited by hand must not turn one "test all" click into a multi-megabyte
+ * upload.
+ */
+export const MAX_PROBE_INPUT_TOKENS = 100_000
+
+export function probeBody(model: string, inputTokens = 0): string {
+  const padded = Math.min(Math.max(0, Math.floor(inputTokens)), MAX_PROBE_INPUT_TOKENS)
+  const content = padded > 0
+    ? `ping ${'x '.repeat(padded).trimEnd()}`
+    : 'ping'
+  return JSON.stringify({ model, messages: [{ role: 'user', content }] })
 }
 
 /**
@@ -181,11 +208,12 @@ export async function probeOneModel(
   chat: (body: string, signal?: AbortSignal) => Promise<TraeChatResult>,
   id: string,
   timeoutMs = TRAE_PROBE_TIMEOUT_MS,
+  inputTokens = 0,
 ): Promise<TraeProbeResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const result = await chat(probeBody(id), controller.signal)
+    const result = await chat(probeBody(id, inputTokens), controller.signal)
     if (!result.ok) return { id, ...classifyProbeResult(result, false) }
     const { output, error } = await readProbeOutput(result.response)
     if (error !== undefined) return { id, ...classifyProbeError(error.message) }

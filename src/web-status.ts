@@ -818,6 +818,7 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
     checkinSupported: pool.checkin !== undefined && regionOfPanel(panel) === 'cn',
     ...target.modelId === undefined ? {} : { targetModelId: target.modelId },
     targetModelSource: target.source,
+    probeInputTokens: Math.max(0, preferences.probeInputTokens ?? 0),
     ...target.staleModelId === undefined ? {} : { staleTargetModelId: target.staleModelId },
     ...preferences.memberAccountIds === undefined ? {} : { memberAccountIds: preferences.memberAccountIds },
     effectiveMemberAccountIds,

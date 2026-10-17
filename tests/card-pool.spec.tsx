@@ -88,7 +88,7 @@ function regionsOf(cnSlotPool: { enabled?: boolean; targetModelId?: string; memb
 
 /** A settings document whose cn panel already saved a pool membership. */
 function pooledInitial(
-  poolPrefs: { enabled: boolean; targetModelId?: string; memberAccountIds: string[] },
+  poolPrefs: { enabled: boolean; targetModelId?: string; memberAccountIds: string[]; probeInputTokens?: number },
 ): Record<string, unknown> {
   return regionsOf({ ...poolPrefs })
 }
@@ -100,6 +100,7 @@ const MODELS: TraeWebModel[] = [
 
 interface PoolOverride {
   checkinSupported?: boolean
+  probeInputTokens?: number
   targetModelId?: string
   staleTargetModelId?: string
   targetModelSource?: TraeWebPool['targetModelSource']
@@ -136,6 +137,7 @@ function basePool(overrides: PoolOverride = {}): TraeWebPool {
     checkinSupported: overrides.checkinSupported ?? true,
     ...(overrides.targetModelId === undefined ? {} : { targetModelId: overrides.targetModelId }),
     targetModelSource: overrides.targetModelSource ?? 'preferred',
+    probeInputTokens: overrides.probeInputTokens ?? 0,
     ...(overrides.staleTargetModelId === undefined ? {} : { staleTargetModelId: overrides.staleTargetModelId }),
     memberAccountIds: overrides.memberAccountIds ?? ['acc-a', 'acc-b'],
     effectiveMemberAccountIds: ['acc-a', 'acc-b'],
@@ -296,7 +298,7 @@ describe('AccountPool card section', () => {
     }), scope)
 
     // The controlled select shows the saved/reported model id, NOT automatic.
-    const select = within(poolSection()).getByRole('combobox') as HTMLSelectElement
+    const select = within(poolSection()).getByRole('combobox', { name: 'row.poolTargetLabel' }) as HTMLSelectElement
     expect(select.value).toBe('retired-model')
     // The stale model also appears as a selectable option.
     expect(within(select).getByRole('option', { name: 'row.poolTargetStaleOption:{\"model\":\"retired-model\"}' })).toBeTruthy()
@@ -304,6 +306,32 @@ describe('AccountPool card section', () => {
     // Back-to-automatic removes the stale slot.
     fireEvent.click(clearTargetButton())
     expect(select.value).toBe('')
+  })
+
+  it('saves the probe size choice and treats it as a draft like every other preference', async () => {
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool(), scope)
+
+    const select = within(poolSection()).getByRole('combobox', { name: 'row.poolProbeSizeLabel' }) as HTMLSelectElement
+    // 0 (minimal) is a REAL choice, not "unset": the select must show it, not fall
+    // back to whatever the document's default happens to be.
+    expect(select.value).toBe('0')
+
+    fireEvent.change(select, { target: { value: '50000' } })
+    // A draft change alone writes nothing.
+    expect(calls.length).toBe(0)
+    expect(select.value).toBe('50000')
+
+    fireEvent.click(saveButton())
+    await waitFor(() => { expect(calls.length).toBe(1) })
+    const written = calls[0]!.value as { cn?: { pool?: { probeInputTokens?: number } } }
+    expect(written.cn?.pool?.probeInputTokens).toBe(50000)
+
+    // Discard puts the saved value back.
+    fireEvent.change(select, { target: { value: '10000' } })
+    expect(select.value).toBe('10000')
+    fireEvent.click(within(poolSection()).getByRole('button', { name: 'row.poolDiscard' }))
+    expect((within(poolSection()).getByRole('combobox', { name: 'row.poolProbeSizeLabel' }) as HTMLSelectElement).value).toBe('50000')
   })
 
   it('omits the check-in column when checkinSupported is false', () => {

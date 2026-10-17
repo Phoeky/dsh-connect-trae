@@ -144,6 +144,15 @@ describe('traeWebPool', () => {
     return doc
   }
 
+  it('reports the saved probe size, and 0 when the field was never touched', async () => {
+    // The card needs a number to show in the select; an absent field means the
+    // historical minimal probe, not "whatever the last default was".
+    expect((await docOf(deps())).probeInputTokens).toBe(0)
+    expect((await docOf(deps({ preferences: () => ({ enabled: true, memberAccountIds: [A], probeInputTokens: 30_000 }) }))).probeInputTokens).toBe(30_000)
+    // A hand-edited negative value must not become a negative padding.
+    expect((await docOf(deps({ preferences: () => ({ enabled: true, memberAccountIds: [A], probeInputTokens: -3 }) }))).probeInputTokens).toBe(0)
+  })
+
   it('ranks members best-first and marks the one currently billed', async () => {
     const pool = await docOf(deps())
     // Nothing is expiring, so the larger balance leads — conserving the small one.

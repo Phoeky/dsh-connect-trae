@@ -40,7 +40,7 @@ import { createTraeRawGateway } from './raw-gateway.ts'
 import { resolveTraeRawRuntime } from './raw-resolver.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
-import { probeBody, probeModelsSequentially, probeOneModel } from './model-probe.ts'
+import { MAX_PROBE_INPUT_TOKENS, probeBody, probeModelsSequentially, probeOneModel } from './model-probe.ts'
 import { TraeUsageClient } from './usage.ts'
 import { registerTraeUsageRoute, toCheckin, toCredits, type TraePoolCheckinState, type TraePoolDeps } from './web-status.ts'
 import type { TraePoolPreferences } from './status-paths.ts'
@@ -155,7 +155,7 @@ export {
 import type { TraeCreditPosition } from './status-paths.ts'
 export { createTraeShim, type TraeShim } from './shim.ts'
 export { UnconfiguredTraeUpstreamClient, type TraeChatResult, type TraeUpstreamClient } from './upstream.ts'
-export { classifyProbeError, classifyProbeResult, probeBody, probeModelsSequentially, probeOneModel, TRAE_PROBE_TIMEOUT_MS, type TraeProbeResult, type TraeProbeVerdict } from './model-probe.ts'
+export { classifyProbeError, classifyProbeResult, MAX_PROBE_INPUT_TOKENS, probeBody, probeModelsSequentially, probeOneModel, TRAE_PROBE_TIMEOUT_MS, type TraeProbeResult, type TraeProbeVerdict } from './model-probe.ts'
 export { TRAE_MODELS_TEST_PATH, type TraeModelsTestResponse, type TraeModelProbeVerdict } from './status-paths.ts'
 
 export const name = 'dsh-connect-trae'
@@ -482,6 +482,9 @@ const regionStateConfig = z.object({
     enabled: z.boolean().default(false).description('账号池：打开后本面板由池中可用账号轮流计费（关闭时按下面的绑定账号）'),
     targetModelId: z.string().default('').description('账号池测速使用的模型 id（留空 = 自动选择免费模型）'),
     memberAccountIds: z.array(z.string()).default([]).description('加入本面板账号池的账号 id（显式勾选，默认为空）'),
+    // 0 = the historical one-word probe. A larger value pads the probe request so
+    // a size-based refusal shows up in the test instead of in the user's real turn.
+    probeInputTokens: z.number().default(0).description('账号池测试请求填充的 token 量（0 = 最小请求，不填充）'),
   }).default({}),
 })
 
@@ -1505,13 +1508,18 @@ export function apply(ctx: Context, config: Config): void {
       },
       chatFor: credential => chatBridgeFor(traeAccountId(credential)),
     })
+    /** How much text a probe should carry for this panel (0 = the minimal probe). */
+    const probeInputTokensOf = (stored: TraePanel): number => {
+      const tokens = poolPreferencesOf(stored).probeInputTokens
+      return typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0 ? Math.min(tokens, MAX_PROBE_INPUT_TOKENS) : 0
+    }
     /** One account's row, through the same bridge and probe the batch uses. */
-    const testWith = async (target: { accountId: string; accountName: string }, modelId: string): Promise<TraePoolTestRow> => {
+    const testWith = async (target: { accountId: string; accountName: string }, modelId: string, probeInputTokens: number): Promise<TraePoolTestRow> => {
       const [row] = await testAllAccounts([target], modelId, (chatFor, credential, id) => {
         if (credential === undefined) {
           return Promise.resolve({ id, verdict: 'auth' as const, detail: 'no stored credential for this account' })
         }
-        return probeOneModel(chatFor(credential), id)
+        return probeOneModel(chatFor(credential), id, undefined, probeInputTokens)
       }, probeDeps())
       return row as TraePoolTestRow
     }
@@ -1551,6 +1559,7 @@ export function apply(ctx: Context, config: Config): void {
         return state
       },
       test: async (stored, modelId, onRow) => {
+        const probeInputTokens = probeInputTokensOf(stored)
         const rows = await testAllAccounts(
           await poolTargetsOf(stored),
           modelId,
@@ -1558,7 +1567,7 @@ export function apply(ctx: Context, config: Config): void {
             if (credential === undefined) {
               return Promise.resolve({ id, verdict: 'auth' as const, detail: 'no stored credential for this account' })
             }
-            return probeOneModel(chatFor(credential), id)
+            return probeOneModel(chatFor(credential), id, undefined, probeInputTokens)
           },
           probeDeps(),
           onRow,
@@ -1572,7 +1581,7 @@ export function apply(ctx: Context, config: Config): void {
         const model = resolveTargetModel(poolCatalogOf(stored), poolPreferencesOf(stored).targetModelId)
         if (model.modelId === undefined) return undefined
         const names = await poolMemberNamesOf(stored)
-        const row = await testWith({ accountId, accountName: names[accountId] ?? '' }, model.modelId)
+        const row = await testWith({ accountId, accountName: names[accountId] ?? '' }, model.modelId, probeInputTokensOf(stored))
         await writeTraePoolProbes(poolKeyOfPanel(stored), probeUpdatesOf([row]))
         return row
       },

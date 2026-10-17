@@ -443,7 +443,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-pool-subnote{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-select-actions{display:flex;flex:none;gap:6px}
-.dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-settings-save .dsm-btn{padding:2px 10px;font-size:12px}
+.dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-save-row .dsm-btn{padding:2px 10px;font-size:12px}
 .dsm-trae-pool-table{--dsm-trae-pool-cols:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-pool-table-no-checkin{--dsm-trae-pool-cols:minmax(0,1.5fr) 74px minmax(0,1.3fr) 132px}
 .dsm-trae-pool-row{display:grid;grid-template-columns:var(--dsm-trae-pool-cols);align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
@@ -509,7 +509,8 @@ export const TRAE_CARD_CSS = `
 /* "Every member is unusable" is the one case that IS the pool's fault, so it
    keeps the warn tone the base class sets. */
 .dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
-.dsm-trae-pool-settings-save{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-pool-save-row{display:flex;align-items:center;gap:8px;margin-top:10px}
+.dsm-trae-pool-star{margin-inline-end:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);text-decoration:none}
 .dsm-trae-pool-dirty{padding:0 6px;border-radius:999px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:10px;line-height:16px}
 .dsm-trae-pool-save-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-target{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
