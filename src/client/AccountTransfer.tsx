@@ -59,6 +59,12 @@ export interface AccountTransferProps {
    * page was closed and reopened.
    */
   onChanged?: () => void | Promise<unknown>
+  /**
+   * Drop the section's own heading. The pool's tool row already prints a
+   * label for this control, and two headings over one pair of buttons read as
+   * duplicated information.
+   */
+  hideLabel?: boolean
 }
 
 /** Build the default export file name: trae-accounts-YYYY-MM-DD.json. */
@@ -89,7 +95,7 @@ async function settlesWithin(value: void | Promise<unknown>, timeoutMs: number):
   ])
 }
 
-export function AccountTransfer({ t, region, accounts, onChanged }: AccountTransferProps): ReactElement {
+export function AccountTransfer({ t, region, accounts, onChanged, hideLabel = false }: AccountTransferProps): ReactElement {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [dialog, setDialog] = useState<'export' | 'import' | undefined>(undefined)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
@@ -209,7 +215,7 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
   return (
     <section className="dsm-trae-transfer" aria-label={t('row.transferTitle')}>
       <BusyOverlay visible={busy} message={veilMessage} {...busy ? { hint: t('row.transferVeilHint') } : {}} />
-      <p className="dsm-trae-transfer-label">{t('row.transferTitle')}</p>
+      {hideLabel ? null : <p className="dsm-trae-transfer-label">{t('row.transferTitle')}</p>}
       {phase.kind === 'done'
         ? <p className="dsm-trae-transfer-status dsm-trae-transfer-ok">{phase.message}</p>
         : phase.kind === 'error'

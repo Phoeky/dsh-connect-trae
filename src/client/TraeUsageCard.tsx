@@ -1736,6 +1736,9 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                             <span className="dsm-trae-pool-tool-label">{t('row.poolToolsLabel')}</span>
                             <AccountTransfer
                               t={t}
+                              // The row already carries its own label; the
+                              // section's heading would be a second one.
+                              hideLabel
                               region={activeRegion === 'ai' ? 'ai' : 'cn'}
                               accounts={status.accounts.map(account => ({ id: account.id, accountName: account.accountName }))}
                               onChanged={async () => {
