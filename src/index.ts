@@ -1028,11 +1028,13 @@ export function apply(ctx: Context, config: Config): void {
        * A throwaway client is used on purpose: the shared `usageClient` reads
        * `store.resolve()`, which is bound to the selected account, and calling
        * `selectAccount` to look at a neighbour would both race concurrent chat
-       * requests and persist a switch the user never made. A stale token simply
-       * fails here and the account is left out of the answer.
+       * requests and persist a switch the user never made. The credential is
+       * resolved (not merely looked up) so an account whose short-lived access
+       * token lapsed overnight still answers: its refresh token is good for
+       * months, and reporting `—` for a recoverable account is a lie.
        */
       creditsOfAccount: async (accountId: string) => {
-        const credential = await store.credentialOf(accountId)
+        const credential = await store.resolveCredentialOf(accountId)
         if (credential === undefined) return undefined
         const snapshot = await new TraeUsageClient({ credential: async () => credential }).snapshot()
         return toCredits(snapshot)
@@ -1049,7 +1051,7 @@ export function apply(ctx: Context, config: Config): void {
         const client = bound
           ? usageClient
           : (() => {
-            const credential = store.credentialOf(accountId)
+            const credential = store.resolveCredentialOf(accountId)
             return new TraeUsageClient({
               credential: async () => credential,
               deviceId: async () => (await identity()).deviceId,
@@ -1074,7 +1076,7 @@ export function apply(ctx: Context, config: Config): void {
         const client = bound
           ? usageClient
           : (() => {
-            const credential = store.credentialOf(accountId)
+            const credential = store.resolveCredentialOf(accountId)
             return new TraeUsageClient({
               credential: async () => credential,
               deviceId: async () => (await identity()).deviceId,
@@ -1381,7 +1383,7 @@ export function apply(ctx: Context, config: Config): void {
     const accountId = next.id
     const client = new TraeSoloUpstreamClient({
       credential: async () => {
-        const credential = await stack.store.credentialOf(accountId)
+        const credential = await stack.store.resolveCredentialOf(accountId)
         if (credential === undefined) throw new Error(`no stored credential for account ${accountId}`)
         return credential
       },
@@ -1476,7 +1478,7 @@ export function apply(ctx: Context, config: Config): void {
       const stack = stacks[panel]
       const client = new TraeSoloUpstreamClient({
         credential: async () => {
-          const credential = await stack.store.credentialOf(accountId)
+          const credential = await stack.store.resolveCredentialOf(accountId)
           if (credential === undefined) throw new Error(`no stored credential for account ${accountId}`)
           return credential
         },
@@ -1492,7 +1494,7 @@ export function apply(ctx: Context, config: Config): void {
       return chat
     }
     const probeDeps = (): TraePoolRunnerDeps => ({
-      credentialFor: accountId => stacks[panel].store.credentialOf(accountId),
+      credentialFor: accountId => stacks[panel].store.resolveCredentialOf(accountId),
       checkinStatusOf: async credential => {
         const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[panel].identity()).deviceId })
         return client.checkinStatus()
@@ -1536,7 +1538,7 @@ export function apply(ctx: Context, config: Config): void {
       checkinState: async stored => {
         const state: Record<string, TraePoolCheckinState> = {}
         for (const target of await poolTargetsOf(stored)) {
-          const credential = await stacks[stored].store.credentialOf(target.accountId)
+          const credential = await stacks[stored].store.resolveCredentialOf(target.accountId)
           if (credential === undefined) continue
           const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[stored].identity()).deviceId })
           try {

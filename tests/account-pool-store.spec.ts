@@ -254,3 +254,34 @@ describe('traeWebPool', () => {
     expect(row?.expiringSoon).toBe(3)
   })
 })
+
+describe('traeWebPool token state', () => {
+  const LATER = Date.now() + 3_600_000
+  const SOONER = Date.now() - 1_000
+  const panel: TraePanel = 'cn'
+  const docOf = async (members: TraePoolDeps['members']) => {
+    const bag = {
+      preferences: () => ({ enabled: true, memberAccountIds: [A, B] }),
+      members,
+      catalog: () => [],
+      checkinSupported: () => false,
+      otherAccounts: async () => [{ id: A, accountName: 'A' }, { id: B, accountName: 'B' }],
+    } as unknown as TraePoolDeps
+    const doc = await traeWebPool({ pool: bag } as unknown as TraeUsageRouteOptions, panel)
+    if (doc === undefined) throw new Error('expected a pool document')
+    return doc
+  }
+
+  it('explains a dash caused by a lapsed sign-in instead of leaving it bare', async () => {
+    const pool = await docOf(async () => [
+      { account: { id: A, accountName: 'A' }, credits: { total: 5, expiringSoon: 0 }, tokenExpiresAtMs: LATER },
+      { account: { id: B, accountName: 'B' }, tokenExpiresAtMs: SOONER },
+    ])
+    const lapsed = pool.accounts.find(row => row.accountId === B)
+    const healthy = pool.accounts.find(row => row.accountId === A)
+    expect(lapsed?.tokenExpired).toBe(true)
+    // No balance was readable, so the row must not pretend it has credit either.
+    expect(lapsed?.credits).toBeUndefined()
+    expect(healthy?.tokenExpired).toBeUndefined()
+  })
+})

@@ -3,7 +3,7 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TraeCredentialStore } from '../src/auth.ts'
+import { TraeCredentialStore, type TraeCredential, type TraeRefreshOutcome } from '../src/auth.ts'
 import { TraeCatalog } from '../src/catalog.ts'
 import { createTraeShim, type TraeShim, type TraeShimPool } from '../src/shim.ts'
 import type { TraeChatResult, TraeUpstreamClient } from '../src/upstream.ts'
@@ -53,7 +53,12 @@ function ownDocument(entries: readonly { userId: string; token: string }[]): str
  * The binding is what a settings save writes; the rotation is what the pool
  * decides per request. Every test here keeps them distinguishable.
  */
-async function twoAccountStore(options: { bind?: 'alpha' | 'beta'; requireTenant?: boolean; expiredTokens?: readonly string[] }): Promise<{
+async function twoAccountStore(options: {
+  bind?: 'alpha' | 'beta'
+  requireTenant?: boolean
+  expiredTokens?: readonly string[]
+  refresh?: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
+}): Promise<{
   store: TraeCredentialStore
   idOf: (name: 'alpha' | 'beta') => string
 }> {
@@ -89,9 +94,9 @@ async function twoAccountStore(options: { bind?: 'alpha' | 'beta'; requireTenant
     storagePath: join(dir, 'none.json'),
     ...options.bind === undefined ? {} : { accountId: idOf(options.bind) },
     ...options.requireTenant === true ? { requireTenant: true } : {},
-    refresh: async credential => {
+    refresh: options.refresh ?? (async credential => {
       throw new Error(`unexpected refresh for ${credential.accountName}`)
-    },
+    }),
   })
   return { store, idOf }
 }
@@ -348,5 +353,89 @@ describe('shim failover across pooled accounts', () => {
     expect(response.status).toBe(429)
     expect(route.state.calls).toBe(1)
     expect(response.body).toContain('no credit left')
+  })
+})
+
+/**
+ * Reading a POOLED account that the user did not bind.
+ *
+ * The card reads every member's balance, and a member's access token lapses
+ * within days while its refresh token lives for months. `credentialOf` returns
+ * that lapsed token as-is, which is right for a chat request but wrong for a
+ * balance read: it turned a recoverable account into a bare dash.
+ */
+describe('per-account credential refresh', () => {
+  it('refreshes a lapsed, unbound account and leaves the binding alone', async () => {
+    const refreshed: string[] = []
+    const { store, idOf } = await twoAccountStore({
+      bind: 'alpha',
+      expiredTokens: ['beta'],
+      refresh: async credential => {
+        refreshed.push(credential.accountName ?? '')
+        return { accessToken: 'tb-fresh', expiresAtMs: Date.now() + 3_600_000 }
+      },
+    })
+
+    const credential = await store.resolveCredentialOf(idOf('beta'))
+
+    expect(credential?.accessToken).toBe('tb-fresh')
+    expect(refreshed).toEqual(['beta'])
+    // The read must not decide who bills: alpha is still bound, and no rotation
+    // was invented just because beta was refreshed.
+    expect((await store.resolve()).accessToken).toBe('ta')
+    expect(store.rotatedAccount()).toBeUndefined()
+    expect((await store.accounts()).find(account => account.accountName === 'alpha')?.selected).toBe(true)
+  })
+
+  it('returns a fresh credential untouched, without spending a refresh', async () => {
+    let refreshes = 0
+    const { store, idOf } = await twoAccountStore({
+      bind: 'alpha',
+      refresh: async () => {
+        refreshes += 1
+        return { accessToken: 'unused', expiresAtMs: Date.now() + 3_600_000 }
+      },
+    })
+
+    expect((await store.resolveCredentialOf(idOf('beta')))?.accessToken).toBe('tb')
+    expect(refreshes).toBe(0)
+  })
+
+  it('single-flights the refresh of one account', async () => {
+    let refreshes = 0
+    const { store, idOf } = await twoAccountStore({
+      expiredTokens: ['beta'],
+      refresh: async () => {
+        refreshes += 1
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { accessToken: 'tb-fresh', expiresAtMs: Date.now() + 3_600_000 }
+      },
+    })
+
+    const [first, second] = await Promise.all([
+      store.resolveCredentialOf(idOf('beta')),
+      store.resolveCredentialOf(idOf('beta')),
+    ])
+
+    expect(first?.accessToken).toBe('tb-fresh')
+    expect(second?.accessToken).toBe('tb-fresh')
+    expect(refreshes).toBe(1)
+  })
+
+  it('hands back the stored credential when the refresh fails', async () => {
+    const { store, idOf } = await twoAccountStore({
+      expiredTokens: ['beta'],
+      refresh: async () => { throw new Error('exchange rejected') },
+    })
+
+    // Not a throw: the caller then reports the 401 it actually hit instead of
+    // claiming the account does not exist.
+    const credential = await store.resolveCredentialOf(idOf('beta'))
+    expect(credential?.accessToken).toBe('tb')
+  })
+
+  it('does not invent an account for an unknown id', async () => {
+    const { store } = await twoAccountStore({})
+    expect(await store.resolveCredentialOf('000000000000000000000000')).toBeUndefined()
   })
 })

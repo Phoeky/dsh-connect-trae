@@ -797,6 +797,11 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
             {checked ? t('row.poolMember') : t('row.poolNotMember')}
           </span>
           {excluded ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span> : null}
+          {/* A lapsed access token explains the empty credit cell: the balance
+              is not zero, it is unreadable until the user signs in again. */}
+          {account.tokenExpired === true
+            ? <span className="dsm-trae-pool-warn-tag dsm-trae-pool-warn-tag-lapsed">{t('row.poolTokenExpired')}</span>
+            : null}
         </span>
         {/* Absolute time of the last probe. The model cell says how long ago;
             this says when, which is what people compare across rows. */}

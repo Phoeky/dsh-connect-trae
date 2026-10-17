@@ -734,6 +734,13 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
   // also the reachability set — one definition, used by the row and by
   // `effectiveMemberAccountIds` alike.
   const reachableIds = new Set(members.map(member => member.account.id))
+  // Which accounts' ACCESS token has lapsed. Their balance read fails for a
+  // reason the user can act on, so the row says so instead of showing a bare dash
+  // that reads like "zero credit".
+  const tokenExpiresById = new Map<string, number>()
+  for (const member of members) {
+    if (member.tokenExpiresAtMs !== undefined) tokenExpiresById.set(member.account.id, member.tokenExpiresAtMs)
+  }
   const accounts: TraeWebPoolAccount[] = rows.map(row => {
     const entry = byId.get(row.account.id)
     const measured = entry?.probe
@@ -766,6 +773,7 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
         },
       },
       ...excludedBy === undefined ? {} : { excludedBy },
+      ...(tokenExpiresById.get(row.account.id) ?? Infinity) <= nowMs ? { tokenExpired: true } : {},
       current: currentAccountId !== undefined && currentAccountId === row.account.id,
       member: row.member,
       reachable: reachableIds.has(row.account.id),

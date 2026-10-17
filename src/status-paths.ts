@@ -193,6 +193,15 @@ export interface TraeWebPoolAccount {
   /** When the nearest pack lapses, epoch ms. */
   nearestExpiryMs?: number
   /**
+   * This account's stored access token has lapsed, so its balance cannot be read
+   * until it is refreshed or the user signs in again.
+   *
+   * A reason for the dash, not a second dash: without it "0 credit" and "cannot
+   * read the balance" look identical on the card, and only one of them is the
+   * user's problem to fix.
+   */
+  tokenExpired?: boolean
+  /**
    * The last test of this account, absent when never tested.
    *
    * `modelId` lives INSIDE the measurement rather than being assumed from the

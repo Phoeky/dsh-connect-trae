@@ -324,6 +324,15 @@ export class TraeCredentialStore {
   private readonly refreshMarginMs: number
   private inflight: Promise<TraeCredential> | undefined
   /**
+   * In-flight refreshes of individual accounts, one per account id.
+   *
+   * The card reads every member's balance in one poll and each balance can
+   * decide to refresh, so without this dedupe the same account would exchange
+   * its token several times in a second and the last writer would win over a
+   * copy another read already holds.
+   */
+  private readonly inflightByAccount = new Map<string, Promise<TraeCredential>>()
+  /**
    * The account the NEXT request should bill, when a pool — not the user's
    * binding — is choosing (issue #44).
    *
@@ -650,6 +659,34 @@ export class TraeCredentialStore {
     if (accountId === '') return undefined
     const credentials = await this.readAll()
     return credentials.find(credential => traeAccountId(credential) === accountId)
+  }
+
+  /**
+   * A SPECIFIC account's credential, refreshed when its access token is due.
+   *
+   * {@link credentialOf} is a pure lookup and hands back an expired token as-is,
+   * which is right for the chat path (that request fails honestly) but wrong for
+   * a READ of that account's own data: Trae's access token lives for days while
+   * the refresh token lives for months, so a pooled account the user has not
+   * used this week reads as "no balance" — the card showed a bare `—` for an
+   * account whose refresh token was still good. Only the refresh margin decides
+   * here, and a FAILED refresh still yields the stored credential so the caller
+   * reports the failure it actually hit instead of inventing "not signed in".
+   *
+   * This never touches the binding or the rotation: refreshing account B must
+   * not make B the account the next chat request bills.
+   */
+  async resolveCredentialOf(accountId: string): Promise<TraeCredential | undefined> {
+    const credential = await this.credentialOf(accountId)
+    if (credential === undefined) return undefined
+    if (credential.expiresAtMs > Date.now() + this.refreshMarginMs) return credential
+    const pending = this.inflightByAccount.get(accountId)
+    if (pending !== undefined) return pending
+    const attempt = this.refreshNow(credential)
+      .catch(() => credential)
+      .finally(() => { this.inflightByAccount.delete(accountId) })
+    this.inflightByAccount.set(accountId, attempt)
+    return attempt
   }
 
   /**
