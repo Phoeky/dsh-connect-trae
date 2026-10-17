@@ -1,5 +1,58 @@
 # Changelog
 
+## 3.7.1 (2026-10-18)
+
+> **对齐 DSH 0.2.1-rc.2，并把发布后核验收敛为一条命令。** 宿主 rc.1 → rc.2 对本插件消费的
+> API 是**零变化**（逐字节核对确认），所以本版没有行为改动——它做的是两件事：把开发树钉到
+> 用户实际运行的那份宿主上，以及让「npm 上的包是否等于 tag 指向的源码」不再依赖手工核对。
+
+### 变更
+
+- **对齐宿主 DSH 0.2.1-rc.2**：13 个 `@deepseek-ai/dsh-*` devDependency 从 `0.2.1-rc.1`
+  推进到 `0.2.1-rc.2`。`cordis` / `schemastery` / `pi-ai`（仍 `1.1.0`）均未变。
+- **peer 范围无需改动**：`0.2.1-rc.2` 对 `>=0.1.7-rc.1 <0.3.0-0` 已判通过（实测）。
+
+### 新增
+
+- **`pnpm run verify:release`**（`scripts/verify-release.mjs`）：把 RELEASING.md 第 8 步
+  从手工核验变成一条命令，21 项检查一次做完 —— tag 版本、tag 之后的提交、工作树状态、registry 收录、
+  `latest` 指向、**发布包每一个文件**与 tag 逐字节比对、`lib/` 由 tag 源码重建后比对。
+  退出码即结论：`0` 一致 / `1` 不一致 / `2` 前置条件不满足。
+
+  > 手工版本的三个已知盲点被闭合：核对清单只写了 8 个文件而发布包有 15 个
+  > （`icons/`、`docs/assets/`、`scripts/verify-windows.mjs` 从未被核对）；
+  > 拿本地 `lib/` 当基准会掩盖「构建自未提交工作树」；`git show` 默认按 UTF-8 解码，
+  > 把 PNG 当文本会得到假的不一致 —— 本脚本第一版就踩了这个坑，三个图片文件全部误报。
+
+### 文档
+
+- RELEASING.md 第 8 步改为脚本优先，手工等价步骤保留在折叠区并注明其局限。
+- **新增 `docs/PENDING_CHANGELOG.md` 暂存机制**：`CHANGELOG.md` 是随包文件，在已发布的 tag
+  之后改动它会让 `verify:release` 正确地报「tag 之后改动了发布内容」。未发布版本的条目因此
+  暂存在 `docs/`（`docs/*.md` 不进包），发版时并入 CHANGELOG 再删除。RELEASING.md 第 3 步
+  已加入对应指引。
+
+### 测试
+
+- `tests/dsh-peer-range.spec.ts` 的 `MUST_ADMIT` 补入 `0.2.1-rc.1` / `0.2.1-rc.2` / `0.2.1`。
+  此前这份「必须放行的版本」清单里**没有当前正在使用的版本**——范围若被误收窄到
+  当前宿主之外，测试仍会全绿。变异验证：把上界改到 `<0.2.1-rc.2` → 对应用例立刻变红。
+- 新增 7 例（`tests/verify-release.spec.ts`），用 PATH 上的假 `npm`/`tar` 提供受控发布包，
+  子进程跑**真脚本**：一致→0、篡改→1、多出文件→1、无 tag→2、未发布→2、二进制逐字节比对、
+  tag 之后有提交仍→0。
+- **变异验证**：把 `git show` 改回 UTF-8 解码 → 2 例变红；让比对恒返回「一致」→ 1 例变红。
+- 全仓 **670** 例通过。
+
+### 已核对确认无变化
+
+- 逐字节比对插件消费的宿主包（`.d.ts` 与 `lib/*.js`）——`dsh-llm`、`dsh-llm-pi-ai`、
+  `dsh-settings`、`dsh-host-webserver`、`dsh-atomic-write`、`dsh-home-paths`、
+  `dsh-attachment`、`dsh-client-ui-renderer`，以及 `dsh-app-boot` 的 peer 门禁：**全部相同**。
+- pi-ai 仍为 `1.1.0`，`openai-completions.js` 与 `utils/transcript.js` 未变，
+  上一轮的双向适配结论原样成立。
+- 线上请求体探针在真实 rc.2 栈上复跑，结果与 rc.1 一致。
+
+
 ## 3.7.0 (2026-10-17)
 
 > **对齐 DSH 0.2.1-rc.1。** 宿主把 `@earendil-works/pi-ai` 从 `^0.85.1` 抬到 `^1.1.0`，
