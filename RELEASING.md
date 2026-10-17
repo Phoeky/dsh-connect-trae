@@ -115,6 +115,29 @@ npm view dsh-connect-trae dist-tags.latest   # 应为 X.Y.Z
 确认「npm 上的包」确实等于「tag 指向的源码」——防止发布时工作树里有未提交改动、或包构建自别的提交：
 
 ```bash
+pnpm run verify:release          # 核验 package.json 里的当前版本
+pnpm run verify:release -- 3.7.0 # 核验指定版本（复查旧 tag 时用）
+```
+
+脚本（`scripts/verify-release.mjs`）一次做完四件事，共 20 项检查：
+
+1. **tag 指向 HEAD**，并报告工作树是否干净；
+2. **registry 上确有该版本**，且 `latest` 指向它；
+3. **发布包里的每一个文件**都与 `git show vX.Y.Z:<path>` 逐字节比对——
+   遍历**全部**文件而不是一份手工清单，因此新增的随包文件自动纳入；
+4. 对 `lib/`（构建产物，未纳入 git）**由 tag 源码重建后**比对。
+
+退出码即结论：`0` = 全部一致；`1` = 有不一致；`2` = 前置条件不满足（tag 不存在、
+registry 上查无此版本）——**`2` 不是「发不出去」，是「还查不了」**，两者不要混为一谈。
+
+> 本脚本**不进发布包**（`package.json` 的 `files` 不含 `scripts/verify-release.mjs`）：
+> 它核验的是本仓库的 tag 与 git 历史，对 npm 用户没有意义。相反的，
+> `scripts/verify-windows.mjs` 是**有意**随包分发的，供 Windows 用户做真机验证。
+
+<details>
+<summary>手工等价步骤（脚本不可用时）</summary>
+
+```bash
 # 1) 拉下已发布的包并解开
 cd /tmp && rm -rf verify && mkdir verify && cd verify
 npm pack dsh-connect-trae@X.Y.Z && tar -xzf dsh-connect-trae-X.Y.Z.tgz
@@ -138,6 +161,12 @@ done
 ```
 
 全部 `✓` 即发布链自洽（本仓库构建为确定性构建，同一源码重复构建产出相同文件）。
+
+> 手工版本有两个已知盲点，脚本已闭合：清单只写了 8 个文件，而发布包有 15 个
+> （`icons/`、`docs/assets/`、`scripts/verify-windows.mjs` 从未被核对过）；
+> 以及 `git show` 默认按 UTF-8 解码，直接把 PNG 当文本会得到假的不一致。
+</details>
+
 
 ### 9. 创建 GitHub Release
 
