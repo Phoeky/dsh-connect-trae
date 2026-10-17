@@ -44,6 +44,12 @@ grep -F "Copyright (c) 2026 LaoDing" LICENSE
 
 > ⚠️ **标题里的日期必须在打 tag 之前就填成实际发布日期**，不要留 `## X.Y.Z (unreleased)` 之类的占位——`CHANGELOG.md` 会随包发布到 npm，占位标题会原样进入用户可见的发布包。
 
+> 📌 **先看 `docs/PENDING_CHANGELOG.md`。** 上一个版本发布之后积压的变更条目暂存
+> 在那里（因为 `CHANGELOG.md` 是随包文件，在已发布的 tag 之后改它会让
+> `verify:release` 正确地报「tag 之后改动了发布内容」）。发版时把它的内容并进
+> `CHANGELOG.md` 的 `## X.Y.Z` 一节，然后删除该文件。没有这个文件就说明没有积压。
+
+
 ### 4. 提交并打 git tag
 
 **版本号、CHANGELOG 日期定稿、README 必须合并到同一个提交**，tag 指向该提交：
