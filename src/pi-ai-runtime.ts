@@ -20,9 +20,10 @@
  *
  * The mismatch is reachable in BOTH directions, because DSH itself spans both
  * generations (`dsh-llm-pi-ai` ≤0.2.0-rc.1 declares `^0.85.1`; 0.2.0-rc.2 and
- * later declare `^0.87.1`, 0.2.1-alpha.2 declares `^1.0.2`), while this plugin
- * accepts the whole range (`>=0.1.7-rc.1 <0.3.0-0`). Whichever side is newer,
- * the other one is wrong:
+ * later declare `^0.87.1`, 0.2.1-alpha.2 declares `^1.0.2`, and 0.2.1-rc.1 —
+ * the current desktop host — declares **`^1.1.0`**, which also stopped reading
+ * the top-level fields entirely), while this plugin accepts the whole range
+ * (`>=0.1.7-rc.1 <0.3.0-0`). Whichever side is newer, the other one is wrong:
  *
  * | host | resolved api | outcome |
  * |---|---|---|

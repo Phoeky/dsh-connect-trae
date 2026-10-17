@@ -252,13 +252,17 @@ export function adaptLegacyPiAiContext(context: Context): Context {
  * transcript a MODERN (0.86+) api consumes — the reverse mismatch, and just as
  * silent.
  *
- * WHY. DSH spans both generations (`dsh-llm-pi-ai` ≤0.2.0-rc.1 pins `^0.85.1`)
+ * WHY. DSH spans both generations (`dsh-llm-pi-ai` ≤0.2.0-rc.1 pins `^0.85.1`,
+ * while the 0.2.1-rc.1 desktop host pins `^1.1.0` and still emits the legacy
+ * envelope from its own `piContext()`)
  * while this plugin may resolve a newer copy than its host. A LEGACY host never
  * normalizes, so it hands the api the legacy shape; a modern api reads the
  * prompt from a leading system message and the tools from its `toolsAdded`, and
  * never looks at the top-level fields — so both are dropped without a sound.
  * Verified against the published tarballs: the request that reaches the wire
- * carries no system turn and `tools: []`.
+ * carries no system turn and `tools: []`. This is exactly the shape that
+ * `dsh-llm-pi-ai@0.2.1-rc.1` + `pi-ai@1.1.0` would hit unaided, which is why
+ * the wire-level matrix in `tests/pi-ai-context.spec.ts` pins both directions.
  *
  * Identity for anything already in transcript shape, and for a context with
  * neither a prompt nor tools (pi-ai's own `createInitialSystemMessage` returns
@@ -307,13 +311,39 @@ export function adaptModernPiAiContext(context: Context): Context {
  * no context and are passed through untouched, and each adapter function is an
  * identity unless the context is actually the other generation's shape. So a
  * healthy install does one `Array.some` per request.
+ *
+ * THE CAST IS THE CONTRACT (pi-ai 1.1.0). From 1.1.0 `ProviderStreams` takes
+ * `TranscriptContext`, a BRANDED type whose `unique symbol` member only
+ * `normalizeContext()` can produce — so a `Context` is no longer assignable and
+ * `tsc` reports `TS2345` at both call sites below. The brand cannot be acquired
+ * honestly here, for two reasons that are both deliberate:
+ *
+ * 1. This wrapper sits BELOW the normalizer. `Models.stream()`/`streamSimple()`
+ *    call `normalizeContext()` and hand a real transcript to the provider;
+ *    `createProvider()` passes it straight through to `api.stream`. So on the
+ *    modern path `adapt()` is an identity and the value already IS a branded
+ *    transcript at runtime — the type just cannot see it across that boundary.
+ * 2. The legacy path REQUIRES an unbranded shape. pi-ai ≤0.85 has no
+ *    `normalizeContext` and no transcript type at all, so its api expects
+ *    exactly the `{ systemPrompt, tools, messages }` object `adapt()` returns.
+ *
+ * So the value handed to `api` is "a context of the generation that api
+ * speaks", which no single edition's declared type names. Casting at this one
+ * boundary is what makes both generations expressible; deriving the type from
+ * the resolved copy instead would make the wrapper uncompilable against the
+ * other generation, which is the whole point of having it.
  */
 export function withContextAdaptation(api: ProviderStreams, generation: PiAiGeneration): ProviderStreams {
   const adapt = generation === 'modern' ? adaptModernPiAiContext : adaptLegacyPiAiContext
+  // See the docstring: the adapted value matches what `api` consumes at
+  // runtime, but pi-ai 1.1.0's branded `TranscriptContext` cannot express the
+  // legacy shape and the legacy edition cannot express the branded one.
+  const forApi = (context: Parameters<typeof adapt>[0]): Parameters<ProviderStreams['stream']>[1] =>
+    adapt(context) as Parameters<ProviderStreams['stream']>[1]
   return {
     ...api,
-    stream: (model, context, options) => api.stream(model, adapt(context), options),
-    streamSimple: (model, context, options) => api.streamSimple(model, adapt(context), options),
+    stream: (model, context, options) => api.stream(model, forApi(context), options),
+    streamSimple: (model, context, options) => api.streamSimple(model, forApi(context), options),
   }
 }
 

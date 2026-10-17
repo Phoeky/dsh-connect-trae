@@ -12,8 +12,15 @@ packages:
 # kept covered deterministically by the exported `asVolatile` (see
 # `tests/dsh-017-compat.spec.ts`) rather than by whatever version happens to be
 # installed.
+#
+# 3.18.5 for the DSH 0.2.1-rc.1 host: `dsh-llm-pi-ai@0.2.1-rc.1` declares
+# `~3.18.5`, so the host runtime now resolves 3.18.5. Keeping the override at
+# 3.18.4 would typecheck and test against a schemastery the host no longer
+# loads — the same "dev tree diverges from the user's" trap this block exists
+# to close. The 0.1.7 line still resolves ~3.18.4, which stays inside the
+# declared peer range `>=3.18.4 <4.0.0`.
 overrides:
-  '@deepseek-ai/schemastery': 3.18.4
+  '@deepseek-ai/schemastery': 3.18.5
 
 allowBuilds:
   '@google/genai': false

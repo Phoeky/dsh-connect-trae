@@ -150,7 +150,7 @@ npm install dsh-connect-trae
 ## DSH 版本兼容
 
 **要求 DSH 0.1.7-rc.1 及以上**（2.3.0 起不再支持 0.1.7 之前的宿主；peer 依赖范围已按此收窄）。
-**peer 上界为 `<0.3.0-0`：0.1.7 与 0.2 两条线均受支持。**
+**peer 上界为 `<0.3.0-0`：0.1.7 与 0.2 两条线均受支持（含 0.2.1-rc.1，已实测）。**
 
 ### 同时支持 pi-ai 的两代上下文（3.4.2 起）
 
@@ -181,6 +181,30 @@ DSH 自己横跨 `@earendil-works/pi-ai` 的两代，而**本插件解析到哪�
 
 0.2.0 线对本插件**没有契约破坏**——逐符号核对确认插件消费的 API 全部未变（[完整的 0.2.0-rc.1 影响面核对](https://github.com/dingminhua/dsh-connect-trae/blob/main/docs/DSH_0.2.0_RC1_IMPACT_CHECK.md)）。但 0.1.7 起 DSH 有一道**bundle 级 peer 门禁**：
 peer 范围不满足的 bundle 会被**整体跳过**，只往 stderr 写一行，界面上表现为「插件凭空消失」。
+
+### DSH 0.2.1-rc.1（pi-ai 1.1.0）同步结论
+
+宿主 `0.2.1-rc.1` 把 `@earendil-works/pi-ai` 从 `^0.85.1` 抬到了 **`^1.1.0`**，这是 0.2 线里
+唯一有实际行为影响的变化。三项结论：
+
+1. **请求体没有丢东西（已实测）**。1.1.0 的 api **只**读 transcript 里的 system 消息，
+   顶层 `systemPrompt` / `tools` 完全不再读取；而 `dsh-llm-pi-ai` 的 `piContext()` 仍然产出
+   旧版信封。本插件 3.4.2 起就有的双向适配正好覆盖这一点——把真实宿主信封喂进真实
+   `1.1.0` + 本地 SSE 捕获线上请求体，得到 `roles: ["system","user"]`、system 文本完好、
+   `tools: 1`；**去掉适配则变成 `roles: ["user"]`、system `null`、`tools: 0`**（不报错）。
+   这条对照已固化为 `tests/pi-ai-context.spec.ts` 的线上请求体矩阵。
+2. **类型面补齐**。1.1.0 把 `ProviderStreams` 的第二参改成带 `unique symbol` 品牌标记的
+   `TranscriptContext`，只有 `normalizeContext()` 能产出。适配层在这条边界上做一次显式转型
+   （`src/adapter.ts` 的 `withContextAdaptation`），并在两处调用点写明为何品牌在此处不可诚实获得。
+3. **peer 范围无需改动**。DSH 用 `semver.satisfies(runtime, range, { includePrerelease: true })`
+   求值，且只校验 `@deepseek-ai/dsh*` 命名空间，因此 `>=0.1.7-rc.1 <0.3.0-0` 对 `0.2.1-rc.1` 已判通过
+   （已实测）。**注意**：预发布悬崖只在**默认选项**下成立——那是 `dsh-connect-workbuddy` 侧
+   调研文档所描述的困境，本插件不适用。
+
+开发树的 `@earendil-works/pi-ai` 钉在 **1.1.0**（宿主实际随包的版本）而非 `^1.1.0`，
+使本地 typecheck 与测试跑在与用户完全一致的契约上；`schemastery` 的 override 同步抬到
+`3.18.5`（`dsh-llm-pi-ai@0.2.1-rc.1` 声明 `~3.18.5`）。
+
 
 ### peer 上界为什么不写 `<0.2.0`
 

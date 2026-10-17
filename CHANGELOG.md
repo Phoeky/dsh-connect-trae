@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.7.0 (2026-10-17)
+
+> **对齐 DSH 0.2.1-rc.1。** 宿主把 `@earendil-works/pi-ai` 从 `^0.85.1` 抬到 `^1.1.0`，
+> 这是 0.2 线里唯一有行为影响的变更。本插件的请求体**没有**回归——但那是靠 3.4.2 的双向适配
+> 兜住的，本版把这条结论从「推理」变成「被测住的对照」。
+
+### 变更
+
+- **开发树对齐宿主实际随包版本**：13 个 `@deepseek-ai/dsh-*` devDependency 固定为 `0.2.1-rc.1`，
+  `cordis` → `^4.0.5`，`schemastery` → `3.18.5`（`pnpm-workspace.yaml` 的 override 同步抬升），
+  `@earendil-works/pi-ai` → **`1.1.0`（精确固定，不用 `^`）**，使本地 typecheck 与测试
+  跑在与用户**字节一致**的契约上。
+- **`@earendil-works/pi-ai` peer 上界收窄为 `<2.0.0`**：原先 `>=0.85.1` 无上界，会默默放行
+  未审阅的 2.x。两端均已实测（0.85.1 ✅、1.1.0 ✅、1.3.0 ✅、2.0.0 ❌）。
+
+### 修复
+
+- **pi-ai 1.1.0 的类型契约**：1.1.0 把 `ProviderStreams` 的第二参改成带 `unique symbol`
+  品牌标记的 `TranscriptContext`，只有 `normalizeContext()` 能产出，于是 `withContextAdaptation`
+  在两处调用点报 `TS2345`（升级后才暴露，0.85.1 下类型可通）。适配层本来就在归一化器
+  **下方**、且旧代分支**必须**产出无品牌形状，所以在这唯一一条边界上做显式转型，
+  并在 `src/adapter.ts` 与测试侧 `send()` helper 处写明理由。
+
+### 测试
+
+- 新增 **线上请求体矩阵**（`tests/pi-ai-context.spec.ts`）：起一个真实 SSE 端点，走
+  `createProvider` + 真实 `openAICompletionsApi()`，断言线上 body 里 `roles[0] === 'system'`、
+  system 文本等于原提示、`tools` 长度为 1；并覆盖「已归一化输入不二次包裹」的幂等性。
+- 新增 **反向对照**：**不**套适配器时，现代副本会把提示与工具全部丢光（`roles: ["user"]`、
+  `system: null`、`tools: 0`，且**不报错**）——这条钉住适配器为什么是承重的。
+- 全仓 **663** 例测试通过（原 660 + 3），双 tsconfig 类型检查通过，构建通过。
+
+### 已核对、无需改动
+
+- **peer 范围**：DSH 用 `satisfies(runtime, range, { includePrerelease: true })` 求值且只校验
+  `@deepseek-ai/dsh*`，`0.2.1-rc.1` 对 `>=0.1.7-rc.1 <0.3.0-0` 已判通过（实测）。预发布悬崖
+  只在**默认选项**下成立，不适用于本插件的门禁。
+- **宿主 API**：`dsh-llm` / `dsh-settings` / `dsh-host-webserver` / `dsh-llm-pi-ai` 消费点签名未变。
+- **客户端外壳**：产物仍只 `require` react / react-dom / react/jsx-runtime，槽位与主题令牌未变。
+
 ## 3.6.1 (2026-10-16)
 
 > **「自动续期」不再是一句没有期限的承诺。** 卡片现在会告诉你**刷新令牌**何时到期 ——

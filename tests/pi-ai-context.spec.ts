@@ -18,13 +18,34 @@
  *    That last pair is the assertion that would have failed before this fix.
  */
 
+import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import type { Context } from '@earendil-works/pi-ai'
+import type { Context, Model, ProviderStreams } from '@earendil-works/pi-ai'
 import { adaptLegacyPiAiContext, adaptModernPiAiContext, withContextAdaptation } from '../src/adapter.ts'
 import { decidePiAiGeneration, generationOf, piAiRuntimeInfo } from '../src/pi-ai-runtime.ts'
 
 const PROMPT = 'You are an AI agent powered by DeepSeek Harness.'
 const TOOL = { name: 'pwsh', description: 'run a command', parameters: { type: 'object' } }
+
+/**
+ * Feed a context into a wrapped api's stream entry point.
+ *
+ * pi-ai 1.1.0 declares `ProviderStreams.stream()` as taking a BRANDED
+ * `TranscriptContext`, a type only `normalizeContext()` can produce. These tests
+ * deliberately hand it the unbranded shapes that arrive at the wrapper in
+ * practice — a host-built `{ systemPrompt, tools, messages }` envelope, or an
+ * already-normalized transcript from a test fixture — because adapting exactly
+ * those is the wrapper's job. The cast belongs at the call, not inside the
+ * wrapper: it is the test asserting "the caller's shape is not what the
+ * signature advertises", which is the mismatch under test.
+ */
+const send = (
+  api: ProviderStreams,
+  entry: 'stream' | 'streamSimple',
+  context: Context,
+): void => {
+  api[entry]({} as never, context as never, undefined)
+}
 
 /** What pi-ai 0.86+ `normalizeContext()` produces: everything on one message. */
 function transcript(systemContent: string = PROMPT, tools: unknown[] = [TOOL]): Context {
@@ -313,7 +334,7 @@ describe('withContextAdaptation', () => {
   it('legacy generation folds a transcript down before the api sees it', () => {
     const seen: Context[] = []
     const wrapped = withContextAdaptation(fakeApi(seen) as never, 'legacy')
-    wrapped.streamSimple({} as never, transcript(), undefined)
+    send(wrapped, 'streamSimple', transcript())
     expect(seen[0]?.systemPrompt).toBe(PROMPT)
     expect(seen[0]?.tools?.length).toBe(1)
   })
@@ -321,7 +342,7 @@ describe('withContextAdaptation', () => {
   it('modern generation lifts a legacy context up before the api sees it', () => {
     const seen: Context[] = []
     const wrapped = withContextAdaptation(fakeApi(seen) as never, 'modern')
-    wrapped.streamSimple({} as never, legacy(), undefined)
+    send(wrapped, 'streamSimple', legacy())
     const first = seen[0]?.messages[0] as { role?: string, content?: unknown } | undefined
     expect(first?.role).toBe('system')
     expect(first?.content).toBe(PROMPT)
@@ -331,7 +352,7 @@ describe('withContextAdaptation', () => {
     const seen: Context[] = []
     const wrapped = withContextAdaptation(fakeApi(seen) as never, 'legacy')
     const context = legacy()
-    wrapped.stream({} as never, context, undefined)
+    send(wrapped, 'stream', context)
     expect(seen[0]).toBe(context)
   })
 
@@ -344,10 +365,159 @@ describe('withContextAdaptation', () => {
   it('adapts BOTH stream and streamSimple', () => {
     const seen: Context[] = []
     const wrapped = withContextAdaptation(fakeApi(seen) as never, 'legacy')
-    wrapped.stream({} as never, transcript(), undefined)
-    wrapped.streamSimple({} as never, transcript(), undefined)
+    send(wrapped, 'stream', transcript())
+    send(wrapped, 'streamSimple', transcript())
     expect(seen).toHaveLength(2)
     for (const context of seen) expect(context.systemPrompt).toBe(PROMPT)
+  })
+})
+
+/**
+ * The wire-level matrix, against the REAL resolved copy.
+ *
+ * WHY THIS EXISTS. `tests/adapter.spec.ts` mocks `openAICompletionsApi` and only
+ * asserts the context handed to the wrapper — which stays correct even when the
+ * shipped request is empty, so it cannot catch a context-contract regression.
+ * This block asserts what actually arrives at the HTTP layer: the request must
+ * carry the system prompt and the tool declarations, for every generation the
+ * devDependency can resolve.
+ *
+ * The 1.x arm is the one that matters for DSH 0.2.1-rc.1: `dsh-llm-pi-ai`
+ * declares `^1.1.0` and builds the LEGACY `{ systemPrompt, tools, messages }`
+ * envelope (`piContext()`), while pi-ai 1.1.0 reads ONLY the transcript. Both
+ * halves of that mismatch are silent, so only a real request body proves it.
+ */
+describe('request body survives the resolved pi-ai copy', () => {
+  /** A local SSE endpoint that records every request body it receives. */
+  async function captureWire(): Promise<{
+    baseUrl: string
+    bodies: { messages?: { role?: string, content?: unknown }[], tools?: unknown[] }[]
+    close: () => Promise<void>
+  }> {
+    const bodies: { messages?: { role?: string, content?: unknown }[], tools?: unknown[] }[] = []
+    const server = createServer((request, response) => {
+      let body = ''
+      request.on('data', chunk => { body += String(chunk) })
+      request.on('end', () => {
+        bodies.push(JSON.parse(body) as typeof bodies[number])
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n')
+        response.end('data: [DONE]\n\n')
+      })
+    })
+    await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', () => { resolve() }) })
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('no port')
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      bodies,
+      close: () => new Promise<void>((resolve, reject) => {
+        server.close(error => { error === undefined ? resolve() : reject(error) })
+      }),
+    }
+  }
+
+  /**
+   * Send one request through `createProvider` exactly as the host wires it, and
+   * return the body that reached the wire.
+   *
+   * The context fed in is the LEGACY envelope on purpose: that is what
+   * `dsh-llm-pi-ai`'s `piContext()` produces whatever pi-ai sits underneath it,
+   * so it is the input a modern copy actually receives in the field.
+   */
+  async function wireBody(
+    generation: 'legacy' | 'modern',
+    context: Context,
+    baseUrl: string,
+    bodies: { messages?: { role?: string, content?: unknown }[], tools?: unknown[] }[],
+  ): Promise<{ messages?: { role?: string, content?: unknown }[], tools?: unknown[] }> {
+    const { createProvider } = await import('@earendil-works/pi-ai')
+    const { openAICompletionsApi } = await import('@earendil-works/pi-ai/api/openai-completions.lazy')
+    // Annotated, not inferred: pi-ai keys `Model<Api>` off `api`, and a widened
+    // `string` collapses `compat` to `never`.
+    const model: Model<'openai-completions'> = {
+      id: 'wire-probe', name: 'wire-probe', api: 'openai-completions', provider: 'trae',
+      baseUrl, input: ['text'], reasoning: false, contextWindow: 200_000, maxTokens: 32_768,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: {},
+    }
+    const provider = createProvider({
+      id: 'trae',
+      name: 'trae',
+      auth: { apiKey: { name: 'probe', async resolve() { return { auth: { apiKey: 'probe' }, source: 'probe' } } } },
+      models: [model],
+      api: withContextAdaptation(openAICompletionsApi(), generation),
+    }) as unknown as { getModels(): unknown[], streamSimple(model: unknown, context: unknown, options: unknown): AsyncIterable<unknown> }
+    for await (const _chunk of provider.streamSimple(provider.getModels()[0], context, { apiKey: 'probe', signal: AbortSignal.timeout(5_000) })) {
+      // Drain: the request body is recorded server-side before any chunk.
+    }
+    const body = bodies.at(-1)
+    if (body === undefined) throw new Error('no request reached the wire')
+    return body
+  }
+
+  it('sends the prompt and the tools for the generation this copy actually is', async () => {
+    const wire = await captureWire()
+    try {
+      const generation = piAiRuntimeInfo().generation
+      const body = await wireBody(generation, legacy(), wire.baseUrl, wire.bodies)
+      const roles = body.messages?.map(message => message.role)
+      // Both generations must land on a leading system turn: on a legacy copy
+      // the envelope is already correct, on a modern one the wrapper folded it.
+      expect(roles?.[0]).toBe('system')
+      expect(String(body.messages?.[0]?.content)).toBe(PROMPT)
+      expect(body.tools).toHaveLength(1)
+    } finally {
+      await wire.close()
+    }
+  })
+
+  it('is idempotent: an already-normalized context is not double-wrapped', async () => {
+    const wire = await captureWire()
+    try {
+      const generation = piAiRuntimeInfo().generation
+      const body = await wireBody(generation, transcript(), wire.baseUrl, wire.bodies)
+      const roles = body.messages?.map(message => message.role) ?? []
+      expect(roles.filter(role => role === 'system')).toHaveLength(1)
+      expect(String(body.messages?.[0]?.content)).toBe(PROMPT)
+      expect(body.tools).toHaveLength(1)
+    } finally {
+      await wire.close()
+    }
+  })
+
+  it('a modern copy drops the prompt and tools WITHOUT the wrapper', async () => {
+    // Pins why `withContextAdaptation` is load-bearing on DSH 0.2.1-rc.1. This
+    // is the exact silent failure the follow-up document reports for a plugin
+    // that passes the host envelope straight through: `roles: ["user"]`,
+    // system `null`, `tools: 0` — no error, just a crippled turn.
+    const wire = await captureWire()
+    try {
+      const { createProvider } = await import('@earendil-works/pi-ai')
+      const { openAICompletionsApi } = await import('@earendil-works/pi-ai/api/openai-completions.lazy')
+      const raw = openAICompletionsApi()
+      // Only meaningful when this tree resolves a modern (1.x) copy.
+      if (piAiRuntimeInfo().generation !== 'modern') return
+      const model: Model<'openai-completions'> = {
+        id: 'wire-probe', name: 'wire-probe', api: 'openai-completions', provider: 'trae',
+        baseUrl: wire.baseUrl, input: ['text'], reasoning: false, contextWindow: 200_000, maxTokens: 32_768,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: {},
+      }
+      const provider = createProvider({
+        id: 'trae',
+        name: 'trae',
+        auth: { apiKey: { name: 'probe', async resolve() { return { auth: { apiKey: 'probe' }, source: 'probe' } } } },
+        models: [model],
+        api: raw,
+      }) as unknown as { getModels(): unknown[], streamSimple(model: unknown, context: unknown, options: unknown): AsyncIterable<unknown> }
+      for await (const _chunk of provider.streamSimple(provider.getModels()[0], legacy(), { apiKey: 'probe', signal: AbortSignal.timeout(5_000) })) {
+        // Drain.
+      }
+      const body = wire.bodies.at(-1)
+      expect(body?.messages?.some(message => message.role === 'system')).toBe(false)
+      expect(body?.tools ?? []).toHaveLength(0)
+    } finally {
+      await wire.close()
+    }
   })
 })
 
@@ -372,7 +542,10 @@ describe('integration with the resolved pi-ai copy', () => {
       : adaptLegacyPiAiContext(transcript())
     // Before the fix this threw `TypeError: Cannot read properties of undefined
     // (reading 'length')` on a legacy copy — the PI_AI_ERROR in the field.
-    expect(() => estimateContextTokens(adapted)).not.toThrow()
+    // The cast is the same brand boundary as in `withContextAdaptation`: 1.1.0
+    // types this parameter as the branded `TranscriptContext`, which the
+    // adapted legacy shape deliberately is not.
+    expect(() => estimateContextTokens(adapted as never)).not.toThrow()
   })
 
   it('keeps the system prompt and the tools reachable for the wire', async () => {
@@ -382,7 +555,9 @@ describe('integration with the resolved pi-ai copy', () => {
     const adapted = generation === 'modern'
       ? adaptModernPiAiContext(context)
       : adaptLegacyPiAiContext(context)
-    const params = convertMessages(model as never, adapted, {} as never, {} as never) as { role?: string, content?: unknown }[]
+    // `convertMessages` also takes the branded type on 1.1.0; a legacy-adapted
+    // context is the unbranded shape that generation's api consumes natively.
+    const params = convertMessages(model as never, adapted as never, {} as never, {} as never) as { role?: string, content?: unknown }[]
     // 0.85 dropped BOTH: the system entry vanished and only `user` remained.
     expect(params[0]?.role).toBe('system')
     expect(String(params[0]?.content)).toContain('DeepSeek Harness')
@@ -397,7 +572,7 @@ describe('integration with the resolved pi-ai copy', () => {
       // probed outside the host, where no local pi-ai exists at all.
       const transcriptModule = '@earendil-works/pi-ai/utils/transcript'
       const { resolveTranscript, resolveTranscriptTools } = await import(transcriptModule) as {
-        resolveTranscript: (context: Context, supportsMidConvo: boolean) => { messages: unknown[] }
+        resolveTranscript: (context: unknown, supportsMidConvo: boolean) => { messages: unknown[] }
         resolveTranscriptTools: (messages: unknown[], additions: boolean) => { requestTools: { name: string }[] }
       }
       const normalized = resolveTranscript(adapted, false)
@@ -411,6 +586,6 @@ describe('integration with the resolved pi-ai copy', () => {
     if (generation !== 'legacy') return
     const context = legacy()
     expect(adaptLegacyPiAiContext(context)).toBe(context)
-    expect(() => estimateContextTokens(context)).not.toThrow()
+    expect(() => estimateContextTokens(context as never)).not.toThrow()
   })
 })
