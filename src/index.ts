@@ -814,7 +814,10 @@ export function apply(ctx: Context, config: Config): void {
      */
     const routeClients = {} as Record<string, TraeProviderRouteClient>
     const shimRoutes: TraeShimRoute[] = []
-    for (const provider of TRAE_PROVIDER_IDS[region]) {
+    // Exactly ONE provider per panel. The route label is the shim's bearer
+    // key and must be unique within a shim, so a panel never publishes the
+    // other panels' ids either.
+    for (const provider of [providerOfPanel(panel)]) {
       const route = routeOfTraeProvider(provider) ?? 'solo'
       const client = new TraeSoloUpstreamClient({
         credential: () => store.resolve(),
@@ -836,14 +839,15 @@ export function apply(ctx: Context, config: Config): void {
      * are not pool-specific: model probing, Raw-Chat status, and the stack's
      * `delegating` handle. Per-provider turns never go through this.
      */
-    const primary = routeClients[TRAE_PROVIDER_IDS[region][0] as string] as TraeProviderRouteClient
+    const primary = routeClients[providerOfPanel(panel)] as TraeProviderRouteClient
     let rawDiagnostic = (): TraeRawDiagnostic => ({ state: 'disabled' })
 
-    // Raw Chat is probed on the CN stack only: the probe model
+    // Raw Chat is probed on the DOMESTIC panel only: the probe model
     // (`qwen-3.7-plus`) is CN-only, and the gateway stays disabled either way
-    // — SOLO remains the only live path. The international stack therefore
-    // reports `disabled` and never touches the raw endpoint.
-    if (region === 'cn') {
+    // — SOLO remains the only live path. The enterprise panel is a second view
+    // of the same CN credential, so probing it too would spend a second probe
+    // for the same answer; it reports `disabled` like the international one.
+    if (panel === 'cn') {
       void (async () => {
         try {
           const probeModel = 'qwen-3.7-plus'
@@ -901,7 +905,7 @@ export function apply(ctx: Context, config: Config): void {
       // The region's PRIMARY (first published) provider is what region-wide
       // diagnostics — probe, raw-chat status, "test this model" — speak for.
       // Per-provider turns go through `routeClients` and never touch this.
-      delegating: routeClients[TRAE_PROVIDER_IDS[region][0] as string]?.upstream as TraeDelegatingUpstreamClient,
+      delegating: routeClients[providerOfPanel(panel)]?.upstream as TraeDelegatingUpstreamClient,
       routeClients,
       usageClient,
       /**

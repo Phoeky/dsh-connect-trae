@@ -28,7 +28,7 @@ import {
 } from '../status-paths.ts'
 import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebCreditExpiry, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import type { TraeCreditPosition } from '../status-paths.ts'
-import type { TraePanel } from '../region.ts'
+import { regionOfPanel, type TraePanel } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import { BusyOverlay } from './BusyOverlay.tsx'
@@ -524,6 +524,16 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   const regionOn = (item: TraePanel): boolean =>
     regionEnabledOf(settingsScope?.getSnapshot().value, item)
   const activeRegionOn = regionOn(activeRegion)
+  /**
+   * Credential region of the ACTIVE PANEL.
+   *
+   * The enterprise panel is a second CN pool, so anything that asks "is this the
+   * international side?" — pay status vs. credit packs, check-in column, the
+   * credit-readout switch — must answer by CREDENTIAL REGION, not by tab
+   * identity. `isCnPool` is the common case (cn + enterprise).
+   */
+  const credentialRegionIsAi = regionOfPanel(activeRegion) === 'ai'
+  const isCnPool = !credentialRegionIsAi
 
   const refreshUsage = useCallback(async (
     region: TraePanel,
@@ -1164,7 +1174,9 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * "zero".
    */
   const rowValue = (state: TraeWebAccountState | undefined): ReactNode => {
-    if (activeRegion === 'ai') {
+    // Judged by CREDENTIAL REGION: the enterprise panel is a CN pool, so it
+    // reads CN balances and check-ins like the domestic tab does.
+    if (credentialRegionIsAi) {
       const payStatus = state?.payStatus
       if (payStatus === undefined) return undefined
       const verdict = payVerdict(payStatus)
@@ -1361,7 +1373,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     figure THIS tab's readout would show, so the same box answers
                     "what do I get if I tick this?" without the reader having to
                     switch tabs to find out. */}
-                <label className="dsm-trae-pref" title={t(activeRegion === 'cn' ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}>
+                <label className="dsm-trae-pref" title={t(isCnPool ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}>
                   <input
                     type="checkbox"
                     checked={settingsEdits.showPointsInMainUi}
@@ -1373,7 +1385,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     <b id={creditsLabelId}>{t('row.showPointsInMainUi')}</b>
                     {' '}
                     <span className="dsm-trae-pref-hint">
-                      {t(activeRegion === 'cn' ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}
+                      {t(isCnPool ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}
                     </span>
                   </span>
                 </label>
@@ -1393,7 +1405,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     className="dsm-trae-credit-position"
                     value={activeRegionOn ? creditPositionOn(activeRegion) : 'composer'}
                     disabled={!activeRegionOn || settingsScope?.getSnapshot().writable !== true || savingSettings}
-                    aria-label={t('row.creditPositionAria', { region: activeRegion === 'cn' ? t('row.tabCn') : t('row.tabAi') })}
+                    aria-label={t('row.creditPositionAria', { region: activeRegion === 'cn' ? t('row.tabCn') : activeRegion === 'enterprise' ? t('row.tabEnterprise') : t('row.tabAi') })}
                     onChange={event => {
                       void changeCreditPosition(activeRegion, event.currentTarget.value === 'stats' ? 'stats' : 'composer')
                     }}
@@ -1443,7 +1455,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           : null}
                       </div>
                     </div>
-                  : <div className={`dsm-trae-account-table${activeRegion === 'cn' ? ' dsm-trae-account-table-checkin' : ''}`}>
+                  : <div className={`dsm-trae-account-table${isCnPool ? ' dsm-trae-account-table-checkin' : ''}`}>
                       {/* Column header, as the sibling WorkBuddy card has one:
                           four values line up in four fixed tracks, so the eye
                           reads DOWN a column instead of re-finding the field on
@@ -1453,7 +1465,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                       <div className="dsm-trae-account-row dsm-trae-account-row-head" role="row">
                         <span>{t('row.accountColumnAccount')}</span>
                         <span>{t('row.accountColumnValue')}</span>
-                        {activeRegion === 'cn' ? <span>{t('row.accountColumnCheckin')}</span> : null}
+                        {isCnPool ? <span>{t('row.accountColumnCheckin')}</span> : null}
                         {/* The actions column carries no header: the buttons
                             speak for themselves, and a label here would just be
                             the word "操作" above two words. */}
@@ -1516,7 +1528,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                                 so digits in different rows sit on the same
                                 column of the grid. */}
                             <span className="dsm-trae-account-worth">{rowValue(state)}</span>
-                            {activeRegion === 'cn'
+                            {isCnPool
                               ? <span className="dsm-trae-account-checkin-cell">{checkinControl(account, state)}</span>
                               : null}
                             <span className="dsm-trae-account-actions">

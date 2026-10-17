@@ -451,7 +451,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
     ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(panel) },
   }
   const client = deps.client(panel)
-  if (panel === 'ai') {
+  if (regionOfPanel(panel) === 'ai') {
     // The international panel is subscription-based: read its pay status
     // instead of the CN Work-credit packs. A failure degrades to
     // payStatusError, exactly like creditsError on the CN side.
@@ -815,7 +815,9 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         const panel = requestRegion(req, res)
         if (panel === undefined) return
-        if (panel !== 'cn') {
+        // Judged by CREDENTIAL REGION: the enterprise panel is a CN pool and has
+        // the same check-in endpoint as the domestic one.
+        if (regionOfPanel(panel) !== 'cn') {
           // The `/trae/api/v2/ug/*` family does not exist on the ai gateways
           // (404, probed 2026-09-24); answering 404 here states that plainly
           // instead of surfacing an upstream HTML 404 as a network fault.
