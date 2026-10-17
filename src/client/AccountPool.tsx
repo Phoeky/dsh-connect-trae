@@ -290,6 +290,17 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
     }
   }, [settingsTick, settingsScope, panel, pool.targetModelId, pool.staleTargetModelId, pool.probeInputTokens])
 
+  /**
+   * Whether the running Host knows the probe-size preference at all.
+   *
+   * The card bundle and the Host update on different clocks (a page refresh vs a
+   * restart), so an older Host serves a pool document without this field. Writing
+   * a key that Host's schema does not declare would be dropped on the way in and
+   * then fail the read-back check — a save that reports an error and changes
+   * nothing. Hiding the row is the honest state: this Host cannot do it yet.
+   */
+  const probeSupported = typeof pool.probeInputTokens === 'number'
+
   // The draft the user edits. The membership checkbox binds HERE (NON-NEGOTIABLE
   // #4), never to `account.member`.
   const [enabled, setEnabled] = useState(saved.enabled)
@@ -335,7 +346,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   // Dirty compares enabled / targetModelId / membership ids ORDER-INSENSITIVELY (#3).
   const dirty = enabled !== saved.enabled
     || (targetModelId ?? '') !== (saved.targetModelId ?? '')
-    || probeInputTokens !== saved.probeInputTokens
+    || (probeSupported && probeInputTokens !== saved.probeInputTokens)
     || !sameIds([...selected], saved.memberAccountIds)
 
   const writable = settingsScope?.getSnapshot().writable === true
@@ -384,7 +395,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         enabled,
         ...(targetModelId === '' ? {} : { targetModelId }),
         memberAccountIds: [...selected],
-        probeInputTokens,
+        ...(probeSupported ? { probeInputTokens } : {}),
       }
       await writeSettingsField(
         settingsScope,
@@ -395,7 +406,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           return readPool.enabled === (next.enabled ?? false)
             && sameIds(readPool.memberAccountIds, next.memberAccountIds)
             && (readPool.targetModelId ?? '') === (next.targetModelId ?? '')
-            && (readPool.probeInputTokens ?? 0) === probeInputTokens
+            && (!probeSupported || (readPool.probeInputTokens ?? 0) === probeInputTokens)
         },
       )
       pushLog('ok', t('row.poolLogSaved'))
@@ -720,7 +731,8 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             ? <p className="dsm-trae-pool-target-none" role="status">{t('row.poolTargetNone')} — {t('row.poolTargetNoneHint')}</p>
             : null}
 
-        <div className="dsm-trae-pool-set">
+        {probeSupported
+          ? <div className="dsm-trae-pool-set">
           <span className="dsm-trae-pool-set-copy">
             <b>{t('row.poolProbeSizeLabel')}</b>
             <span>{t('row.poolProbeSizeHint')}</span>
@@ -743,6 +755,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             </select>
           </span>
         </div>
+          : null}
 
         {/* The problem, if the last save failed. Inside the box: it belongs to the
             thing that failed to be written. */}

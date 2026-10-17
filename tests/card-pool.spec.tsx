@@ -308,6 +308,19 @@ describe('AccountPool card section', () => {
     expect(select.value).toBe('')
   })
 
+  it('hides the probe-size row when the Host does not know the field', () => {
+    // A card newer than the Host must not offer a control whose save would be
+    // dropped by the Host schema and then fail its own read-back check.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    const legacy: Omit<TraeWebPool, 'probeInputTokens'> & { probeInputTokens?: number } = { ...basePool() }
+    delete legacy.probeInputTokens
+    renderPool(legacy as TraeWebPool, scope)
+    expect(within(poolSection()).queryByRole('combobox', { name: 'row.poolProbeSizeLabel' })).toBeNull()
+    // The rest of the settings still save.
+    fireEvent.click(within(poolSection()).getByRole('checkbox', { name: 'row.poolEnabled' }))
+    expect(screen.getByText('row.poolUnsavedMembers')).toBeTruthy()
+  })
+
   it('saves the probe size choice and treats it as a draft like every other preference', async () => {
     const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
     renderPool(basePool(), scope)
