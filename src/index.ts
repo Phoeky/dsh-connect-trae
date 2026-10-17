@@ -811,9 +811,16 @@ export function apply(ctx: Context, config: Config): void {
     })
     // No baseUrl: the chat gateway follows the selected credential's region
     // (`trae-api-cn.mchost.guru` for CN, `coresg-normal.trae.ai` for ai).
+    //
+    // The DISCOVERY client is pinned to this PANEL's routing. A tenant pool
+    // publishes a roster of its own (DeepSeek-V4.1-Flash is served only by the
+    // enterprise gateway), so an enterprise-panel discovery that read the
+    // consumer gateway would never see the config_names of its own pool, and
+    // the wire mapping would be absent for every one of them.
     const solo = new TraeSoloUpstreamClient({
       credential: () => store.resolve(),
       identity,
+      ...panel === 'enterprise' ? { route: 'enterprise' as const } : {},
       log: (message, detail) => ctx.logger.warn(message, detail),
     })
     const remoteCatalog = new TraeSoloRemoteCatalogClient({ credential: () => store.resolve() })

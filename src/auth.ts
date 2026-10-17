@@ -454,15 +454,22 @@ export class TraeCredentialStore {
   async accounts(): Promise<TraeAccountChoice[]> {
     const discovered = await this.readAll()
     /**
-     * Tenant accounts are withheld from a consumer panel's OFFERED list, but a
-     * machine whose only login is a tenant one keeps working: the filter backs
-     * off when it would hide everything, so "signed out" is never invented for
-     * a user who is signed in. Resolution (`current`/`resolve`) is untouched.
+     * The OFFERED list is scoped to who this store may bill:
+     *   - a consumer store withholds tenant accounts (the enterprise pool is a
+     *     separate tab and a separate billing decision), and
+     *   - a tenant store withholds personal accounts (they cannot bill that
+     *     pool; the tenant gateway answers their chat with 4019).
+     *
+     * Either filter backs off when it would hide EVERYTHING, so a machine whose
+     * only login is on the other side keeps working instead of reading as
+     * "signed out". Resolution (`current`/`resolve`) is never affected.
      */
-    const visible = this.hideTenantAccounts
-      ? discovered.filter(credential => !isEnterpriseAccount(credential))
-      : discovered
-    const credentials = visible.length > 0 ? visible : discovered
+    const eligible = this.requireTenant
+      ? discovered.filter(credential => isEnterpriseAccount(credential))
+      : this.hideTenantAccounts
+        ? discovered.filter(credential => !isEnterpriseAccount(credential))
+        : discovered
+    const credentials = eligible.length > 0 ? eligible : discovered
     const selectedExists = this.accountId !== undefined && credentials.some(credential => traeAccountId(credential) === this.accountId)
     const defaultSelected = this.preferred(credentials)
     return credentials.map(credential => ({
