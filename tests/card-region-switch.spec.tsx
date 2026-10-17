@@ -80,15 +80,21 @@ function expand(): void {
  * positional pick would silently start asserting about the wrong control the
  * next time a checkbox is added above them.
  */
-function switches(): [HTMLInputElement, HTMLInputElement] {
-  // Region switches carry `row.tabSwitchAria` with the region name; the
-  // "show credits in the main UI" box (issue #26) is labelled with its own key
-  // and is deliberately not one of these.
+/**
+ * The three panel switches, by name.
+ *
+ * Looked up by their aria-label rather than by index: the card now renders
+ * cn, enterprise and ai in that order, and a positional helper would silently
+ * start asserting the enterprise box where it used to assert the ai one.
+ */
+function panelSwitches(): Record<'cn' | 'enterprise' | 'ai', HTMLInputElement> {
   const boxes = screen.getAllByRole('checkbox', { name: /row\.tabSwitchAria/ }) as HTMLInputElement[]
-  const cn = boxes.find(box => (box.getAttribute('aria-label') ?? '').includes('row.tabCn'))
-  const ai = boxes.find(box => box !== cn)
-  if (cn === undefined || ai === undefined) throw new Error(`expected two region switches, saw ${boxes.length}`)
-  return [cn, ai]
+  const pick = (key: string): HTMLInputElement => {
+    const box = boxes.find(candidate => (candidate.getAttribute('aria-label') ?? '').includes(key))
+    if (box === undefined) throw new Error(`no switch for ${key} (saw ${boxes.length})`)
+    return box
+  }
+  return { cn: pick('row.tabCn'), enterprise: pick('row.tabEnterprise'), ai: pick('row.tabAi') }
 }
 
 /** Render the card already expanded — the state most assertions need. */
@@ -110,9 +116,12 @@ describe('TraeUsageCard provider on/off switch', () => {
   it('renders both tabs checked when nothing is stored', () => {
     const { scope } = makeScope({})
     renderOpen(scope)
-    const [cn, ai] = switches()
-    expect(cn.checked).toBe(true)
-    expect(ai.checked).toBe(true)
+    const boxes = panelSwitches()
+    expect(boxes.cn.checked).toBe(true)
+    // Enterprise is OPT-IN: a consumer-only account cannot use that pool, so an
+    // upgrade must not put a failing route in the model picker.
+    expect(boxes.enterprise.checked).toBe(false)
+    expect(boxes.ai.checked).toBe(true)
   })
 
   it('shows an unchecked box for a region stored as enabled:false', () => {
@@ -120,15 +129,15 @@ describe('TraeUsageCard provider on/off switch', () => {
     // rendered checked. It must reflect the stored `false`.
     const { scope } = makeScope({ regions: { cn: { enabled: false }, ai: { enabled: true } } })
     renderOpen(scope)
-    const [cn, ai] = switches()
-    expect(cn.checked).toBe(false)
-    expect(ai.checked).toBe(true)
+    const boxes = panelSwitches()
+    expect(boxes.cn.checked).toBe(false)
+    expect(boxes.ai.checked).toBe(true)
   })
 
   it('writes enabled:false for the clicked region and flips the box', async () => {
     const state = makeScope({})
     renderOpen(state.scope)
-    const [cn] = switches()
+    const { cn } = panelSwitches()
     expect(cn.checked).toBe(true)
 
     fireEvent.click(cn)
@@ -141,7 +150,7 @@ describe('TraeUsageCard provider on/off switch', () => {
     expect(write.value).toEqual({ cn: { enabled: false } })
 
     // …and the box the user clicked now reads as unchecked.
-    await vi.waitFor(() => { expect(switches()[0].checked).toBe(false) })
+    await vi.waitFor(() => { expect(panelSwitches().cn.checked).toBe(false) })
   })
 
   it('re-enables a disabled region and preserves its stored model state', async () => {
@@ -149,9 +158,9 @@ describe('TraeUsageCard provider on/off switch', () => {
       regions: { cn: { enabled: false, enabledModelIds: ['glm-5.2'], contextBudgets: { 'glm-5.2': 200_000 } } },
     })
     renderOpen(state.scope)
-    expect(switches()[0].checked).toBe(false)
+    expect(panelSwitches().cn.checked).toBe(false)
 
-    fireEvent.click(switches()[0])
+    fireEvent.click(panelSwitches().cn)
 
     await vi.waitFor(() => { expect(state.writes.length).toBe(1) })
     // Toggling must never discard the user's picks.
@@ -163,7 +172,7 @@ describe('TraeUsageCard provider on/off switch', () => {
   it('toggles the region whose box was clicked, not the active tab', async () => {
     const state = makeScope({})
     renderOpen(state.scope)
-    const [, ai] = switches()
+    const { ai } = panelSwitches()
 
     fireEvent.click(ai)
 
@@ -179,7 +188,7 @@ describe('TraeUsageCard provider on/off switch', () => {
     renderOpen(state.scope)
     expect(screen.getByRole('tab', { selected: true }).textContent).toContain('row.tabCn')
 
-    fireEvent.click(switches()[1])
+    fireEvent.click(panelSwitches().ai)
 
     await vi.waitFor(() => { expect(state.writes.length).toBe(1) })
     // Still the CN tab.
@@ -197,7 +206,7 @@ describe('TraeUsageCard provider on/off switch', () => {
   it('disables the boxes when settings are not writable', () => {
     const { scope } = makeScope({}, false)
     renderOpen(scope)
-    for (const box of switches()) expect(box.disabled).toBe(true)
+    for (const box of Object.values(panelSwitches())) expect(box.disabled).toBe(true)
   })
 })
 
@@ -215,7 +224,7 @@ describe('TraeUsageCard over 0.1.7 live references', () => {
     // `regions` (and the slot inside it) both arrive as references on 0.1.7.
     const { scope } = makeScope({ regions: live({ cn: live({ enabled: false }), ai: live({ enabled: true }) }) })
     renderOpen(scope)
-    const [cn, ai] = switches()
+    const { cn, ai } = panelSwitches()
     // Without unwrapping, both would read as enabled — the box would be pinned
     // checked no matter what the document says.
     expect(cn.checked).toBe(false)
@@ -228,7 +237,7 @@ describe('TraeUsageCard over 0.1.7 live references', () => {
     })
     renderOpen(state.scope)
 
-    fireEvent.click(switches()[1])
+    fireEvent.click(panelSwitches().ai)
 
     await vi.waitFor(() => { expect(state.writes.length).toBe(1) })
     const written = onlyWrite(state.writes).value as Record<string, unknown>
@@ -256,7 +265,7 @@ describe('TraeUsageCard over 0.1.7 live references', () => {
     render(<TraeUsageCard t={t} settingsScope={locked as never} />)
     expand()
 
-    fireEvent.click(switches()[1])
+    fireEvent.click(panelSwitches().ai)
 
     await vi.waitFor(() => {
       expect(screen.getByRole('alert').textContent).toContain('row.settingsWriteFailed')
@@ -277,7 +286,7 @@ describe('TraeUsageCard over 0.1.7 live references', () => {
     render(<TraeUsageCard t={t} settingsScope={acceptedButDropped as never} />)
     expand()
 
-    fireEvent.click(switches()[1])
+    fireEvent.click(panelSwitches().ai)
 
     await vi.waitFor(() => {
       expect(screen.getByRole('alert').textContent).toContain('row.settingsWriteFailed')
@@ -303,6 +312,6 @@ describe('TraeUsageCard over 0.1.7 live references', () => {
     // needs the scope, so every write control must be inert rather than absent.
     render(<TraeUsageCard t={t} />)
     expand()
-    for (const box of switches()) expect(box.disabled).toBe(true)
+    for (const box of Object.values(panelSwitches())) expect(box.disabled).toBe(true)
   })
 })

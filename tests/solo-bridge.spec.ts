@@ -282,6 +282,18 @@ describe('describeTraeFailure: readable in-stream failure text (issue #19)', () 
     expect(message).not.toContain('refused this model under the SOLO function')
   })
 
+  it('names an exhausted ENTERPRISE allowance (4222) even though Trae sends no text', () => {
+    // Measured 2026-10-17 on a tenant account out of enterprise credit: the
+    // gateway answered {"code":4222,"message":""}. An empty upstream message
+    // must still produce a readable cause, and it must not be confused with
+    // the consumer pool's quota (4008) — the two balances are separate.
+    const message = describeTraeFailure({ code: 4222, message: '' })
+    expect(message).toContain('enterprise tenant allowance is exhausted')
+    expect(message).toContain('separate from the personal credit balance')
+    expect(message).toContain('Trae code 4222')
+    expect(message).not.toContain("SOLO quota is exhausted")
+  })
+
   it('separates an exhausted quota (4008) from a throttle (4011)', () => {
     const quota = describeTraeFailure({ code: 4008, message: "Your requests have exceeded the quota." })
     expect(quota).toContain("Trae reports the account's SOLO quota is exhausted for this request")

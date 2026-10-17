@@ -334,6 +334,8 @@ describe('per-region provider switch (issue #11)', () => {
       // Give the (no-op) ai registration path the same window the cn side got.
       await new Promise(resolve => setTimeout(resolve, 50))
       expect(ctx.llm.listProviders().map(provider => provider.id)).not.toContain('trae-global')
+      // The enterprise panel defaults OFF (a consumer-only account cannot use
+      // that pool), so the directory carries only the consumer entry here.
       expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider)).toEqual(['trae'])
       // The enabled side still serves models.
       expect((await ctx.llm.listModels('trae')).length).toBeGreaterThan(0)

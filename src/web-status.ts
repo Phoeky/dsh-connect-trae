@@ -16,7 +16,7 @@ import type { TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
-import type { TraeRegion } from './region.ts'
+import { regionOfPanel, type TraePanel, type TraeRegion } from './region.ts'
 import {
   regionOfTraeStatusUrl,
   TRAE_ACCOUNT_CREDITS_PATH,
@@ -49,35 +49,35 @@ export type { TraeWebUsage } from './status-paths.ts'
 const CHECKIN_DEVICE_ALREADY_CLAIMED = 9095
 
 /**
- * Constructor dependencies. Everything region-specific is addressed by the
- * region the request names: the two regions are separate provider stacks, so
+ * Constructor dependencies. Everything panel-specific is addressed by the
+ * panel the request names: the two regions are separate provider stacks, so
  * the card must be served the directory, selection, and credits of the tab the
  * user is on.
  */
 export interface TraeUsageRouteOptions {
-  /** The region-scoped credential store backing each region's requests. */
-  store(region: TraeRegion): TraeCredentialStore
-  /** The region-scoped usage client (CN work credits / international pay status). */
-  client(region: TraeRegion): TraeUsageClient
+  /** The panel-scoped credential store backing each region's requests. */
+  store(panel: TraePanel): TraeCredentialStore
+  /** The panel-scoped usage client (CN work credits / international pay status). */
+  client(panel: TraePanel): TraeUsageClient
   /**
    * CN credit balances of an account OTHER than the bound one, read without
    * changing which account is bound (issue #25). Optional: when absent the
    * exhausted-account hint is simply not offered.
    */
-  creditsOfAccount?(region: TraeRegion, accountId: string): Promise<TraeWebCredits | undefined>
+  creditsOfAccount?(panel: TraePanel, accountId: string): Promise<TraeWebCredits | undefined>
   /**
    * Per-account status for one row of the card's account table: CN → check-in
    * + balances, ai → subscription. Read without changing which account is
    * bound. Optional: when absent the account rows show no check-in/credits/
    * subscription figures (the table still lists each account and its switch).
    */
-  accountStateOf?(region: TraeRegion, accountId: string): Promise<TraeWebAccountState | undefined>
+  accountStateOf?(panel: TraePanel, accountId: string): Promise<TraeWebAccountState | undefined>
   /**
    * Claim today's check-in reward for ONE named account, without moving the
    * binding. Optional: absent means the per-row claim button is disabled (the
    * check-in surface simply is not offered).
    */
-  claimCheckinOf?(region: TraeRegion, accountId: string): Promise<{ claim: TraeCheckinClaim; checkin: TraeCheckinStatus } | undefined>
+  claimCheckinOf?(panel: TraePanel, accountId: string): Promise<{ claim: TraeCheckinClaim; checkin: TraeCheckinStatus } | undefined>
   /**
    * The account the Trae app is signed in to right now, when it differs from
    * the bound one (issue #29). Optional: absent means the card's follow hint
@@ -85,26 +85,26 @@ export interface TraeUsageRouteOptions {
    * Read-only — the HOST never rebinds from this value; the follow is a
    * settings write, made by the card or by the host's follow switch.
    */
-  liveLogin?(region: TraeRegion): Promise<TraeWebAppLogin | undefined>
+  liveLogin?(panel: TraePanel): Promise<TraeWebAppLogin | undefined>
   /** The requested region's last-refreshed raw directory (one entry per upstream model). */
-  displayModels(region: TraeRegion): readonly TraeModelInfo[]
-  /** The user's model selection in the requested region, stored as model id (= Trae name). */
-  enabledModelIds(region: TraeRegion): readonly string[]
+  displayModels(panel: TraePanel): readonly TraeModelInfo[]
+  /** The user's model selection in the requested panel, stored as model id (= Trae name). */
+  enabledModelIds(panel: TraePanel): readonly string[]
   /**
    * Whether the requested region's provider is currently offered to DSH. The
    * card renders this as the tab's on/off checkbox, so the switch reflects the
    * committed settings value rather than a local guess.
    */
-  regionEnabled(region: TraeRegion): boolean
+  regionEnabled(panel: TraePanel): boolean
   /** Re-read one region's live directory from the upstream. */
-  discoverModels?(region: TraeRegion, signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
+  discoverModels?(panel: TraePanel, signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
   /**
    * Test the given model ids for availability, one real (minimal) chat call
    * each. Present only when the region's chat path is wired.
    */
-  probeModels?(region: TraeRegion, ids: readonly string[]): Promise<{ results: { id: string; verdict: string; detail: string }[]; skipped?: string[] }>
-  /** Raw-Chat capability state of the requested region. */
-  rawDiagnostic?(region: TraeRegion): TraeRawDiagnostic
+  probeModels?(panel: TraePanel, ids: readonly string[]): Promise<{ results: { id: string; verdict: string; detail: string }[]; skipped?: string[] }>
+  /** Raw-Chat capability state of the requested panel. */
+  rawDiagnostic?(panel: TraePanel): TraeRawDiagnostic
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -384,16 +384,27 @@ export function toCheckin(status: {
 }
 
 /**
- * Assemble one region's card document. `region` is the tab the card is on; the
- * region-scoped store already answers with only that region's accounts, so the
+ * Assemble one region's card document. `panel` is the tab the card is on; the
+ * panel-scoped store already answers with only that region's accounts, so the
  * document's model slots and account list are that region's by construction.
  * Sign-in state is read-only; credit is a live billing answer whose failure
  * degrades to `creditsError` rather than failing the whole document.
  */
-export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegion): Promise<TraeWebUsage> {
-  const store = deps.store(region)
-  const enabled = deps.regionEnabled(region)
-  const accounts = await store.accounts()
+export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<TraeWebUsage> {
+  const store = deps.store(panel)
+  const enabled = deps.regionEnabled(panel)
+  /**
+   * Accounts this panel may actually bill.
+   *
+   * Filtered ONCE, at the source, because this list is spliced into every
+   * response shape below (`signed-out`, `signed-in`, the credits route). The
+   * enterprise pool can only bill a tenant account, and the tenant gateway does
+   * not make that obvious: it answers a personal token's DIRECTORY read in
+   * full and only refuses its chat (`4019`). Listing a personal account there
+   * would offer a binding that cannot work.
+   */
+  const accounts = (await store.accounts())
+    .filter(account => panel !== 'enterprise' || account.enterprise)
   const authStatus = await store.status()
   if (authStatus.state !== 'signed-in') {
     // A bare "signed out" is undiagnosable on a machine whose layout differs
@@ -424,15 +435,15 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
     return { status: 'signed-out', accounts, enabled, message: safeMessage(error) }
   }
   // Only user-facing identity and expiry cross to the browser. Token material
-  // and stable user IDs stay on the Host. The requested region drives which
-  // per-region model directory and selection this document reports, and which
+  // and stable user IDs stay on the Host. The requested panel drives which
+  // per-panel model directory and selection this document reports, and which
   // usage surface the credits block reads.
   //
   // `appLogin` is the same class of fact — identity only — read best-effort:
   // a store whose scan fails must not take the whole document down for a hint.
   let appLogin: TraeWebAppLogin | undefined
   try {
-    appLogin = await deps.liveLogin?.(region)
+    appLogin = await deps.liveLogin?.(panel)
   } catch { /* the hint is optional; the document still answers */ }
   const account = {
     accountId: accounts.find(item => item.selected)?.id ?? '',
@@ -442,17 +453,17 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
     // refresh token lapses, so a card that only reports the former says
     // "auto-renewal" right up to the moment renewal silently stops working.
     ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: credential.refreshExpiresAtMs },
-    region,
+    region: regionOfPanel(panel),
     enabled,
     accounts,
     ...appLogin === undefined ? {} : { appLogin },
-    models: deps.displayModels(region).map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
-    enabledModelIds: [...deps.enabledModelIds(region)],
-    ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(region) },
+    models: deps.displayModels(panel).map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
+    enabledModelIds: [...deps.enabledModelIds(panel)],
+    ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(panel) },
   }
-  const client = deps.client(region)
-  if (region === 'ai') {
-    // The international region is subscription-based: read its pay status
+  const client = deps.client(panel)
+  if (regionOfPanel(panel) === 'ai') {
+    // The international panel is subscription-based: read its pay status
     // instead of the CN Work-credit packs. A failure degrades to
     // payStatusError, exactly like creditsError on the CN side.
     try {
@@ -460,6 +471,24 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
       return { status: 'signed-in', ...account, payStatus }
     } catch (error: unknown) {
       return { status: 'signed-in', ...account, payStatusError: safeMessage(error) }
+    }
+  }
+  /**
+   * The enterprise panel shows NO credit figure, deliberately.
+   *
+   * `client.snapshot()` reads the CONSUMER packs, and that is the personal
+   * balance — not what a tenant turn spends. There is no enterprise counterpart
+   * to read: every tenant quota endpoint answers 404 (probed 2026-10-17), and
+   * the tenant console at console.enterprise.trae.cn is the only place the
+   * enterprise balance exists. Showing the personal number under an enterprise
+   * heading would be actively misleading, so the panel reports the absence
+   * explicitly and the card explains where the real figure lives.
+   */
+  if (panel === 'enterprise') {
+    return {
+      status: 'signed-in',
+      ...account,
+      creditsUnavailable: 'enterprise',
     }
   }
   // Credits and check-in are independent reads, so they settle independently:
@@ -474,7 +503,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
   // Only when the BOUND account is actually empty do the other accounts get
   // read (issue #25). A healthy account must not pay for extra upstream calls.
   const exhausted = credits !== undefined && credits.workAvailable <= 0 && credits.generalAvailable <= 0
-  const alternatives = exhausted ? await creditAlternatives(deps, region, accounts) : undefined
+  const alternatives = exhausted ? await creditAlternatives(deps, panel, accounts) : undefined
   return {
     status: 'signed-in',
     ...account,
@@ -502,17 +531,18 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegi
  */
 async function creditAlternatives(
   deps: TraeUsageRouteOptions,
-  region: TraeRegion,
+  panel: TraePanel,
   accounts: readonly TraeWebAccount[],
 ): Promise<TraeWebCreditAlternative[] | undefined> {
   if (deps.creditsOfAccount === undefined) return undefined
   const candidates = accounts
-    .filter(account => !account.selected && account.region === region)
+    .filter(account => !account.selected && account.region === regionOfPanel(panel))
+    .filter(account => panel !== 'enterprise' || account.enterprise)
     .slice(0, TRAE_CREDIT_ALTERNATIVE_LIMIT)
   if (candidates.length === 0) return undefined
   const found = await Promise.all(candidates.map(async account => {
     try {
-      const credits = await deps.creditsOfAccount!(region, account.id)
+      const credits = await deps.creditsOfAccount!(panel, account.id)
       if (credits === undefined) return undefined
       if (credits.workAvailable <= 0 && credits.generalAvailable <= 0) return undefined
       return {
@@ -529,11 +559,11 @@ async function creditAlternatives(
 }
 
 /**
- * The region a request addresses, or a 400 answer. Absent parameter means the
+ * The panel a request addresses, or a 400 answer. Absent parameter means the
  * domestic tab; an unknown value is refused rather than guessed.
  */
 /**
- * The general balance of every account in one region.
+ * The general balance of every account in one panel.
  *
  * One upstream read per account — the same call `creditsOfAccount` already
  * makes for the exhausted-balance alternatives, widened to every account and to
@@ -546,9 +576,14 @@ async function creditAlternatives(
  */
 export async function traeAccountCredits(
   deps: TraeUsageRouteOptions,
-  region: TraeRegion,
+  panel: TraePanel,
 ): Promise<TraeWebAccountCredit[]> {
-  const accounts = (await deps.store(region).accounts()).filter(account => account.region === region)
+  const accounts = (await deps.store(panel).accounts())
+    .filter(account => account.region === regionOfPanel(panel))
+    // A personal account cannot bill the tenant pool: the tenant gateway even
+    // hands it a full directory, and only the first chat reveals that it will
+    // answer `4019`. Listing it here would be an invitation to a dead end.
+    .filter(account => panel !== 'enterprise' || account.enterprise)
   if (accounts.length === 0) return []
   return Promise.all(accounts.map(async account => {
     let generalAvailable: number | undefined
@@ -560,11 +595,11 @@ export async function traeAccountCredits(
       // alternatives, where `creditAlternatives` excludes the selected account
       // for exactly this reason, but leaves this row with no figure.
       try {
-        generalAvailable = toCredits(await deps.client(region).snapshot()).generalAvailable
+        generalAvailable = toCredits(await deps.client(panel).snapshot()).generalAvailable
       } catch { /* keep the row, without a figure */ }
     } else if (deps.creditsOfAccount !== undefined) {
       try {
-        const credits = await deps.creditsOfAccount(region, account.id)
+        const credits = await deps.creditsOfAccount(panel, account.id)
         generalAvailable = credits?.generalAvailable
       } catch { /* keep the row, without a figure */ }
     }
@@ -572,13 +607,13 @@ export async function traeAccountCredits(
   }))
 }
 
-function requestRegion(req: IncomingMessage, res: ServerResponse): TraeRegion | undefined {
-  const region = regionOfTraeStatusUrl(req.url ?? '/')
-  if (region === undefined) {
+function requestRegion(req: IncomingMessage, res: ServerResponse): TraePanel | undefined {
+  const panel = regionOfTraeStatusUrl(req.url ?? '/')
+  if (panel === undefined) {
     json(res, 400, { error: 'unknown region' })
     return undefined
   }
-  return region
+  return panel
 }
 
 /** Mount the GET usage route on an optional webServer context. */
@@ -596,17 +631,17 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           json(res, 403, { error: 'origin-not-trusted' })
           return
         }
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         try {
-          json(res, 200, await traeWebUsage(deps, region))
+          json(res, 200, await traeWebUsage(deps, panel))
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
       },
     })
     /**
-     * General balance of every account in the region — read only when the
+     * General balance of every account in the panel — read only when the
      * composer panel is opened. One upstream read per account, paid once per
      * open rather than on the 5-minute cycle (see
      * {@link TRAE_ACCOUNT_CREDITS_PATH}).
@@ -617,10 +652,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         try {
-          json(res, 200, { accounts: await traeAccountCredits(deps, region) })
+          json(res, 200, { accounts: await traeAccountCredits(deps, panel) })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
@@ -640,12 +675,12 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         if (deps.accountStateOf === undefined) return json(res, 503, { error: 'account status unavailable' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         const accountId = new URL(req.url ?? '/', 'http://localhost').searchParams.get('accountId')
         if (accountId === null || accountId.trim() === '') return json(res, 400, { error: 'missing accountId' })
         try {
-          const state = await deps.accountStateOf(region, accountId)
+          const state = await deps.accountStateOf(panel, accountId)
           if (state === undefined) return json(res, 404, { error: 'unknown account' })
           json(res, 200, state)
         } catch (error: unknown) {
@@ -659,10 +694,14 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         try {
-          json(res, 200, { accounts: await deps.store(region).accounts() })
+          // Same tenant gate as the status document: a personal account in the
+          // enterprise tab could only ever answer `4019`.
+          const accounts = (await deps.store(panel).accounts())
+            .filter(account => panel !== 'enterprise' || account.enterprise)
+          json(res, 200, { accounts })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
@@ -683,15 +722,15 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         const action = transferActionOf(req.url ?? '')
         if (action === undefined) return json(res, 400, { error: 'unknown transfer action' })
         try {
           const body = await readTransferBody(req)
           if (action === 'export') {
             const wanted = new Set(Array.isArray(body['accountIds']) ? body['accountIds'].filter((id): id is string => typeof id === 'string') : [])
-            const store = deps.store(region)
+            const store = deps.store(panel)
             const records: TraeTransferRecord[] = []
             for (const account of await store.accounts()) {
               if (!wanted.has(account.id)) continue
@@ -721,14 +760,14 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
             ? body['indexes'].filter((index): index is number => typeof index === 'number' && Number.isInteger(index))
             : []
           // Parse FIRST so a malformed file fails the request before any write,
-          // and so the region gate sees the same records the preview showed.
+          // and so the panel gate sees the same records the preview showed.
           const records = parseTransferFile(text)
-          const { changes, imported, skipped } = mergeTransferRecords(records, indexes, region)
+          const { changes, imported, skipped } = mergeTransferRecords(records, indexes, regionOfPanel(panel))
           // Only touch the store when the gate accepted something: an import in
           // which every record was skipped must not rewrite the credential file
           // (and `importAccounts([])` deliberately returns early anyway, so this
           // keeps the route's intent explicit rather than relying on that).
-          if (changes.size > 0) await deps.store(region).importAccounts([...changes.values()])
+          if (changes.size > 0) await deps.store(panel).importAccounts([...changes.values()])
           json(res, 200, { imported, skipped })
         } catch (error: unknown) {
           json(res, 400, { error: safeMessage(error) })
@@ -741,10 +780,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         if (deps.discoverModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         try {
-          const models = await deps.discoverModels(region)
+          const models = await deps.discoverModels(panel)
           json(res, 200, { models })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
@@ -768,8 +807,8 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         if (deps.probeModels === undefined) return json(res, 503, { error: 'model test unavailable' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
         let ids: string[]
         try {
           ids = await readModelTestBody(req)
@@ -781,7 +820,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           return json(res, 400, { error: `too many models (limit ${String(TRAE_MODELS_TEST_LIMIT)})` })
         }
         try {
-          json(res, 200, await deps.probeModels(region, ids))
+          json(res, 200, await deps.probeModels(panel, ids))
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
@@ -813,9 +852,11 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
-        const region = requestRegion(req, res)
-        if (region === undefined) return
-        if (region !== 'cn') {
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
+        // Judged by CREDENTIAL REGION: the enterprise panel is a CN pool and has
+        // the same check-in endpoint as the domestic one.
+        if (regionOfPanel(panel) !== 'cn') {
           // The `/trae/api/v2/ug/*` family does not exist on the ai gateways
           // (404, probed 2026-09-24); answering 404 here states that plainly
           // instead of surfacing an upstream HTML 404 as a network fault.
@@ -837,7 +878,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           }
           if (accountId !== undefined) {
             if (deps.claimCheckinOf === undefined) return json(res, 503, { error: 'check-in by account unavailable' })
-            const outcome = await deps.claimCheckinOf(region, accountId)
+            const outcome = await deps.claimCheckinOf(panel, accountId)
             if (outcome === undefined) return json(res, 404, { error: 'unknown account' })
             const { claim, checkin: after } = outcome
             const deviceClaimed = claim.code === CHECKIN_DEVICE_ALREADY_CLAIMED
@@ -850,7 +891,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
               checkin: toCheckin(after),
             })
           }
-          const client = deps.client(region)
+          const client = deps.client(panel)
           const current = await client.checkinStatus()
           if (!current.enabled) {
             return json(res, 409, { error: 'check-in is not enabled for this account' })

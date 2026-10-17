@@ -117,9 +117,19 @@ export function traeInputModalities(model: Pick<TraeModelInfo, 'input'>): TraeIn
  * (wire resolution, callable-key filtering) must keep matching the
  * undecorated name; only the model rows handed to DSH (adapter catalog and
  * model discovery) use this decorated name.
+ *
+ * `withRate` is false for the ENTERPRISE panel. The multiplier is a
+ * consumer-pool figure — personal credits per token, read from the consumer
+ * directory — and the tenant pool does not bill against it, so printing it in
+ * the model picker would price a model the tenant is not charged for. The rate
+ * is part of the NAME that reaches DSH, which is why this is a parameter here
+ * and not a rendering decision downstream.
  */
-export function traeModelDisplayName(model: Pick<TraeModelInfo, 'name' | 'creditMultiplier'>): string {
-  return model.creditMultiplier === undefined
+export function traeModelDisplayName(
+  model: Pick<TraeModelInfo, 'name' | 'creditMultiplier'>,
+  withRate = true,
+): string {
+  return !withRate || model.creditMultiplier === undefined
     ? model.name
     : `${model.name} · x${model.creditMultiplier.toFixed(2)}`
 }

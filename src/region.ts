@@ -17,6 +17,44 @@ import type { TraeEdition } from './paths.ts'
 /** Storage/routing bucket: the CN service or the international (ai) service. */
 export type TraeRegion = 'cn' | 'ai'
 
+/**
+ * One section of the plugin card: a provider the user can switch, bind an
+ * account to, and pick models for, INDEPENDENTLY.
+ *
+ * A panel is not a region. `cn` and `ai` happen to be one-to-one with regions,
+ * but the CN enterprise pool shares the `cn` credential while billing a
+ * different account and serving a different roster — it needs its own switch,
+ * its own account binding and its own model selection, which is exactly what a
+ * panel is. Keeping panels a separate concept from regions is what lets
+ * `enterprise` be handled by the same settings plumbing with no new storage
+ * shape: each panel is just one more slot in the `regions` map.
+ */
+export type TraePanel = 'cn' | 'ai' | 'enterprise'
+
+/** Every panel, in card tab order. */
+export const TRAE_PANELS: readonly TraePanel[] = ['cn', 'enterprise', 'ai']
+
+/** The region whose credential/account pool a panel draws on. */
+export function regionOfPanel(panel: TraePanel): TraeRegion {
+  return panel === 'ai' ? 'ai' : 'cn'
+}
+
+/** The provider id a panel publishes. */
+export function providerOfPanel(panel: TraePanel): string {
+  if (panel === 'enterprise') return 'trae-enterprise'
+  return panel === 'ai' ? 'trae-global' : 'trae'
+}
+
+/** The panel that owns a provider id, or undefined for an unknown id. */
+export function panelOfProvider(provider: string): TraePanel | undefined {
+  return TRAE_PANELS.find(panel => providerOfPanel(panel) === provider)
+}
+
+/** Narrow a stored settings key to a panel. */
+export function panelOfKey(value: unknown): TraePanel | undefined {
+  return (TRAE_PANELS as readonly string[]).includes(value as string) ? value as TraePanel : undefined
+}
+
 /** One region's upstream gateway bases. */
 export interface TraeRegionGateways {
   /** Chat + agent API base (the `llm_utils_chat` / raw-chat family). */
@@ -46,6 +84,26 @@ export const REGION_GATEWAYS: Readonly<Record<TraeRegion, TraeRegionGateways>> =
     pay: 'https://growsg-normal.trae.ai',
   },
 }
+
+/**
+ * Enterprise (tenant) chat gateway for a CN credential that belongs to a
+ * `tob_online` tenant.
+ *
+ * This is a SECOND chat gateway on the same credential, not a second region:
+ * the roster, the credential and the protocol are the same as `cn`, but a
+ * tenant account is billed against the enterprise pool when the request goes
+ * here. Measured 2026-10-17 on a live `Trae CN` tenant account: the same model
+ * served from this host does not move the personal `consumed_amount`, while
+ * the same call to `trae-api-cn.mchost.guru` charges it.
+ *
+ * Two wire differences, both load-bearing:
+ *  - the request must carry a per-call `session_id` (the consumer gateway
+ *    rejects it with `4001`), and
+ *  - a refused call answers **HTTP 200** whose FIRST SSE frame is
+ *    `event:error` with `code: 4001` — not an HTTP error status, so the
+ *    refusal is only visible if the response body is inspected.
+ */
+export const TRAE_ENTERPRISE_HOST = 'https://console.enterprise.trae.cn'
 
 /** Region for an edition label: the international installs belong to `ai`. */
 export function regionOfEdition(edition: TraeEdition): TraeRegion {

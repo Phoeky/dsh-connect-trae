@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { TraeCredential } from '../src/auth.ts'
 import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
-import type { TraeRegion } from '../src/region.ts'
+import type { TraePanel, TraeRegion } from '../src/region.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
 import { toCredits, traeAccountCredits, traeWebUsage } from '../src/web-status.ts'
 import { TRAE_ACCOUNT_STATUS_PATH, TRAE_CHECKIN_PATH, TRAE_MODELS_TEST_PATH, TRAE_USAGE_PATH } from '../src/status-paths.ts'
@@ -23,15 +23,15 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
   const client = new TraeUsageClient({ credential: async () => credential, fetchImpl, baseUrl: 'https://api.trae.cn' })
   return {
     store: () => ({
-      async accounts() { return [{ id: 'account-1', accountName: 'LaoDing', edition: 'solo', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
+      async accounts() { return [{ id: 'account-1', accountName: 'LaoDing', edition: 'solo', enterprise: false, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
       async status() { return { state: 'signed-in', edition: 'solo', expiresAtMs: Date.now() + 1000, source: 'desktop' } },
       async resolve() { return credential },
     }) as unknown as ReturnType<TraeUsageRouteOptions['store']>,
     client: () => client,
-    displayModels: (_region: TraeRegion) => [
+    displayModels: (_panel: TraePanel) => [
       { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
     ],
-    enabledModelIds: (_region: TraeRegion) => ['DeepSeek-V4-Flash'],
+    enabledModelIds: (_panel: TraePanel) => ['DeepSeek-V4-Flash'],
     regionEnabled: () => true,
     rawDiagnostic: () => ({ state: 'protocol-gated', status: 400, checkedAtMs: 123 }),
   }
@@ -194,7 +194,7 @@ describe('traeWebUsage', () => {
   })
 
   it('asks the switch for the requested region only', async () => {
-    const asked: TraeRegion[] = []
+    const asked: TraePanel[] = []
     const deps = makeRoute()
     deps.regionEnabled = region => { asked.push(region); return region === 'cn' }
     await traeWebUsage(deps, 'cn')
@@ -217,7 +217,7 @@ describe('traeWebUsage region routing', () => {
 
   function makeIntlRoute(payAnswer: () => Response): TraeUsageRouteOptions {
     const client = new TraeUsageClient({ credential: async () => intlCredential, fetchImpl: async () => payAnswer() })
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     return {
       store: () => ({
         async accounts() { return [{ id: 'account-intl', accountName: 'IntlLaoDing', edition: 'solo-sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
@@ -315,7 +315,7 @@ describe('registerTraeUsageRoute region dispatch', () => {
   }
 
   it('routes each region query to that region\'s store, defaulting to cn', async () => {
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     const captured = await mountRoutes({
       store: region => {
         seenRegions.push(region)
@@ -339,7 +339,7 @@ describe('registerTraeUsageRoute region dispatch', () => {
   })
 
   it('refuses an unknown region with 400 before touching the store', async () => {
-    const seenRegions: TraeRegion[] = []
+    const seenRegions: TraePanel[] = []
     const captured = await mountRoutes({
       store: region => {
         seenRegions.push(region)
@@ -1138,5 +1138,79 @@ describe('toCredits per-pack expiry', () => {
       const result = creditsNow([pack({ endTimeMs: 0, creditsLimit: 100, consumedCredits: 0 })])
       expect(result.expiry).toBeUndefined()
     })
+  })
+})
+
+describe('enterprise panel only offers accounts that can bill it', () => {
+  /** Route whose store knows one tenant account and one personal one. */
+  function twoAccounts(): TraeUsageRouteOptions {
+    const deps = makeRoute()
+    deps.store = () => ({
+      async accounts() {
+        return [
+          { id: 'tenant-1', accountName: 'Tenant User', edition: 'cn', enterprise: true, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true },
+          { id: 'personal-1', accountName: 'Personal User', edition: 'solo', enterprise: false, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: false },
+        ]
+      },
+      async status() { return { state: 'signed-in', edition: 'cn', expiresAtMs: Date.now() + 1000, source: 'desktop' } },
+      async resolve() { return { ...credential, edition: 'cn' } },
+      async liveLogin() { return undefined },
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    return deps
+  }
+
+  it('lists only the tenant account on the enterprise tab', async () => {
+    const result = await traeWebUsage(twoAccounts(), 'enterprise')
+    expect(result.status).toBe('signed-in')
+    if (result.status !== 'signed-in') return
+    expect(result.accounts.map(account => account.accountName)).toEqual(['Tenant User'])
+  })
+
+  it('still lists both accounts on the domestic tab', async () => {
+    // The same credentials serve the consumer pool, so nothing is hidden there.
+    const result = await traeWebUsage(twoAccounts(), 'cn')
+    expect(result.status).toBe('signed-in')
+    if (result.status !== 'signed-in') return
+    expect(result.accounts.map(account => account.accountName)).toEqual(['Tenant User', 'Personal User'])
+  })
+
+  it('filters the signed-OUT document too', async () => {
+    // Regression guard: the account list is spliced into BOTH response shapes.
+    // Filtering only the signed-in one is exactly the bug that left a personal
+    // account visible on the enterprise tab after a restart.
+    const deps = twoAccounts()
+    deps.store = () => ({
+      async accounts() {
+        return [{ id: 'personal-1', accountName: 'Personal User', edition: 'solo', enterprise: false, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: false }]
+      },
+      async status() { return { state: 'signed-out' } },
+      async diagnose() { return { tried: [], failures: [] } },
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    const result = await traeWebUsage(deps, 'enterprise')
+    expect(result.status).toBe('signed-out')
+    if (result.status !== 'signed-out') return
+    expect(result.accounts).toEqual([])
+  })
+})
+
+describe('enterprise panel exposes no credit figure', () => {
+  it('reports the absence explicitly instead of the consumer packs', async () => {
+    // The consumer snapshot is the PERSONAL balance. Rendering it under an
+    // enterprise heading would be read as the tenant's spend, so the panel does
+    // not read it at all and says why.
+    const deps = makeRoute({ fetchImpl: async () => new Response(JSON.stringify({ summary: { total_amount: 999, consumed_amount: 1 }, packs: [] }), { status: 200 }) })
+    deps.store = () => ({
+      async accounts() { return [{ id: 'tenant-1', accountName: 'Tenant User', edition: 'cn', enterprise: true, region: 'cn', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
+      async status() { return { state: 'signed-in', edition: 'cn', expiresAtMs: Date.now() + 1000, source: 'desktop' } },
+      async resolve() { return { ...credential, edition: 'cn' } },
+      async liveLogin() { return undefined },
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    const result = await traeWebUsage(deps, 'enterprise')
+    expect(result.status).toBe('signed-in')
+    if (result.status !== 'signed-in') return
+    expect(result.creditsUnavailable).toBe('enterprise')
+    expect(result.credits).toBeUndefined()
+    expect(result.creditsError).toBeUndefined()
+    expect(result.checkin).toBeUndefined()
   })
 })

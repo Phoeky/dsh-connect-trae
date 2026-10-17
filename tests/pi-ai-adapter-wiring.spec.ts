@@ -51,6 +51,7 @@ const shim = {
   ready: Promise.resolve(),
   baseUrl: () => 'http://127.0.0.1:1',
   token: () => 'secret',
+  tokenOf: () => 'secret',
   close: async () => {},
 }
 

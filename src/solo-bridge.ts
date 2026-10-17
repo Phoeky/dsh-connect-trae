@@ -14,7 +14,7 @@ interface OpenAIToolCallDelta {
  * One upstream failure as Trae reports it inside a 200 SSE body: an `error`
  * event, or any event carrying a `code` at or above Trae's error band.
  */
-interface TraeFailure {
+export interface TraeFailure {
   code?: number
   message: string
   extra?: unknown
@@ -46,6 +46,13 @@ interface TraeFailure {
  *    two different statements, and a user hits the second without touching the
  *    first (issue #33).
  *  - `4023` — the model name is unknown on the route that was asked.
+ *  - `4222` — the ENTERPRISE tenant's allowance is exhausted. Measured
+ *    2026-10-17 on a live tenant account whose enterprise credit ran out: the
+ *    gateway answered HTTP 200 with `{"code":4222,"message":""}` for a model
+ *    that streamed normally moments earlier (and still streams on the consumer
+ *    gateway). Like `4008` it is a billing fact rather than a config one, but
+ *    it is specific to the tenant pool -- the consumer balance is unaffected,
+ *    which is why it must not be folded into the `4008` reading.
  *  - `2001` — the upstream has not published its function config for the route
  *    that was asked. Evidence is issue #39: on a live CN account every SOLO
  *    function's `get_detail_param` answered HTTP 200 with `config_info_list:
@@ -64,6 +71,7 @@ const TRAE_ERROR_HINTS: Readonly<Record<number, string>> = {
   4008: 'Trae reports the account\'s SOLO quota is exhausted for this request',
   4011: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance)',
   4023: 'Trae does not recognise this model name on the SOLO route that was asked',
+  4222: 'The enterprise tenant allowance is exhausted (tenant spend is separate from the personal credit balance; the consumer gateway still has its own)',
 }
 
 /** `extra` is a JSON *string* on the wire; unwrap it to read `plan`. */
@@ -424,7 +432,15 @@ export class TraeSoloBridge implements TraeUpstreamClient {
       // Prefer the persisted catalog's `wireConfigName` when present, then fall
       // back to the startup wire resolver keyed by display name/id; the resolver
       // never depends on a user-refreshed or re-saved directory.
-      const entry = this.catalog?.current().find(item => item.id === model)
+      //
+      // Case-blind, because the gateways are NOT: `deepseek-v4.1-flash` is the
+      // Remote directory id while the gateway's `config_name` is
+      // `DeepSeek-V4.1-Flash`, and sending the lowercase spelling answers
+      // `4001 param is invalid`. A card saved before this was understood, or a
+      // row whose casing drifted, therefore had no mapping at all and could
+      // never be called.
+      const entryKey = model.trim().toLowerCase()
+      const entry = this.catalog?.current().find(item => item.id === model || item.id.trim().toLowerCase() === entryKey)
       // The catalog row carries both halves once discovery has run; the
       // resolver covers ids that came from elsewhere (startup wire map).
       const fromCatalog = entry?.wireConfigName === undefined
@@ -432,7 +448,21 @@ export class TraeSoloBridge implements TraeUpstreamClient {
         : { configName: entry.wireConfigName, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
       const fromResolver = this.wireResolver?.(model) ?? this.wireResolver?.(entry?.name ?? '')
       const target = fromCatalog ?? fromResolver
-      const wireModel = target?.configName ?? model
+      /**
+       * Last line of defence: the discovered row's own id.
+       *
+       * For models whose directory id IS the gateway `config_name` the merge
+       * deliberately emits no `wireConfigName` (there is nothing to map), so a
+       * requested id that differs only by case has neither mapping source —
+       * and the row we just matched case-blindly is exactly the canonical
+       * spelling. Sending it is what a correct mapping would have produced.
+       *
+       * Deliberately NOT derived from the row's `name`: the rosters spell most
+       * ids in the opposite case of their display names (`glm-5.3` vs
+       * `GLM-5.3`) and the gateway accepts the LOWERCASE id for those — a
+       * name-derived rewrite answered `4001` for 4 of 5 probed models.
+       */
+      const wireModel = target?.configName ?? entry?.id ?? model
       const wireFunction = target?.function ?? entry?.wireFunction
       if (wireModel !== input['model']) {
         input['model'] = wireModel
