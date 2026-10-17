@@ -1714,7 +1714,12 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                                 <span className="dsm-trae-model-copy">
                                   <span className="dsm-trae-model-name">
                                     {model.name}
-                                    {model.creditMultiplier === undefined ? null
+                                    {/* No rate on the enterprise tab: the
+                                        multiplier is a CONSUMER-pool figure
+                                        (personal credits per token), which the
+                                        tenant pool does not bill against. A
+                                        number there would be read as a price. */}
+                                    {activeRegion === 'enterprise' || model.creditMultiplier === undefined ? null
                                       : <span className="dsm-trae-model-name-rate">· x{model.creditMultiplier.toFixed(2)}</span>}
                                     {probeBadge(probeByRegion[activeRegion][model.id], t)}
                                   </span>

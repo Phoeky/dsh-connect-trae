@@ -558,6 +558,16 @@ interface TraeRegionStack {
   probeModels(ids: readonly string[]): Promise<{ results: { id: string; verdict: string; detail: string }[]; skipped?: string[] }>
   /** Rebuild the adapter snapshot after `catalog.set`; no-op before registration. */
   invalidateAdapter: () => void
+  /**
+   * The most recent successful discovery for THIS panel, or an empty list
+   * before the first one lands.
+   *
+   * Kept next to the stack because applySelection needs it: every settings
+   * write rebuilds the catalog from the saved rows, and saved rows predating
+   * wireConfigName carry wireFunction alone -- without this the write would
+   * strip the case mapping the bridge just taught it.
+   */
+  lastDiscovery: readonly TraeModelInfo[]
   /** Raw-Chat capability state for this region's card route. */
   rawDiagnostic: () => TraeRawDiagnostic
 }
@@ -828,6 +838,13 @@ export function apply(ctx: Context, config: Config): void {
      * a tenant credential, reads both pools so the shared catalogue keeps every
      * model either one serves.
      */
+    /**
+     * Latest successful discovery for this panel, mutated by discoverModels
+     * and READ by applySelection (via the stack): a settings write rebuilds
+     * the catalog from saved rows that may predate wireConfigName, and the
+     * merge below is what keeps the case mapping alive across it.
+     */
+    const latestDiscovery: TraeModelInfo[] = []
     const routeClients = {} as Record<string, TraeProviderRouteClient>
     const shimRoutes: TraeShimRoute[] = []
     // Exactly ONE provider per panel. The route label is the shim's bearer
@@ -918,6 +935,7 @@ export function apply(ctx: Context, config: Config): void {
       store,
       catalog,
       shim,
+      lastDiscovery: latestDiscovery,
       // The region's PRIMARY (first published) provider is what region-wide
       // diagnostics — probe, raw-chat status, "test this model" — speak for.
       // Per-provider turns go through `routeClients` and never touch this.
@@ -1037,7 +1055,11 @@ export function apply(ctx: Context, config: Config): void {
         // Discovery is a pure data return (workbuddy semantics): the card's
         // "refresh" drafts this list for an explicit save, and the startup
         // seed installs it into the live catalog. Writing it here would leak
-        // un-enabled models into the runtime catalog until the next save.
+        // un-enabled models into the runtime catalog until the next save --
+        // but the merge is KEPT on the stack: applySelection re-merges the
+        // wire fields into the saved rows on every settings write.
+        latestDiscovery.length = 0
+        latestDiscovery.push(...merged)
         return merged
       },
       /**
@@ -1212,7 +1234,34 @@ export function apply(ctx: Context, config: Config): void {
         unwrapVolatile(value.edition) ?? 'auto',
         effectiveAccountFor(panel, value),
       )
-      stack.catalog.set(configuredModels(value, panel))
+      /**
+       * Re-merge the wire mapping the last discovery taught us.
+       *
+       * configuredModels rebuilds from the SAVED rows, and rows saved before
+       * wireConfigName existed carry wireFunction alone. Every settings write
+       * goes through here (card writes, follow-app-login, the initial seed),
+       * so without this each write would strip the case mapping until the next
+       * discovery -- the exact window that turns deepseek-v4.1-flash into a
+       * 4001, because the gateway is case-sensitive and the lowercase
+       * directory id is the one spelling it refuses.
+       */
+      const known = new Map<string, TraeModelInfo>()
+      for (const model of stack.lastDiscovery) {
+        known.set(model.id, model)
+        known.set(model.id.trim().toLowerCase(), model)
+        if (model.name.trim() !== '') known.set(model.name.trim().toLowerCase(), model)
+      }
+      const rows = configuredModels(value, panel).map(model => {
+        const match = known.get(model.id)
+          ?? known.get(model.id.trim().toLowerCase())
+          ?? (model.name.trim() !== '' ? known.get(model.name.trim().toLowerCase()) : undefined)
+        if (match === undefined) return model
+        const wireConfigName = model.wireConfigName ?? match.wireConfigName
+        const wireFunction = model.wireFunction ?? match.wireFunction
+        if (wireConfigName === model.wireConfigName && wireFunction === model.wireFunction) return model
+        return { ...model, ...wireConfigName === undefined ? {} : { wireConfigName }, ...wireFunction === undefined ? {} : { wireFunction } }
+      })
+      stack.catalog.set(rows)
       stack.invalidateAdapter()
     }
     syncRegionRegistration(value)
