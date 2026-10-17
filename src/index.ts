@@ -115,7 +115,7 @@ export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS,
 export { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
-export { bridgeTraeSoloStream, TraeSoloBridge } from './solo-bridge.ts'
+export { bridgeTraeSoloStream, describeTraeFailure, TraeSoloBridge, type TraeFailure } from './solo-bridge.ts'
 export { TraeSoloRemoteCatalogClient, TRAE_SOLO_REMOTE_BASE, type TraeSoloRemoteCatalogOptions } from './solo-remote.ts'
 export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 export { TRAE_PAY_BASE, TraeUsageClient, type TraeActivityRule, type TraeCheckinClaim, type TraeCheckinStatus, type TraeUsageOptions, type TraeUsagePack, type TraeUsageSnapshot, type TraeUsageSummary, type TraeUsageView } from './usage.ts'

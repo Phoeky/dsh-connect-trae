@@ -14,7 +14,7 @@ interface OpenAIToolCallDelta {
  * One upstream failure as Trae reports it inside a 200 SSE body: an `error`
  * event, or any event carrying a `code` at or above Trae's error band.
  */
-interface TraeFailure {
+export interface TraeFailure {
   code?: number
   message: string
   extra?: unknown
