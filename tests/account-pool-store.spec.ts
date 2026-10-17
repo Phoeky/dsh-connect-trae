@@ -272,6 +272,15 @@ describe('traeWebPool token state', () => {
     return doc
   }
 
+  it('does not call a working account expired just because its stored token looked old', async () => {
+    // A balance that answered means the read refreshed the token; flagging the row
+    // would put 「登录已失效」 next to a number that is right there.
+    const pool = await docOf(async () => [
+      { account: { id: B, accountName: 'B' }, credits: { total: 7, expiringSoon: 0 }, tokenExpiresAtMs: SOONER },
+    ])
+    expect(pool.accounts.find(row => row.accountId === B)?.tokenExpired).toBeUndefined()
+  })
+
   it('explains a dash caused by a lapsed sign-in instead of leaving it bare', async () => {
     const pool = await docOf(async () => [
       { account: { id: A, accountName: 'A' }, credits: { total: 5, expiringSoon: 0 }, tokenExpiresAtMs: LATER },

@@ -518,8 +518,13 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
                 {serving === undefined
                   ? <option value="" disabled>{t('row.poolManualAccountNone')}</option>
                   : null}
-                {pool.accounts.map(account =>
-                  <option key={account.accountId} value={account.accountId}>{account.accountName}</option>)}
+                {/* Only accounts this machine can actually bill: a ghost row
+                    (saved, sign-in gone) has no credential, so binding it would
+                    look like a click that did nothing. */}
+                {pool.accounts
+                  .filter(account => account.reachable !== false)
+                  .map(account =>
+                    <option key={account.accountId} value={account.accountId}>{account.accountName}</option>)}
               </select>
             </span>
           </div>
@@ -571,6 +576,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             <MemberRow
               key={account.accountId}
               account={account}
+              showCheckin={pool.checkinSupported}
               models={models}
               rows={rows}
               checked={selected.has(account.accountId)}
@@ -591,6 +597,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             <MemberGhostRow
               key={`ghost:${ghost.accountId}`}
               ghost={ghost}
+              showCheckin={pool.checkinSupported}
               checked={selected.has(ghost.accountId)}
               onToggle={() => { toggleMember(ghost.accountId) }}
               t={t}
@@ -734,6 +741,14 @@ function MemberRowHeader({ t, checkinSupported }: { t: T; checkinSupported: bool
 
 interface MemberRowProps {
   account: TraeWebPoolAccount
+  /**
+   * Whether this table has a check-in column at all.
+   *
+   * A row must render exactly as many cells as `--dsm-trae-pool-cols` declares:
+   * an extra cell does not shrink, it wraps the action buttons onto a second
+   * grid line, which is how a five-column row looked on a four-column table.
+   */
+  showCheckin: boolean
   models: readonly TraeWebModel[]
   rows: Readonly<Record<string, TraePoolTestRowView>>
   checked: boolean
@@ -750,7 +765,7 @@ interface MemberRowProps {
   relativeAt: (at: number, now: number, t: T) => string
 }
 
-function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim }: MemberRowProps): ReactElement {
+function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim, showCheckin }: MemberRowProps): ReactElement {
   const isCurrent = account.current === true
   // NON-NEGOTIABLE #7: show General as the number (what chat spends); never
   // rank/display `available` (the wider sum) as "credits".
@@ -831,7 +846,7 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
       </div>
 
       {/* Check-in column (only when the panel supports it). */}
-      <div className="dsm-trae-pool-checkin">
+      {showCheckin ? <div className="dsm-trae-pool-checkin">
         <span className={`dsm-trae-pool-checkin-state dsm-trae-pool-checkin-${checkin === undefined ? 'unknown' : checkin ? 'ok' : device === true ? 'device' : 'no'}`}>
           {checkin === undefined
             ? t('row.poolCheckinUnknown')
@@ -849,7 +864,7 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
             >
               {claim.label}
             </button>}
-      </div>
+      </div> : null}
 
       {/* Row actions: Test / Remove. */}
       <div className="dsm-trae-pool-row-actions">
@@ -870,6 +885,8 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
 
 interface MemberGhostRowProps {
   ghost: { accountId: string; accountName: string }
+  /** Same rule as {@link MemberRowProps.showCheckin}: cell count must match the columns. */
+  showCheckin: boolean
   checked: boolean
   onToggle: () => void
   t: T
@@ -878,7 +895,7 @@ interface MemberGhostRowProps {
   onRemove: () => void
 }
 
-function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRemove }: MemberGhostRowProps): ReactElement {
+function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRemove, showCheckin }: MemberGhostRowProps): ReactElement {
   return (
     <div className="dsm-trae-pool-row dsm-trae-pool-row-ghost" role="row" data-account-id={ghost.accountId}>
       <div className="dsm-trae-pool-account">
@@ -905,7 +922,9 @@ function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRem
       {/* A ghost has no live credit / probe — the removal is the point. */}
       <div className="dsm-trae-pool-credit"><span className="dsm-trae-pool-credit-num">{t('row.poolCreditNone')}</span></div>
       <div className="dsm-trae-pool-probe"><span className="dsm-trae-pool-probe-none">{t('row.poolNeverTested')}</span></div>
-      <div className="dsm-trae-pool-checkin"><span className="dsm-trae-pool-checkin-state dsm-trae-pool-checkin-unknown">{t('row.poolCheckinUnknown')}</span></div>
+      {showCheckin
+        ? <div className="dsm-trae-pool-checkin"><span className="dsm-trae-pool-checkin-state dsm-trae-pool-checkin-unknown">{t('row.poolCheckinUnknown')}</span></div>
+        : null}
       <div className="dsm-trae-pool-row-actions">
         <button
           type="button"

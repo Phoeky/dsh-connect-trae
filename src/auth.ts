@@ -142,6 +142,15 @@ const CLI_DEFAULT_HOST = 'https://api.trae.cn'
  * working and upgrades itself the next time a credential is written; it is
  * never written again.
  */
+/**
+ * How long a FAILED per-account refresh is remembered.
+ *
+ * Long enough that a revoked refresh token costs one exchange per five minutes
+ * instead of two per card poll, short enough that a transient network failure is
+ * retried on the next screen the user opens.
+ */
+const REFRESH_RETRY_MS = 5 * 60_000
+
 const OWN_VERSION = 2
 /** The superseded single-credential layout, still read for migration. */
 const OWN_VERSION_SINGLE = 1
@@ -332,6 +341,17 @@ export class TraeCredentialStore {
    * copy another read already holds.
    */
   private readonly inflightByAccount = new Map<string, Promise<TraeCredential>>()
+  /**
+   * When a per-account refresh last FAILED, so a dead refresh token is not
+   * exchanged again on every poll.
+   *
+   * The card reads every member's balance on each refresh, and a revoked refresh
+   * token fails forever: without this memo each poll would spend two upstream
+   * calls (the current contract and the superseded one) on an account no retry
+   * can fix. Five minutes keeps a transient network failure cheap to retry while
+   * a revoked sign-in costs almost nothing.
+   */
+  private readonly refreshFailedAtMs = new Map<string, number>()
   /**
    * The account the NEXT request should bill, when a pool — not the user's
    * binding — is choosing (issue #44).
@@ -682,8 +702,17 @@ export class TraeCredentialStore {
     if (credential.expiresAtMs > Date.now() + this.refreshMarginMs) return credential
     const pending = this.inflightByAccount.get(accountId)
     if (pending !== undefined) return pending
+    const failedAt = this.refreshFailedAtMs.get(accountId)
+    if (failedAt !== undefined && Date.now() - failedAt < REFRESH_RETRY_MS) return credential
     const attempt = this.refreshNow(credential)
-      .catch(() => credential)
+      .then((refreshed) => {
+        this.refreshFailedAtMs.delete(accountId)
+        return refreshed
+      })
+      .catch(() => {
+        this.refreshFailedAtMs.set(accountId, Date.now())
+        return credential
+      })
       .finally(() => { this.inflightByAccount.delete(accountId) })
     this.inflightByAccount.set(accountId, attempt)
     return attempt

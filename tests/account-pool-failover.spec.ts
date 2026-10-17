@@ -434,6 +434,29 @@ describe('per-account credential refresh', () => {
     expect(credential?.accessToken).toBe('tb')
   })
 
+  it('stops retrying a refresh it already saw fail', async () => {
+    // The card reads every member's balance on each poll; a revoked refresh token
+    // fails forever, so an unmemoised retry would spend two upstream calls per
+    // account per poll on something no retry can fix.
+    let refreshes = 0
+    const { store, idOf } = await twoAccountStore({
+      expiredTokens: ['beta'],
+      refresh: async () => {
+        refreshes += 1
+        throw new Error('exchange rejected')
+      },
+    })
+
+    const first = await store.resolveCredentialOf(idOf('beta'))
+    const second = await store.resolveCredentialOf(idOf('beta'))
+
+    expect(first?.accessToken).toBe('tb')
+    expect(second?.accessToken).toBe('tb')
+    expect(refreshes).toBe(1)
+    // Still a lookup, not a refusal: the row keeps rendering with its lapsed token.
+    expect((await store.accounts()).find(account => account.accountName === 'beta')).toBeDefined()
+  })
+
   it('does not invent an account for an unknown id', async () => {
     const { store } = await twoAccountStore({})
     expect(await store.resolveCredentialOf('000000000000000000000000')).toBeUndefined()

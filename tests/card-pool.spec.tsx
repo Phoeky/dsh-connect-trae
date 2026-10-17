@@ -317,6 +317,26 @@ describe('AccountPool card section', () => {
     expect(within(poolRow('AccA')).queryByText(/row\.poolCheckin/)).toBeNull()
   })
 
+  it('renders exactly as many cells per row as the table declares columns', () => {
+    // A grid row with one cell too many does not shrink — the extra cell wraps the
+    // action buttons onto a second line, which is what a five-cell row looked like
+    // on the four-column (no check-in) table.
+    const narrow = makeScope()
+    const { container } = render(renderPoolAndReturn(basePool({ checkinSupported: false }), narrow.scope))
+    const table = container.querySelector('.dsm-trae-pool-table')
+    expect(table?.classList.contains('dsm-trae-pool-table-no-checkin')).toBe(true)
+    const narrowRows = Array.from(container.querySelectorAll('.dsm-trae-pool-row'))
+    expect(narrowRows.length).toBeGreaterThan(0)
+    for (const row of narrowRows) expect(row.children).toHaveLength(4)
+
+    cleanup()
+    const wide = makeScope()
+    const second = render(renderPoolAndReturn(basePool(), wide.scope))
+    for (const row of Array.from(second.container.querySelectorAll('.dsm-trae-pool-row'))) {
+      expect(row.children).toHaveLength(5)
+    }
+  })
+
   it('renders a test batch incrementally from a mocked NDJSON stream', async () => {
     // Seed membership so the "test all" button (disabled with no members) is live.
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))

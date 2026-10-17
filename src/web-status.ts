@@ -773,7 +773,13 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
         },
       },
       ...excludedBy === undefined ? {} : { excludedBy },
-      ...(tokenExpiresById.get(row.account.id) ?? Infinity) <= nowMs ? { tokenExpired: true } : {},
+      // Only as the REASON for a missing balance. A row that answered fine shows
+      // its credits; if its stored token looked stale, the read refreshed it and
+      // there is nothing for the user to fix — saying "sign-in expired" next to a
+      // working balance would be noise at best.
+      ...credits === undefined && (tokenExpiresById.get(row.account.id) ?? Infinity) <= nowMs
+        ? { tokenExpired: true }
+        : {},
       current: currentAccountId !== undefined && currentAccountId === row.account.id,
       member: row.member,
       reachable: reachableIds.has(row.account.id),
