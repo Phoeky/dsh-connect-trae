@@ -75,6 +75,12 @@ interface AccountPoolProps {
    * above it that repeats the same names, credits and check-in states.
    */
   tools?: ReactNode
+  /**
+   * The right-hand side of the top action row (the rescan button). Sits on
+   * the same line as the batch actions, the way the reference card puts
+   * 「重新检测账号」 opposite 「一键签到 / 一键测试」.
+   */
+  topActions?: ReactNode | undefined
   /** edition · source and the token countdown, keyed by account id. */
   details?: Readonly<Record<string, TraePoolRowDetail>> | undefined
   /** Per-row check-in buttons, keyed by account id. */
@@ -108,6 +114,13 @@ function formatNumber(value: number): string {
 }
 
 type T = AccountPoolProps['t']
+
+/** `MM/DD, HH:mm` — the absolute stamp a row shows under its age. */
+function shortWhen(atMs: number): string {
+  const at = new Date(atMs)
+  const pad = (value: number): string => (value < 10 ? `0${value}` : String(value))
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}, ${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
 
 function relativeAt(atMs: number, now: number, t: T): string {
   const mins = Math.max(0, Math.round((now - atMs) / 60_000))
@@ -232,7 +245,7 @@ function consumeTestNdjson(
   return sawAny
 }
 
-export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, details, claims, onClaim, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
+export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, topActions, details, claims, onClaim, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
   // Re-read saved preferences whenever the settings scope changes (a save here,
   // or a save elsewhere / a profile import). Without this the `saved` memo is
   // keyed on `settingsScope`/`pool` field PRIMITIVES, so a write that only
@@ -480,13 +493,9 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
 
   return (
     <section className="dsm-trae-pool" aria-label={t('row.poolTitle')}>
-      <header className="dsm-trae-pool-head">
-        <h3 className="dsm-trae-pool-title">{t('row.poolTitle')}</h3>
-      </header>
-      {/* Which account bills is stated ONCE, on its row (the tinted row with the
-          「派单中」 pill). A second statement in the header was the duplicate a
-          reader had to reconcile when the two disagreed mid-refresh. */}
-      <p className="dsm-trae-pool-note">{t('row.poolRegionNote')}</p>
+      {/* No section title: the action row says what the block is, and a heading
+          above it only pushed the table further down. Which account bills is
+          stated ONCE, on its row (the tinted row with the 「派单中」 pill). */}
 
       {/* Manual mode: with the pool off the plugin does not choose, so the user
           must be able to — and no other control is left to do it. */}
@@ -540,23 +549,23 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         {(busy === 'checkin' || busy === 'test' || testing !== undefined)
           ? <span className="dsm-trae-pool-busy" role="status">{t('row.poolBusyHint')}</span>
           : null}
+        {topActions === undefined ? null : <span className="dsm-trae-pool-actions-end">{topActions}</span>}
       </div>
 
       {showNoCandidate ? <NoCandidateNotice noCandidate={noCandidate} t={t} /> : null}
 
       {/* Membership table. Ghost members keep rendering as checked rows. */}
-      <div className="dsm-trae-pool-members">
-        <div className="dsm-trae-pool-members-head">
-          <div>
-            <h4 className="dsm-trae-pool-subtitle">{t('row.poolMembersTitle')}</h4>
-            <p className="dsm-trae-pool-subnote">{t('row.poolSelectedCount', { count: selected.size, total: pool.accounts.length + ghosts.length })}</p>
-          </div>
-          <div className="dsm-trae-pool-select-actions">
+      <div className="dsm-trae-pool-card">
+        <div className="dsm-trae-pool-card-head">
+          <h3 className="dsm-trae-pool-card-title">{t('row.poolMembersTitle')}</h3>
+          <div className="dsm-trae-pool-card-tools">
+            <span className="dsm-trae-pool-count">{t('row.poolSelectedCount', { count: selected.size, total: pool.accounts.length + ghosts.length })}</span>
             <button type="button" className="dsm-btn dsm-btn-outline" disabled={busy !== undefined} onClick={selectAll}>{t('row.poolSelectAll')}</button>
             <button type="button" className="dsm-btn dsm-btn-outline" disabled={busy !== undefined} onClick={selectNone}>{t('row.poolSelectNone')}</button>
           </div>
         </div>
-        <div className="dsm-trae-pool-table" role="table" aria-label={t('row.poolMembersTitle')}>
+        <p className="dsm-trae-pool-card-note">{t('row.poolCardHint')}</p>
+        <div className={pool.checkinSupported ? 'dsm-trae-pool-table' : 'dsm-trae-pool-table dsm-trae-pool-table-no-checkin'} role="table" aria-label={t('row.poolMembersTitle')}>
           <MemberRowHeader t={t} checkinSupported={pool.checkinSupported} />
           {pool.accounts.map(account => (
             <MemberRow
@@ -608,8 +617,8 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           <h3 className="dsm-trae-pool-title">{t('row.poolSettingsTitle')}</h3>
           {dirty ? <span className="dsm-trae-pool-dirty" role="status">{t('row.poolDirty')}</span> : null}
         </div>
-        <p className="dsm-trae-pool-note">{t('row.poolSettingsHint')}</p>
-        {tools === undefined ? null : <div className="dsm-trae-pool-tools">{tools}</div>}
+        {tools === undefined ? null : <div className="dsm-trae-pool-tools dsm-trae-pool-tools-dashed">{tools}</div>}
+        <p className="dsm-trae-pool-note">{t('row.poolSettingsNote')}</p>
         <div className="dsm-trae-pool-settings">
         <div className="dsm-trae-pool-set">
           <span className="dsm-trae-pool-set-copy">
@@ -678,6 +687,8 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         </div>
         </div>
       </div>
+
+      <p className="dsm-trae-pool-note">{t('row.poolRegionNote')}</p>
 
       {/* Activity log. */}
       <ActivityLog log={log} t={t} now={now} relativeAt={relativeAt} onClear={() => setLog([])} />
@@ -787,6 +798,11 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
           </span>
           {excluded ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span> : null}
         </span>
+        {/* Absolute time of the last probe. The model cell says how long ago;
+            this says when, which is what people compare across rows. */}
+        {account.probe?.atMs === undefined
+          ? null
+          : <span className="dsm-trae-pool-account-note">{t('row.poolProbeAt', { when: shortWhen(account.probe.atMs) })}</span>}
       </div>
 
       {/* Credit: the General bucket. Work is only a hint (never shown as the number). */}
@@ -795,6 +811,9 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
           explanation one hover away. */}
       <div className="dsm-trae-pool-credit" title={t('row.poolWorkHint')}>
         <span className="dsm-trae-pool-credit-num">{credit === undefined ? t('row.poolCreditNone') : formatNumber(credit)}</span>
+        {credit === undefined || account.nearestExpiryMs === undefined
+          ? null
+          : <span className="dsm-trae-pool-credit-meta">{t('row.poolCreditExpiry', { when: shortWhen(account.nearestExpiryMs) })}</span>}
       </div>
 
       {/* Probe result. */}
@@ -916,10 +935,12 @@ function ProbeResult({ outcome, modelId, atMs, source, detail, t, relativeAt, no
         <span className="dsm-trae-pool-dot dsm-trae-pool-dot-ok" aria-hidden="true" />
         {outcomeLabel(outcome, t)}
       </span>
+      {atMs === undefined
+        ? null
+        : <span className="dsm-trae-pool-probe-meta">{t('row.poolProbeMeasured', { when: relativeAt(atMs, now, t) })}</span>}
       <span className="dsm-trae-pool-probe-meta">
         {modelId !== undefined ? t('row.poolProbeModel', { model: modelId }) : t('row.poolProbeModelUnknown')}
-        {atMs !== undefined ? ` · ${relativeAt(atMs, now, t)}` : ''}
-        {' · '}{probeSourceLabel(source, t)}
+        {source === undefined ? '' : ` · ${probeSourceLabel(source, t)}`}
       </span>
       {detail !== undefined && detail !== '' ? <span className="dsm-trae-pool-probe-detail">{detail}</span> : null}
     </div>

@@ -146,25 +146,22 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
   })
 
   /**
-   * The switches are the PLATFORM checkbox, tinted with `accent-color` — the
-   * same idiom the composer-line switch already used, and the one the sibling
-   * dsh-connect-workbuddy card uses.
+   * The switches are a PILL: `appearance:none` plus our own track and knob.
    *
-   * This replaced a hand-drawn 34x20 track with a 14px knob. That design read
-   * its ON state from `--dsw-alias-brand-primary`, which is DSH's CONTRAST
-   * colour (#0f1115 light / #f9fafb dark) rather than an accent, so a ticked
-   * box rendered as a solid black pill. Nothing caught it: `accent-color` on a
-   * native box is the host's business, so there is no knob geometry left to
-   * assert — what has to hold is that the hand-drawn track is GONE and the
-   * native tint is what remains.
+   * The card used to tint the platform checkbox with `accent-color`, which is
+   * the platform's business — it cannot draw a pill, and the ON colour is
+   * whatever the OS paints. Owned geometry is the only way to get the shape the
+   * rest of the product uses, so what has to hold is that the native box is
+   * gone and the knob still moves when checked.
    */
-  it('tints the platform checkbox instead of drawing its own knob', () => {
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*accent-color:var\(--dsw-alias-brand-primary/)
+  it('draws a pill switch with an explicit knob', () => {
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*appearance:none/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*border-radius:999px/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input::after\{/)
+    // Without the translate the knob would sit still and the pill would read as
+    // "off" while the browser reports it checked.
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input:checked::after\{[^}]*transform:translateX/)
     expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch:has\(input:disabled\)/)
-    // The removed knob, spelled out: a reintroduced track would bring back the
-    // black pill and its mismatched ON state.
-    expect(TRAE_CARD_CSS).not.toContain('dsm-trae-switch-track')
-    expect(TRAE_CARD_CSS).not.toMatch(/\.dsm-trae-switch input\{[^}]*clip:rect/)
   })
 
   /**

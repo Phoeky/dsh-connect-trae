@@ -127,7 +127,13 @@ export const TRAE_CARD_CSS = `
  * the native box sitting two centimetres away in the composer toolbar. The
  * platform checkbox tracks the host's own accent and dark mode for free. */
 .dsm-trae-switch{display:inline-flex;align-items:center;cursor:pointer}
-.dsm-trae-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+/* A pill, not a tinted native box: appearance:none hands the geometry to the
+   stylesheet, so the track and the knob are ours and the ON state is a colour we
+   chose rather than whatever the platform paints. */
+.dsm-trae-switch input{appearance:none;-webkit-appearance:none;position:relative;margin:0;inline-size:36px;block-size:20px;border:0;border-radius:999px;background:var(--dsw-alias-bg-layer-3,#3f434c);cursor:pointer;transition:background-color .15s ease}
+.dsm-trae-switch input::after{content:"";position:absolute;inset-block-start:2px;inset-inline-start:2px;inline-size:16px;block-size:16px;border-radius:50%;background:var(--dsw-alias-label-primary,#f9fafb);transition:transform .15s ease}
+.dsm-trae-switch input:checked{background:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-switch input:checked::after{transform:translateX(16px)}
 .dsm-trae-switch input:disabled{cursor:default}
 .dsm-trae-switch:has(input:disabled){opacity:.6;cursor:default}
 /* The account block is a real table: the question it answers is "which of these
@@ -392,9 +398,21 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-remove{color:var(--dsw-alias-label-secondary,#c6c9d0)}
 .dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c);overflow:hidden}
+.dsm-trae-pool-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 14px 0}
+.dsm-trae-pool-card-title{margin:0;font-size:14px;line-height:20px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pool-card-tools{display:flex;align-items:center;gap:8px;flex:none}
+.dsm-trae-pool-count{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-card-note{margin:0;padding:6px 14px 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-card .dsm-trae-pool-table{border:0;border-radius:0;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
 .dsm-trae-pool-members{display:flex;flex-direction:column;gap:10px}
 /* Prose, not a box. Every explanation in this section is one line of muted
    text; boxing each one is what made the block look like a stack of cards. */
+.dsm-trae-pool-actions-end{margin-inline-start:auto}
+.dsm-trae-pool-credit-meta{display:block;margin-top:2px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-account-note{grid-column:2;grid-row:3;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-tools-dashed{border:1px dashed var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;padding:10px 12px}
+.dsm-trae-pool-tool-label{margin-inline-end:auto;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
 .dsm-trae-pool-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 /* A setting row: label + hint on the left, the control on the right, one
    rhythm for the switch, the target select and the manual binding. */
@@ -422,8 +440,9 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-subnote{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-select-actions{display:flex;flex:none;gap:6px}
 .dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-settings-save .dsm-btn{padding:2px 10px;font-size:12px}
-.dsm-trae-pool-table{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
-.dsm-trae-pool-row{display:grid;grid-template-columns:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-pool-table{--dsm-trae-pool-cols:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-pool-table-no-checkin{--dsm-trae-pool-cols:minmax(0,1.5fr) 74px minmax(0,1.3fr) 132px}
+.dsm-trae-pool-row{display:grid;grid-template-columns:var(--dsm-trae-pool-cols);align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
 .dsm-trae-pool-row:first-child{border-top:0}
 /* The header carries labels for the first three tracks only: the check-in and
    action cells are self-describing ("Not checked in", "Test"), and a header word
@@ -433,7 +452,7 @@ export const TRAE_CARD_CSS = `
    reads as a selection control, and the checkbox beside it already is one. */
 .dsm-trae-pool-row-current{background:rgba(86,134,254,.07);box-shadow:inset 3px 0 0 var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-pool-row-ghost{opacity:.7}
-.dsm-trae-pool-row-actions{grid-column:-2/-1;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.dsm-trae-pool-row-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
 .dsm-trae-pool-account{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:2px 8px;min-width:0}
 .dsm-trae-pool-check{display:inline-flex;align-items:center;flex:none;grid-column:1;grid-row:1;cursor:pointer}
 .dsm-trae-pool-check input{flex:none;margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}

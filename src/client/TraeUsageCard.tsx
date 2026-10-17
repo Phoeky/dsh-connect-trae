@@ -1703,15 +1703,16 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           models={visibleModels}
                           t={t}
                           settingsScope={settingsScope}
+                          topActions={<button
+                            type="button"
+                            className="dsm-btn dsm-btn-outline"
+                            disabled={busy}
+                            onClick={() => { void rescanAccounts() }}
+                          >
+                            {busy ? t('row.accountsScanning') : t('row.poolRescan')}
+                          </button>}
                           tools={<div className="dsm-trae-pool-tool-row">
-                            <button
-                              type="button"
-                              className="dsm-btn dsm-btn-outline"
-                              disabled={busy}
-                              onClick={() => { void rescanAccounts() }}
-                            >
-                              {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
-                            </button>
+                            <span className="dsm-trae-pool-tool-label">{t('row.poolToolsLabel')}</span>
                             <AccountTransfer
                               t={t}
                               region={activeRegion === 'ai' ? 'ai' : 'cn'}
