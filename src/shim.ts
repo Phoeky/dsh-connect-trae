@@ -13,12 +13,31 @@ export interface TraeShim {
   ready: Promise<void>
   baseUrl(): string
   token(): string
+  /** Bearer secret of one named route (defaults to the first route). */
+  tokenOf(label?: string): string
   close(): Promise<void>
+}
+
+/** One bearer-authenticated chat route served by the shim. */
+export interface TraeShimRoute {
+  /** Stable label used to look the route's secret up (`solo` | `enterprise`). */
+  label: string
+  client: TraeUpstreamClient
 }
 
 export interface TraeShimOptions {
   catalog: TraeCatalog
-  client: TraeUpstreamClient
+  /**
+   * Single-route form, kept for the existing call sites and tests.
+   *
+   * A shim serves exactly as many chat routes as the region publishes provider
+   * ids, and they must not be interchangeable: the consumer and enterprise
+   * pools bill different accounts, so the route is chosen by the bearer token
+   * the adapter was built with, and an unknown token is rejected rather than
+   * defaulting to "some" pool.
+   */
+  client?: TraeUpstreamClient
+  routes?: readonly TraeShimRoute[]
   logger?: ShimLogger
 }
 
@@ -88,7 +107,14 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 }
 
 export function createTraeShim(options: TraeShimOptions): TraeShim {
-  const secret = randomBytes(32).toString('base64url')
+  /**
+   * Resolve the route table. The single-client form becomes a one-entry table
+   * labelled `solo`, so existing call sites and tests keep one code path.
+   */
+  const routes: readonly (TraeShimRoute & { secret: string })[] = options.routes !== undefined
+    ? options.routes.map(route => ({ ...route, secret: randomBytes(32).toString('base64url') }))
+    : [{ label: 'solo', client: options.client as TraeUpstreamClient, secret: randomBytes(32).toString('base64url') }]
+  const secret = routes[0]?.secret ?? randomBytes(32).toString('base64url')
   const sockets = new Set<import('node:net').Socket>()
   const server: Server = createServer((req, res) => { void handle(req, res) })
   server.on('connection', socket => {
@@ -101,21 +127,28 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
   })
   server.listen(0, '127.0.0.1')
 
-  function bearerOk(req: IncomingMessage): boolean {
+  /** Route whose secret matches the request's bearer, or `undefined`. */
+  function routeOf(req: IncomingMessage): (TraeShimRoute & { secret: string }) | undefined {
     const match = typeof req.headers.authorization === 'string'
       ? /^Bearer\s+(.+)$/i.exec(req.headers.authorization.trim())
       : null
-    if (match === null) return false
+    if (match === null) return undefined
     const actual = Buffer.from(match[1] ?? '')
-    const expected = Buffer.from(secret)
-    return actual.length === expected.length && timingSafeEqual(actual, expected)
+    for (const route of routes) {
+      const expected = Buffer.from(route.secret)
+      if (actual.length === expected.length && timingSafeEqual(actual, expected)) return route
+    }
+    return undefined
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!hostIsLoopback(req.headers.host)) return writeError(res, 403, 'host_not_allowed', 'Host must be loopback')
       if (!originIsLoopback(req.headers.origin)) return writeError(res, 403, 'origin_not_allowed', 'Origin must be loopback')
-      if (!bearerOk(req)) return writeError(res, 401, 'unauthorized', 'Missing or invalid bearer')
+      // The bearer selects the billing pool, so an unrecognised token is a 401
+      // and never a fallback to the first route.
+      const route = routeOf(req)
+      if (route === undefined) return writeError(res, 401, 'unauthorized', 'Missing or invalid bearer')
       const url = req.url ?? '/'
       if (req.method === 'GET' && (url === '/healthz' || url === '/healthz/')) return writeJson(res, 200, { ok: true })
       if (req.method === 'GET' && (url === '/v1/models' || url === '/v1/models/')) {
@@ -144,7 +177,7 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
         const abort = (): void => controller.abort()
         req.once('aborted', abort)
         req.socket.once('close', abort)
-        const result = await options.client.chatStream(raw, controller.signal)
+        const result = await route.client.chatStream(raw, controller.signal)
         if (!result.ok) return writeError(res, STATUS_BY_KIND[result.kind], result.kind, result.message)
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -179,6 +212,12 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
       return `http://127.0.0.1:${address.port}`
     },
     token: () => secret,
+    tokenOf(label?: string) {
+      if (label === undefined) return secret
+      const route = routes.find(entry => entry.label === label)
+      if (route === undefined) throw new Error(`trae shim has no route named ${label}`)
+      return route.secret
+    },
     close: () => new Promise<void>((resolve, reject) => {
       for (const socket of sockets) socket.destroy()
       server.close(error => error === undefined ? resolve() : reject(error))

@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto'
 import type { TraeCredential } from './auth.ts'
 import type { TraeIdentity } from './identity.ts'
 import { buildTraeCnHeaders, traeEndpoint } from './protocol.ts'
-import { REGION_GATEWAYS, regionOfCredential, type TraeRegion } from './region.ts'
+import { REGION_GATEWAYS, TRAE_ENTERPRISE_HOST, regionOfCredential, type TraeRegion } from './region.ts'
 import { parseReasoningCapability, type TraeReasoningCapability } from './reasoning.ts'
 import type { TraeChatResult, TraeUpstreamErrorKind } from './upstream.ts'
 
@@ -197,9 +198,23 @@ export interface TraeSoloClientOptions {
   credential(): Promise<TraeCredential>
   identity(): Promise<TraeIdentity>
   baseUrl?: string
+  /**
+   * Which chat gateway this client is pinned to. Omitted = `solo`, the consumer
+   * pool. `enterprise` targets the tenant-billed `console.enterprise` gateway
+   * and stamps the per-call `session_id` it requires (see
+   * {@link TRAE_ENTERPRISE_HOST}).
+   *
+   * Pinned per CLIENT, never chosen per call: a turn must not be able to drift
+   * from the pool the user picked, so the route is fixed when the provider is
+   * built and every request that client makes stays on it.
+   */
+  route?: TraeChatRoute
   fetchImpl?: typeof fetch
   log?: (message: string, detail?: unknown) => void
 }
+
+/** Which chat pool a client is pinned to. */
+export type TraeChatRoute = 'solo' | 'enterprise'
 
 /**
  * Thrown by {@link TraeSoloUpstreamClient.fetchModels} when every requested
@@ -238,7 +253,10 @@ export class TraeSoloUpstreamClient {
   async fetchModels(signal?: AbortSignal): Promise<TraeSoloModel[]> {
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const region = regionOfCredential(credential)
-    const base = this.options.baseUrl ?? REGION_GATEWAYS[region].chat
+    // Same gateway as this client's chat route: the two pools publish DIFFERENT
+    // rosters (`DeepSeek-V4.1-Flash` is enterprise-only), so a consumer-pinned
+    // client that read the consumer roster would never discover it.
+    const base = this.options.baseUrl ?? this.chatBaseOf(credential)
     const headers = { ...buildTraeCnHeaders(credential, identity), Accept: 'application/json' }
     const byId = new Map<string, TraeSoloModel>()
     const failures: string[] = []
@@ -328,7 +346,19 @@ export class TraeSoloUpstreamClient {
     catch { return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' } }
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const headers = buildTraeCnHeaders(credential, identity)
-    const base = this.options.baseUrl ?? REGION_GATEWAYS[regionOfCredential(credential)].chat
+    const base = this.options.baseUrl ?? this.chatBaseOf(credential)
+    if (this.options.route === 'enterprise') {
+      // The tenant gateway requires a per-call correlation id; the consumer
+      // gateway rejects a body that carries one (`4001`), so this stays inside
+      // the enterprise branch rather than being stamped for everyone.
+      try {
+        const parsed = JSON.parse(prepared) as Record<string, unknown>
+        if (parsed['session_id'] === undefined) parsed['session_id'] = randomUUID()
+        prepared = JSON.stringify(parsed)
+      } catch {
+        return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' }
+      }
+    }
     let response: Response
     try {
       response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_CHAT_PATH), {
@@ -337,7 +367,25 @@ export class TraeSoloUpstreamClient {
     } catch (error: unknown) {
       return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
     }
-    if (response.ok) return { ok: true, response }
+    if (response.ok) {
+      /**
+       * The enterprise gateway reports a refusal as **HTTP 200** whose first
+       * SSE frame is `event:error`. Handing that stream back as a success would
+       * surface the refusal as an empty assistant turn, so it is converted to
+       * a real error here — the same shape the consumer gateway uses for its
+       * non-2xx failures.
+       */
+      if (this.options.route !== 'enterprise') return { ok: true, response }
+      const classified = await classifyEnterpriseResponse(response)
+      if ('response' in classified) return { ok: true, response: classified.response }
+      this.options.log?.('dsh-connect-trae: enterprise llm_utils_chat refused', {
+        status: 200,
+        model: JSON.parse(prepared)['model'],
+        configName: JSON.parse(prepared)['config_name'],
+        body: classified.refusal,
+      })
+      return { ok: false, status: 200, kind: 'client', message: classified.refusal }
+    }
     const text = (await response.text()).slice(0, 1024)
     this.options.log?.('dsh-connect-trae: llm_utils_chat rejected', {
       status: response.status,
@@ -348,4 +396,78 @@ export class TraeSoloUpstreamClient {
     })
     return { ok: false, status: response.status, kind: classify(response.status), message: text || `Trae SOLO returned HTTP ${response.status}` }
   }
+
+  /** Chat gateway for this client's pinned route. */
+  private chatBaseOf(credential: TraeCredential): string {
+    if (this.options.route === 'enterprise') return TRAE_ENTERPRISE_HOST
+    return REGION_GATEWAYS[regionOfCredential(credential)].chat
+  }
+}
+
+/**
+ * Return the refusal frame of an enterprise 200, or `undefined` when the stream
+ * is a real answer.
+ *
+ * Reads (and re-plays) only the first SSE frame: a refusal is emitted before
+ * any output token, so peeking that far is enough to classify the call, and
+ * the stream is rebuilt so a caller that got `undefined` still sees every byte.
+ */
+function concatStream(head: string, reader: ReadableStreamDefaultReader<Uint8Array>): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (head !== '') controller.enqueue(new TextEncoder().encode(head))
+      const drain = (): void => {
+        reader.read().then((result) => {
+          if (result.done) { controller.close(); return }
+          controller.enqueue(result.value)
+          drain()
+        }).catch((error: unknown) => controller.error(error))
+      }
+      drain()
+    },
+  })
+}
+
+/**
+ * Classify an enterprise 200.
+ *
+ * Returns `{ refusal }` when the first SSE frame is `event:error`, otherwise
+ * `{ response }` carrying a REBUILT response whose body re-emits every byte —
+ * including the peeked frame. A refusal is emitted before any output token, so
+ * peeking one frame is enough to classify the call.
+ *
+ * The response is rebuilt rather than patched: the original's body has been
+ * partially read, so its `text()`/`json()` would keep failing with "Body has
+ * already been read" even after `body` is swapped.
+ */
+async function classifyEnterpriseResponse(response: Response): Promise<{ refusal: string } | { response: Response }> {
+  const body = response.body
+  if (body === null) return { response }
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let head = ''
+  try {
+    while (!head.includes('\n\n')) {
+      const { done, value } = await reader.read()
+      if (done) break
+      head += decoder.decode(value, { stream: true })
+      if (head.length > 8192) break
+    }
+  } catch {
+    return { response }
+  }
+  const frame = head.split('\n\n')[0] ?? ''
+  const event = /^event:(\S+)/m.exec(frame)?.[1]
+  const data = frame.split('\n').find(line => line.startsWith('data:'))?.slice(5).trim() ?? ''
+  if (event !== 'error') {
+    return {
+      response: new Response(concatStream(head, reader), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      }),
+    }
+  }
+  try { await reader.cancel() } catch { /* already drained */ }
+  return { refusal: data === '' ? 'enterprise gateway refused the request' : data }
 }

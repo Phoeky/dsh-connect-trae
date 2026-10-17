@@ -6,10 +6,14 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
   createTraeAdapter,
+  displayNameOfTraeProvider,
   regionOfTraeProvider,
+  routeOfTraeProvider,
   TRAE_AI_PROVIDER,
+  TRAE_ENTERPRISE_PROVIDER,
   TRAE_PROVIDER,
   TRAE_PROVIDER_DISPLAY_NAMES,
+  TRAE_PROVIDER_IDS,
   TRAE_PROVIDERS,
 } from './adapter.ts'
 import type { TraeWebAccountState, TraeWebAppLogin, TraeWebCredits } from './status-paths.ts'
@@ -24,8 +28,9 @@ import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
 import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
-import type { TraeShim } from './shim.ts'
+import type { TraeShim, TraeShimRoute } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
+import type { TraeChatRoute } from './solo.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
 import type { TraeWireTarget } from './solo-bridge.ts'
 import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
@@ -42,14 +47,21 @@ export {
   adaptLegacyPiAiContext,
   adaptModernPiAiContext,
   createTraeAdapter,
+  displayNameOfTraeProvider,
   regionOfTraeProvider,
+  routeOfTraeProvider,
   TRAE_AI_PROVIDER,
+  TRAE_ENTERPRISE_PROVIDER,
   TRAE_PROVIDER,
   TRAE_PROVIDER_DISPLAY_NAMES,
+  TRAE_PROVIDER_ID_DISPLAY_NAMES,
+  TRAE_PROVIDER_IDS,
+  TRAE_PROVIDER_ROUTES,
   TRAE_PROVIDERS,
   TRAE_STREAM_IDLE_TIMEOUT_MS,
   withContextAdaptation,
   type TraeAdapter,
+  type TraeProviderRoute,
 } from './adapter.ts'
 export { decidePiAiGeneration, generationOf, piAiRuntimeInfo, type PiAiGeneration, type PiAiRuntimeInfo } from './pi-ai-runtime.ts'
 export {
@@ -370,6 +382,17 @@ const modelConfig = z.object({
   // split across SOLO-mode functions; glm-5.3 answers only solo_work_remote).
   // Persisted so a saved directory keeps working after a restart.
   wireFunction: z.string(),
+  // The gateway's own `config_name` when it differs from the display id.
+  //
+  // Declared for the same reason as `wireFunction`, and it was the missing half
+  // of that invariant: the DSH settings channel rebuilds the document through
+  // THIS schema, so a field absent here is dropped on every save. The gateways
+  // are case-sensitive (`deepseek-v4.1-flash` is the Remote directory id while
+  // `DeepSeek-V4.1-Flash` is the `config_name`), so losing this mapping turned
+  // every save into "this model answers 4001 until the next discovery". Absent
+  // on rows saved before this field existed; the bridge then falls back to the
+  // discovered row's own id.
+  wireConfigName: z.string(),
   // Trae's own image capability flag. Persisted for the same reason as
   // `wireFunction`: the runtime catalog is re-derived from `lastCatalog` on
   // every save and every restart, so a flag dropped here would switch "auto
@@ -442,12 +465,36 @@ const REGION_KEYS: readonly TraeRegion[] = ['cn', 'ai']
  * serve simultaneously and a change on one side (account switch, catalog
  * refresh) never touches the other.
  */
+/**
+ * One provider id's chat plumbing: the pool it bills, the client pinned to that
+ * pool, the bridge that resolves display ids to wire names, and the bearer
+ * secret its adapter authenticates to the shim with.
+ */
+interface TraeProviderRouteClient {
+  provider: string
+  route: TraeChatRoute
+  /** Raw SOLO client pinned to this route's gateway. */
+  client: TraeSoloUpstreamClient
+  /** The shim-visible client (bridge → delegating), what the adapter calls. */
+  upstream: TraeDelegatingUpstreamClient
+  /** Bearer secret this provider's adapter presents to the shim. */
+  secret: string
+}
+
 interface TraeRegionStack {
   region: TraeRegion
   store: TraeCredentialStore
   catalog: TraeCatalog
   shim: TraeShim
   delegating: TraeDelegatingUpstreamClient
+  /**
+   * One entry per provider id this region publishes, in picker order.
+   *
+   * Each provider gets its OWN chat client pinned to its billing pool and its
+   * own bearer secret, so the pool a turn reaches is decided by which provider
+   * the model was requested under — never by a per-call guess.
+   */
+  routeClients: Record<string, TraeProviderRouteClient>
   usageClient: TraeUsageClient
   /**
    * CN credit balance of an account other than the bound one, read without
@@ -695,11 +742,41 @@ export function apply(ctx: Context, config: Config): void {
     // but are not identical, and a shared map would cross-resolve ids.
     const wireResolver = (displayId: string): TraeWireTarget | undefined =>
       wire.byId.get(displayId) ?? wire.byName.get(displayId.trim().toLowerCase())
-    const upstream = new TraeSoloBridge(solo, catalog, wireResolver)
-    // The shim always sees a stable client; the Raw gateway may replace the
-    // delegate asynchronously, but it stays disabled until a probe succeeds.
-    const delegating = new TraeDelegatingUpstreamClient(upstream)
-    const shim = createTraeShim({ catalog, client: delegating, logger: ctx.logger })
+    /**
+     * One client + bridge per provider id.
+     *
+     * `routeOfTraeProvider` pins each to its billing pool: the consumer ids get
+     * the region gateway exactly as before, `trae-enterprise` gets the tenant
+     * gateway and stamps the `session_id` it requires. The discovery client
+     * below stays UNROUTED on purpose — it owns the roster/probe path and, for
+     * a tenant credential, reads both pools so the shared catalogue keeps every
+     * model either one serves.
+     */
+    const routeClients = {} as Record<string, TraeProviderRouteClient>
+    const shimRoutes: TraeShimRoute[] = []
+    for (const provider of TRAE_PROVIDER_IDS[region]) {
+      const route = routeOfTraeProvider(provider) ?? 'solo'
+      const client = new TraeSoloUpstreamClient({
+        credential: () => store.resolve(),
+        identity,
+        route,
+        log: (message, detail) => ctx.logger.warn(message, detail),
+      })
+      const bridge = new TraeSoloBridge(client, catalog, wireResolver)
+      // The shim always sees a stable client; the Raw gateway may replace the
+      // delegate asynchronously, but it stays disabled until a probe succeeds.
+      const delegating = new TraeDelegatingUpstreamClient(bridge)
+      routeClients[provider] = { provider, route, client, upstream: delegating, secret: '' }
+      shimRoutes.push({ label: route, client: delegating })
+    }
+    const shim = createTraeShim({ catalog, routes: shimRoutes, logger: ctx.logger })
+    for (const entry of Object.values(routeClients)) entry.secret = shim.tokenOf(entry.route)
+    /**
+     * The region's PRIMARY provider plumbing, used by region-wide paths that
+     * are not pool-specific: model probing, Raw-Chat status, and the stack's
+     * `delegating` handle. Per-provider turns never go through this.
+     */
+    const primary = routeClients[TRAE_PROVIDER_IDS[region][0] as string] as TraeProviderRouteClient
     let rawDiagnostic = (): TraeRawDiagnostic => ({ state: 'disabled' })
 
     // Raw Chat is probed on the CN stack only: the probe model
@@ -718,7 +795,7 @@ export function apply(ctx: Context, config: Config): void {
           })
           const gateway = createTraeRawGateway({
             raw: rawClient,
-            solo: upstream,
+            solo: new TraeSoloBridge(primary.client, catalog, wireResolver),
             endpoint: `${REGION_GATEWAYS.cn.chat}/api/ide/v2/llm_raw_chat`,
             edition: resolved.identity.edition,
             identity: { appVersion: resolved.identity.appVersion ?? '', buildVersion: resolved.identity.buildVersion ?? '' },
@@ -726,7 +803,7 @@ export function apply(ctx: Context, config: Config): void {
             // Raw Chat stays opt-in and unverified; SOLO remains the only live path.
             enabled: false,
           })
-          delegating.replace(gateway.upstream)
+          primary.upstream.replace(gateway.upstream)
           rawDiagnostic = () => gateway.diagnostic()
           ctx.effect(() => () => gateway.invalidate(), 'dsh-connect-trae: Raw capability invalidation')
         } catch (error: unknown) {
@@ -761,7 +838,11 @@ export function apply(ctx: Context, config: Config): void {
       store,
       catalog,
       shim,
-      delegating,
+      // The region's PRIMARY (first published) provider is what region-wide
+      // diagnostics — probe, raw-chat status, "test this model" — speak for.
+      // Per-provider turns go through `routeClients` and never touch this.
+      delegating: routeClients[TRAE_PROVIDER_IDS[region][0] as string]?.upstream as TraeDelegatingUpstreamClient,
+      routeClients,
       usageClient,
       /**
        * Credit balance of one named account, WITHOUT rebinding the store
@@ -902,7 +983,9 @@ export function apply(ctx: Context, config: Config): void {
         else skipped.push(id)
       }
       const results = await probeModelsSequentially(
-        (body, signal) => upstream.chatStream(body, signal),
+        // Probe through the region's primary pool: a test call must spend the
+        // pool that region-wide diagnostics are understood to spend.
+        (body, signal) => primary.upstream.chatStream(body, signal),
         testable,
       )
       return skipped.length === 0 ? { results } : { results, skipped }
@@ -987,9 +1070,28 @@ export function apply(ctx: Context, config: Config): void {
    * card tab alone would leave every model selectable.
    */
   const registration: Record<TraeRegion, {
-    adapter?: AdapterRegistrationHandle
+    /**
+     * ONE handle per published provider id.
+     *
+     * A registration handle binds a single adapter instance (its `replace`
+     * swaps routes for THAT adapter), and a region can offer several providers
+     * over the same catalog (CN: consumer + enterprise) with a separate pi-ai
+     * adapter each. They are switched together, because a disabled region
+     * withdraws every pool that shares its credential binding.
+     */
+    adapters: { provider: string; handle: AdapterRegistrationHandle }[]
     directory?: DirectoryRegistrationHandle
-  }> = { cn: {}, ai: {} }
+  }> = { cn: { adapters: [] }, ai: { adapters: [] } }
+
+  /** Release every live registration this apply() created. */
+  const disposeRegistration = (): void => {
+    for (const region of REGION_KEYS) {
+      for (const entry of registration[region].adapters) entry.handle()
+      registration[region].adapters.length = 0
+    }
+    registration.cn.directory?.()
+    delete registration.cn.directory
+  }
 
   /**
    * Publish each region's on/off state to the harness (issue #11). Both swaps
@@ -1002,9 +1104,11 @@ export function apply(ctx: Context, config: Config): void {
    */
   const syncRegionRegistration = (value: Config): void => {
     for (const region of REGION_KEYS) {
-      // Each region owns its OWN adapter registration, so a per-region replace
-      // is exactly that region's complete route set.
-      registration[region].adapter?.replace(regionEnabled(value, region) ? [TRAE_PROVIDERS[region]] : [])
+      // Each provider keeps its OWN registration, so a per-region switch
+      // replaces every one of them: withdrawing the adapter route is what
+      // actually removes the region's models from DSH's picker.
+      const enabled = regionEnabled(value, region)
+      for (const entry of registration[region].adapters) entry.handle.replace(enabled ? [entry.provider] : [])
     }
     // The directory is ONE registration holding BOTH entries: `replace` sets
     // the complete entry set, so it is called once with the full enabled list.
@@ -1012,13 +1116,13 @@ export function apply(ctx: Context, config: Config): void {
     // other's entry — a disabled region would take its enabled sibling with it.
     registration.cn.directory?.replace(REGION_KEYS
       .filter(region => regionEnabled(value, region))
-      .map(region => ({
-        provider: TRAE_PROVIDERS[region],
-        displayName: TRAE_PROVIDER_DISPLAY_NAMES[region],
+      .flatMap(region => TRAE_PROVIDER_IDS[region].map(provider => ({
+        provider,
+        displayName: displayNameOfTraeProvider(provider),
         settingsNs,
         settingsPath: [],
         declared: false,
-      })))
+      }))))
   }
 
   /** Push the current config into every region's store selection and catalog. */
@@ -1186,22 +1290,35 @@ export function apply(ctx: Context, config: Config): void {
       )
       for (const region of REGION_KEYS) {
         const stack = stacks[region]
-        const trae = createTraeAdapter({
-          shim: stack.shim,
-          catalog: stack.catalog,
-          provider: TRAE_PROVIDERS[region],
-          displayName: TRAE_PROVIDER_DISPLAY_NAMES[region],
-          resolveAttachments: () => ctx.get('attachments'),
-        })
-        stack.invalidateAdapter = () => { trae.invalidate() }
-        // Always register the route first: an empty INITIAL registration is
-        // invalid (`INVALID_ADAPTER`), while `replace([])` on a live one is
-        // explicitly legal. `syncRegionRegistration` below then withdraws the
-        // route for a region the user has switched off, in the same synchronous
-        // section, so nothing observes the transient route.
-        registration[region].adapter = region === 'cn'
-          ? ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
-          : ctx.llm.registerAdapter([TRAE_AI_PROVIDER], trae.adapter)
+        const adapters: ReturnType<typeof createTraeAdapter>[] = []
+        /**
+         * One adapter per published provider id.
+         *
+         * A region can offer more than one chat pool (CN: consumer + enterprise)
+         * over the SAME catalog and credential. Each adapter is bound to its
+         * provider's bearer secret, so a turn reaches exactly the pool whose
+         * provider the model was requested under.
+         */
+        for (const provider of TRAE_PROVIDER_IDS[region]) {
+          const entry = stack.routeClients[provider]
+          if (entry === undefined) continue
+          const trae = createTraeAdapter({
+            shim: stack.shim,
+            catalog: stack.catalog,
+            provider,
+            displayName: displayNameOfTraeProvider(provider),
+            secret: entry.secret,
+            resolveAttachments: () => ctx.get('attachments'),
+          })
+          adapters.push(trae)
+          // Always register the route first: an empty INITIAL registration is
+          // invalid (`INVALID_ADAPTER`), while `replace([])` on a live one is
+          // explicitly legal. `syncRegionRegistration` below then withdraws the
+          // route for a region the user has switched off, in the same synchronous
+          // section, so nothing observes the transient route.
+          registration[region].adapters.push({ provider, handle: ctx.llm.registerAdapter([provider], trae.adapter) })
+        }
+        stack.invalidateAdapter = () => { for (const trae of adapters) trae.invalidate() }
       }
       ctx.llm.registerModelDiscovery(settingsNs, async (request, signal) => {
         const region = regionOfTraeProvider(request.provider ?? '')
@@ -1243,24 +1360,22 @@ export function apply(ctx: Context, config: Config): void {
       // the harness was down is withdrawn here, before the startup seed below.
       syncRegionRegistration(current())
     } finally {
-      if (registration.cn.adapter === undefined || registration.ai.adapter === undefined || registration.cn.directory === undefined) {
+      if (
+        registration.cn.adapters.length === 0
+        || registration.ai.adapters.length === 0
+        || registration.cn.directory === undefined
+      ) {
         // Registration threw; release whichever half landed. A partially
         // registered plugin must not leave a route behind with no owner.
-        registration.cn.adapter?.()
-        registration.ai.adapter?.()
-        registration.cn.directory?.()
+        disposeRegistration()
       }
     }
     try {
       ctx.effect(() => () => {
-        registration.cn.adapter?.()
-        registration.ai.adapter?.()
-        registration.cn.directory?.()
+        disposeRegistration()
       })
     } catch {
-      registration.cn.adapter?.()
-      registration.ai.adapter?.()
-      registration.cn.directory?.()
+      disposeRegistration()
     }
 
     // Startup seed per region (workbuddy semantics): resolve the wire-id map

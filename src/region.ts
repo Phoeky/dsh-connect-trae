@@ -47,6 +47,26 @@ export const REGION_GATEWAYS: Readonly<Record<TraeRegion, TraeRegionGateways>> =
   },
 }
 
+/**
+ * Enterprise (tenant) chat gateway for a CN credential that belongs to a
+ * `tob_online` tenant.
+ *
+ * This is a SECOND chat gateway on the same credential, not a second region:
+ * the roster, the credential and the protocol are the same as `cn`, but a
+ * tenant account is billed against the enterprise pool when the request goes
+ * here. Measured 2026-10-17 on a live `Trae CN` tenant account: the same model
+ * served from this host does not move the personal `consumed_amount`, while
+ * the same call to `trae-api-cn.mchost.guru` charges it.
+ *
+ * Two wire differences, both load-bearing:
+ *  - the request must carry a per-call `session_id` (the consumer gateway
+ *    rejects it with `4001`), and
+ *  - a refused call answers **HTTP 200** whose FIRST SSE frame is
+ *    `event:error` with `code: 4001` — not an HTTP error status, so the
+ *    refusal is only visible if the response body is inspected.
+ */
+export const TRAE_ENTERPRISE_HOST = 'https://console.enterprise.trae.cn'
+
 /** Region for an edition label: the international installs belong to `ai`. */
 export function regionOfEdition(edition: TraeEdition): TraeRegion {
   return edition === 'sg' || edition === 'solo-sg' ? 'ai' : 'cn'

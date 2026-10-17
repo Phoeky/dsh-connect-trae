@@ -14,16 +14,55 @@ import type { TraeRegion } from './region.ts'
 export const TRAE_PROVIDER = 'trae'
 
 /**
+ * Provider route this bundle owns for the CN **enterprise (tenant)** gateway.
+ *
+ * A separate provider id, not a mode switch, because the two pools bill
+ * differently: a tenant account (`tob_online`) is served by BOTH gateways with
+ * the SAME credential, and only the enterprise one draws on the enterprise
+ * pool. Exposing one id would force a per-call guess about who pays.
+ *
+ * It never falls back to the consumer pool: picking this provider is the user
+ * saying "bill the tenant", so a refusal is reported as an error instead of
+ * being silently re-run against the personal quota.
+ */
+export const TRAE_ENTERPRISE_PROVIDER = 'trae-enterprise'
+
+/**
  * Provider route this bundle owns for the international (trae.ai) gateway.
  * Named `-global` to match the plugin family's convention (`workbuddy-global`);
  * the internal region bucket stays `ai`, which is the gateway/protocol name.
  */
 export const TRAE_AI_PROVIDER = 'trae-global'
 
-/** The provider id each region registers as. */
+/** The provider ids one region publishes, in model-picker order. */
+export const TRAE_PROVIDER_IDS: Readonly<Record<TraeRegion, readonly string[]>> = {
+  cn: [TRAE_PROVIDER, TRAE_ENTERPRISE_PROVIDER],
+  ai: [TRAE_AI_PROVIDER],
+}
+
+/** Each region's default (first) provider id. */
 export const TRAE_PROVIDERS: Readonly<Record<TraeRegion, string>> = {
   cn: TRAE_PROVIDER,
   ai: TRAE_AI_PROVIDER,
+}
+
+/**
+ * Which chat pool a provider bills against.
+ *
+ * `trae` and `trae-global` keep the behaviour they always had (the consumer
+ * SOLO pool); `trae-enterprise` is the only id that reaches the tenant gateway.
+ */
+export type TraeProviderRoute = 'solo' | 'enterprise'
+
+export const TRAE_PROVIDER_ROUTES: Readonly<Record<string, TraeProviderRoute>> = {
+  [TRAE_PROVIDER]: 'solo',
+  [TRAE_ENTERPRISE_PROVIDER]: 'enterprise',
+  [TRAE_AI_PROVIDER]: 'solo',
+}
+
+/** Chat pool a provider id bills against; `undefined` for an unknown id. */
+export function routeOfTraeProvider(provider: string): TraeProviderRoute | undefined {
+  return TRAE_PROVIDER_ROUTES[provider]
 }
 
 /** Human-readable provider names, shown in the DSH model picker. */
@@ -32,10 +71,22 @@ export const TRAE_PROVIDER_DISPLAY_NAMES: Readonly<Record<TraeRegion, string>> =
   ai: 'Trae Global',
 }
 
+/** Display name per provider id (the region table above only names the default). */
+export const TRAE_PROVIDER_ID_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  [TRAE_PROVIDER]: 'Trae',
+  [TRAE_ENTERPRISE_PROVIDER]: 'Trae 企业版',
+  [TRAE_AI_PROVIDER]: 'Trae Global',
+}
+
+/** Display name of a provider id. */
+export function displayNameOfTraeProvider(provider: string): string {
+  return TRAE_PROVIDER_ID_DISPLAY_NAMES[provider] ?? provider
+}
+
 /** Region a provider route id belongs to. */
 export function regionOfTraeProvider(provider: string): TraeRegion | undefined {
-  for (const [region, id] of Object.entries(TRAE_PROVIDERS) as [TraeRegion, string][]) {
-    if (id === provider) return region
+  for (const [region, ids] of Object.entries(TRAE_PROVIDER_IDS) as [TraeRegion, readonly string[]][]) {
+    if (ids.includes(provider)) return region
   }
   return undefined
 }
@@ -354,6 +405,14 @@ export interface TraeAdapterOptions {
   provider?: string
   /** pi-ai provider name and profile display name; defaults to the CN name. */
   displayName?: string
+  /**
+   * Bearer secret this provider presents to the shim.
+   *
+   * A region can publish more than one provider (consumer + enterprise), and
+   * the shim picks the billing pool from that bearer. Defaults to the shim's
+   * first route, which keeps the single-provider case unchanged.
+   */
+  secret?: string
   resolveAttachments?: () => AttachmentStore | undefined
   /**
    * Override the resolved pi-ai generation (see {@link withContextAdaptation});
@@ -428,7 +487,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   const adapter = new PiAiAdapter({
     profiles: () => profiles,
     auth: INERT_AUTH,
-    resolveApiKey: async () => options.shim.token(),
+    resolveApiKey: async () => options.secret ?? options.shim.token(),
     ...options.resolveAttachments === undefined ? {} : { resolveAttachments: options.resolveAttachments },
   })
 
