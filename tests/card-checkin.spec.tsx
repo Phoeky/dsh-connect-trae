@@ -90,7 +90,7 @@ function usageDocument(overrides: Record<string, unknown> = {}) {
  */
 function stubFetch(
   document: Record<string, unknown>,
-  accountStatus?: Record<string, unknown>,
+  accountStatus?: Record<string, unknown> | ((accountId: string) => Record<string, unknown>),
   claimAnswer: { status?: number; body?: unknown } = {},
 ): { calls: { url: string; method: string; body?: string }[] } {
   const calls: { url: string; method: string; body?: string }[] = []
@@ -103,7 +103,9 @@ function stubFetch(
       })
     }
     if (url.startsWith(TRAE_ACCOUNT_STATUS_PATH)) {
-      return new Response(JSON.stringify(accountStatus ?? { id: 'account-1' }), { status: 200 })
+      const asked = new URL(url, 'http://local').searchParams.get('accountId') ?? 'account-1'
+      const answer = typeof accountStatus === 'function' ? accountStatus(asked) : accountStatus ?? { id: 'account-1' }
+      return new Response(JSON.stringify(answer), { status: 200 })
     }
     if (url.startsWith(TRAE_USAGE_PATH)) return new Response(JSON.stringify(document), { status: 200 })
     throw new Error(`unexpected fetch: ${url}`)
@@ -179,6 +181,27 @@ describe('TraeUsageCard daily check-in', () => {
     const button = rowCheckin('LaoDing')
     expect(button.disabled).toBe(true)
     expect(button.textContent).toBe('row.checkinClaimed')
+  })
+
+  it('stops every row once THIS machine spent its check-in on another account', async () => {
+    // Trae keys the daily claim to x-device-id: 9095 refuses the second account
+    // from the same machine. The flag therefore belongs to the panel, not the
+    // row — the old per-account reading left the other row's button enabled and
+    // invited a click that could only be refused.
+    const other = { ...ACCOUNT, id: 'account-2', accountName: '老二', selected: false }
+    stubFetch(
+      usageDocument({ accounts: [ACCOUNT, other] }),
+      accountId => accountId === 'account-1'
+        ? { id: accountId, checkin: { checkedIn: true, didCheckedIn: true, credits: 150, enabled: true } }
+        : { id: accountId, checkin: { checkedIn: false, didCheckedIn: false, credits: 150, enabled: true } },
+    )
+    const { scope } = makeScope()
+    await renderOpen(scope)
+    await waitFor(() => { expect(screen.getByText('老二')).toBeTruthy() })
+    const spent = rowCheckin('老二')
+    expect(spent.disabled).toBe(true)
+    expect(spent.textContent).toBe('row.checkinDeviceSpentShort')
+    expect(spent.getAttribute('title')).toBe('row.checkinDeviceSpent')
   })
 
   it('does not call a device-spent day "claimed today"', async () => {

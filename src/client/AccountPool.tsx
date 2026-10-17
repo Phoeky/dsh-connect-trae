@@ -109,6 +109,15 @@ interface AccountPoolProps {
   /** Claim one row's check-in. */
   onClaim?: (accountId: string) => void
   /**
+   * True when THIS machine already spent today's check-in, on any account.
+   *
+   * Trae keys the daily claim to `x-device-id`, so one machine can be paid once
+   * per day: a second account is refused with 9095 no matter which row asks.
+   * The batch button therefore has to stop at the device level, not the row
+   * level — offering it invites an action that can only be refused.
+   */
+  deviceClaimed?: boolean
+  /**
    * Bind a specific account by hand. Offered only while the pool is OFF: with it
    * on, the Host picks who bills and a manual picker would look authoritative
    * while changing nothing.
@@ -273,7 +282,7 @@ function consumeTestNdjson(
   return sawAny
 }
 
-export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, topActions, details, claims, onClaim, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
+export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, topActions, details, claims, onClaim, deviceClaimed = false, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
   // Re-read saved preferences whenever the settings scope changes (a save here,
   // or a save elsewhere / a profile import). Without this the `saved` memo is
   // keyed on `settingsScope`/`pool` field PRIMITIVES, so a write that only
@@ -588,7 +597,8 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           ? <button
               type="button"
               className="dsm-btn dsm-btn-outline dsm-trae-pool-action-checkin"
-              disabled={busy !== undefined || !writable || selected.size === 0}
+              disabled={busy !== undefined || !writable || selected.size === 0 || deviceClaimed}
+              title={deviceClaimed ? t('row.checkinDeviceSpent') : undefined}
               onClick={() => { void runCheckin() }}
             >
               {busy === 'checkin' ? t('row.poolCheckingIn') : t('row.poolCheckinAll')}
@@ -629,6 +639,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               key={account.accountId}
               account={account}
               showCheckin={pool.checkinSupported}
+              deviceClaimed={deviceClaimed}
               models={models}
               rows={rows}
               checked={selected.has(account.accountId)}
@@ -843,6 +854,13 @@ interface MemberRowProps {
    * grid line, which is how a five-column row looked on a four-column table.
    */
   showCheckin: boolean
+  /**
+   * The pool already knows the DEVICE spent today's claim (see
+   * {@link AccountPoolProps.deviceClaimed}). A row that is not itself claimed
+   * must say so instead of 「未签到」, which would read as "you can still claim
+   * this one" right next to a disabled button.
+   */
+  deviceClaimed: boolean
   models: readonly TraeWebModel[]
   rows: Readonly<Record<string, TraePoolTestRowView>>
   checked: boolean
@@ -859,7 +877,7 @@ interface MemberRowProps {
   relativeAt: (at: number, now: number, t: T) => string
 }
 
-function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim, showCheckin }: MemberRowProps): ReactElement {
+function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim, showCheckin, deviceClaimed }: MemberRowProps): ReactElement {
   const isCurrent = account.current === true
   // NON-NEGOTIABLE #7: show General as the number (what chat spends); never
   // rank/display `available` (the wider sum) as "credits".
@@ -952,11 +970,11 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
 
       {/* Check-in column (only when the panel supports it). */}
       {showCheckin ? <div className="dsm-trae-pool-checkin">
-        <span className={`dsm-trae-pool-checkin-state dsm-trae-pool-checkin-${checkin === undefined ? 'unknown' : checkin ? 'ok' : device === true ? 'device' : 'no'}`}>
+        <span className={`dsm-trae-pool-checkin-state dsm-trae-pool-checkin-${checkin === undefined ? 'unknown' : checkin ? 'ok' : device === true || deviceClaimed ? 'device' : 'no'}`}>
           {checkin === undefined
             ? t('row.poolCheckinUnknown')
             : checkin ? t('row.poolCheckedIn')
-              : device === true ? t('row.poolDeviceUsed') : t('row.poolNotCheckedIn')}
+              : device === true || deviceClaimed ? t('row.poolDeviceUsed') : t('row.poolNotCheckedIn')}
         </span>
         {claim === undefined || onClaim === undefined
           ? null

@@ -1223,11 +1223,32 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * this card's roster table, so the same derivation has to feed both: two
    * copies would drift the moment one of them learned about a new refusal.
    */
+  /**
+   * Whether THIS machine has already been paid today, for any account.
+   *
+   * `didCheckedIn` is not an account fact. Trae keys the daily claim to
+   * `x-device-id` and answers a second claim with 9095, so once one account has
+   * claimed from this machine, every other account on it is refused for the
+   * rest of the day. Keeping that flag per account made the card invite a
+   * check-in that could only fail — visible as soon as two accounts sit next to
+   * each other in one table.
+   */
+  const deviceClaimedToday = (() => {
+    for (const state of Object.values(accountStatusByRegion[activeRegion])) {
+      if (state?.checkin?.didCheckedIn === true) return true
+    }
+    for (const spent of Object.values(deviceSpentByRegion[activeRegion])) {
+      if (spent) return true
+    }
+    return status.status === 'signed-in' && status.pool !== undefined
+      && status.pool.accounts.some(account => account.deviceCheckedIn === true)
+  })()
+
   const claimViewOf = (accountId: string, state: TraeWebAccountState | undefined): { label: string; title: string; disabled: boolean; busy: boolean } => {
     const checkin = state?.checkin
     const reward = checkin === undefined ? undefined : formatNumber(checkin.credits)
     const claimed = checkin?.checkedIn === true
-    const deviceSpent = deviceSpentByRegion[activeRegion][accountId] === true || checkin?.didCheckedIn === true
+    const deviceSpent = deviceClaimedToday
     const spending = claimingFor === accountId
     const usable = checkin !== undefined && checkin.enabled
     const title = reward === undefined || !usable
@@ -1735,6 +1756,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                                 [account.id, claimViewOf(account.id, accountStatusByRegion[activeRegion][account.id])]))
                             : undefined}
                           onClaim={(accountId) => { void claimFor(accountId) }}
+                          deviceClaimed={deviceClaimedToday}
                           onBind={(accountId) => { void switchAccount(accountId) }}
                           bindingBusy={switchingAccount}
                           onChanged={async () => {

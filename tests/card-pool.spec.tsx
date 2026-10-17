@@ -164,8 +164,8 @@ function ghostPool(): TraeWebPool {
 
 
 /** `<AccountPool>` for a fixture, as an element (so a test can measure the DOM). */
-function renderPoolAndReturn(pool: TraeWebPool, scope: unknown): ReactElement {
-  return <AccountPool panel="cn" pool={pool} models={MODELS} t={t} settingsScope={scope as never} />
+function renderPoolAndReturn(pool: TraeWebPool, scope: unknown, deviceClaimed = false): ReactElement {
+  return <AccountPool panel="cn" pool={pool} models={MODELS} t={t} settingsScope={scope as never} deviceClaimed={deviceClaimed} />
 }
 
 /**
@@ -254,6 +254,23 @@ describe('the pool section keeps one spacing and one radius scale', () => {
         expect(allowed.has(match[1]!.trim()), `${block.slice(0, 60)} → ${match[1]}`).toBe(true)
       }
     }
+  })
+})
+
+describe('the batch check-in action', () => {
+  it('is disabled once this machine already spent its check-in on another account', () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, true))
+    const button = screen.getByRole('button', { name: 'row.poolCheckinAll' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('title')).toBe('row.checkinDeviceSpent')
+  })
+
+  it('stays available while the device has not claimed', () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))
+    const button = screen.getByRole('button', { name: 'row.poolCheckinAll' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
   })
 })
 
