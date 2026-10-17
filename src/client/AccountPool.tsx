@@ -626,7 +626,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             <span>{t('row.poolEnabledHint')}</span>
           </span>
           <span className="dsm-trae-pool-set-ctl">
-            <label className="dsm-trae-switch">
+            <label className="dsm-trae-switch dsm-trae-switch-pill">
               <input
                 type="checkbox"
                 checked={enabled}

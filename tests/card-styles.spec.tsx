@@ -155,13 +155,16 @@ describe('the card stylesheet behind the 3.2.0 settings and account blocks', () 
    * gone and the knob still moves when checked.
    */
   it('draws a pill switch with an explicit knob', () => {
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*appearance:none/)
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input\{[^}]*border-radius:999px/)
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input::after\{/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch-pill input\{[^}]*appearance:none/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch-pill input\{[^}]*border-radius:999px/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch-pill input::after\{/)
     // Without the translate the knob would sit still and the pill would read as
     // "off" while the browser reports it checked.
-    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch input:checked::after\{[^}]*transform:translateX/)
+    expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch-pill input:checked::after\{[^}]*transform:translateX/)
     expect(TRAE_CARD_CSS).toMatch(/\.dsm-trae-switch:has\(input:disabled\)/)
+    // Scoped: a pill INSIDE a tab chip reads as a second button. The tab row
+    // keeps the platform checkbox, so the pill rule must not be global.
+    expect(TRAE_CARD_CSS).not.toMatch(/(^|\})\s*\.dsm-trae-switch input\{[^}]*appearance:none/)
   })
 
   /**

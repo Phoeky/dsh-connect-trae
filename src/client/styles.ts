@@ -127,15 +127,19 @@ export const TRAE_CARD_CSS = `
  * the native box sitting two centimetres away in the composer toolbar. The
  * platform checkbox tracks the host's own accent and dark mode for free. */
 .dsm-trae-switch{display:inline-flex;align-items:center;cursor:pointer}
-/* A pill, not a tinted native box: appearance:none hands the geometry to the
-   stylesheet, so the track and the knob are ours and the ON state is a colour we
-   chose rather than whatever the platform paints. */
-.dsm-trae-switch input{appearance:none;-webkit-appearance:none;position:relative;margin:0;inline-size:36px;block-size:20px;border:0;border-radius:999px;background:var(--dsw-alias-bg-layer-3,#3f434c);cursor:pointer;transition:background-color .15s ease}
-.dsm-trae-switch input::after{content:"";position:absolute;inset-block-start:2px;inset-inline-start:2px;inline-size:16px;block-size:16px;border-radius:50%;background:var(--dsw-alias-label-primary,#f9fafb);transition:transform .15s ease}
-.dsm-trae-switch input:checked{background:var(--dsw-alias-brand-primary,#5686fe)}
-.dsm-trae-switch input:checked::after{transform:translateX(16px)}
+.dsm-trae-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-switch input:disabled{cursor:default}
 .dsm-trae-switch:has(input:disabled){opacity:.6;cursor:default}
+/* A pill, only where a pill is the idiom: the standalone preference rows.
+   appearance:none hands the geometry to the stylesheet, so the track and the
+   knob are ours. It is scoped rather than global because the tab row's switch
+   sits inside a chip — a pill there reads as a second button, which is exactly
+   how it looked when this was global. */
+.dsm-trae-switch-pill{display:inline-flex;align-items:center}
+.dsm-trae-switch-pill input{appearance:none;-webkit-appearance:none;position:relative;inline-size:36px;block-size:20px;border:0;border-radius:999px;background:var(--dsw-alias-border-l2,#c4c7cc);transition:background-color .15s ease}
+.dsm-trae-switch-pill input::after{content:"";position:absolute;inset-block-start:2px;inset-inline-start:2px;inline-size:16px;block-size:16px;border-radius:50%;background:var(--dsw-alias-bg-layer-3,#fff);box-shadow:0 1px 2px rgba(0,0,0,.24);transition:transform .15s ease}
+.dsm-trae-switch-pill input:checked{background:var(--dsw-alias-brand-primary,#1b1c1e)}
+.dsm-trae-switch-pill input:checked::after{transform:translateX(16px)}
 /* The account block is a real table: the question it answers is "which of these
    accounts, and what is the action on each one" 鈥?a dropdown can only ever show
    the one already chosen. */
