@@ -13,7 +13,7 @@ export const TRAE_CARD_CSS = `
 .dsm-plugin-card-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:-2px}
 .dsm-plugin-card-head{flex-direction:column;flex:1;gap:6px;min-width:0;display:flex}
 .dsm-plugin-card-title{color:var(--dsw-alias-label-primary,#e6e6e6);font-size:15px;font-weight:600;line-height:1.4}
-.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:12.5px;line-height:1.55;max-width:720px}
+.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:12.5px;line-height:1.55}
 /* Pure-CSS caret: the host primitives' chevron icon names are not part of any
    stable contract across DSH releases, so no static import is used 鈥?a border
    caret in the plugin's own CSS is version-proof. */
@@ -52,7 +52,7 @@ export const TRAE_CARD_CSS = `
    differs, so it sits inside the tab cell without crowding the label. */
 .dsm-trae-tab-switch{flex:none;margin-left:auto;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
 .dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:baseline}
-.dsm-trae-tab-hint{margin:0;padding:0 2px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px;max-width:720px}
+.dsm-trae-tab-hint{margin:0;padding:0 2px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
 .dsm-trae-credits-unavailable{margin:10px 0 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
 .dsm-trae-account-value-muted{color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px}
 .dsm-trae-tab-off-notice{margin:0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
@@ -98,10 +98,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pref input:disabled{cursor:default}
 .dsm-trae-pref:has(input:disabled){opacity:.6;cursor:default}
 .dsm-trae-pref b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
-/* A px cap, not a ch cap: with a CJK font one ch is the full-width zero
-   (~12px at 12px type), so 76ch allowed ~900px lines and the cap never bit.
-   620px is about 50 hanzi — a comfortable measure at this size. */
-.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:17px;max-width:620px}
+.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:17px}
 .dsm-trae-pref span{min-width:0}
 /* The credit readout's seat picker (learned from workbuddy #62). Its OWN label
    class, deliberately not the plain .dsm-trae-pref the two checkboxes use: a
