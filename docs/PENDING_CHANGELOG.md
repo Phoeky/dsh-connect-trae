@@ -16,6 +16,32 @@
 
 ---
 
+## 未发布
+
+### 变更
+
+- **对齐宿主 DSH 0.2.1-rc.2**：13 个 `@deepseek-ai/dsh-*` devDependency 从 `0.2.1-rc.1`
+  推进到 `0.2.1-rc.2`。`cordis` / `schemastery` / `pi-ai`（仍 `1.1.0`）均未变。
+- **peer 范围无需改动**：`0.2.1-rc.2` 对 `>=0.1.7-rc.1 <0.3.0-0` 已判通过（实测）。
+
+### 测试
+
+- `tests/dsh-peer-range.spec.ts` 的 `MUST_ADMIT` 补入 `0.2.1-rc.1` / `0.2.1-rc.2` / `0.2.1`。
+  此前这份「必须放行的版本」清单里**没有当前正在使用的版本**——范围若被误收窄到
+  当前宿主之外，测试仍会全绿。变异验证：把上界改到 `<0.2.1-rc.2` → 对应用例立刻变红。
+- 全仓 **670** 例通过。
+
+### 已核对确认无变化
+
+- 逐字节比对插件消费的宿主包（`.d.ts` 与 `lib/*.js`）——`dsh-llm`、`dsh-llm-pi-ai`、
+  `dsh-settings`、`dsh-host-webserver`、`dsh-atomic-write`、`dsh-home-paths`、
+  `dsh-attachment`、`dsh-client-ui-renderer`，以及 `dsh-app-boot` 的 peer 门禁：**全部相同**。
+- pi-ai 仍为 `1.1.0`，`openai-completions.js` 与 `utils/transcript.js` 未变，
+  上一轮的双向适配结论原样成立。
+- 线上请求体探针在真实 rc.2 栈上复跑，结果与 rc.1 一致。
+
+---
+
 > 发布流程工具化，不影响插件运行时行为。
 
 ### 新增

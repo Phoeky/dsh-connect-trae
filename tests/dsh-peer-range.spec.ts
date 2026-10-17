@@ -75,6 +75,9 @@ const MUST_ADMIT = [
   '0.2.0-alpha.1', // first 0.2.0 prerelease — the 2.3.1 regression was exactly this shape
   '0.2.0-rc.1',    // the runtime that dropped the plugin when this guard was added
   '0.2.0',         // the 0.2.0 release
+  '0.2.1-rc.1',    // the 0.2.1-rc.1 desktop host the plugin was synced against
+  '0.2.1-rc.2',    // the current 0.2.1-rc.2 desktop host
+  '0.2.1',
   '0.2.9',         // later in the 0.2 line
 ] as const
 

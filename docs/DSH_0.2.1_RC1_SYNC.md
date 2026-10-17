@@ -1,7 +1,7 @@
 # DSH 0.2.1-rc.1 升级同步记录
 
 > 调研日期：2026-10-17
-> 宿主：DSH Desktop，随包 `@deepseek-ai/dsh-desktop-runtime@0.2.1-rc.1`
+> 宿主：DSH Desktop，随包 `@deepseek-ai/dsh-desktop-runtime@0.2.1-rc.1`（后追加 rc.2 复核，见第九节）
 > 插件：`dsh-connect-trae` 3.6.1 → **3.7.0**
 > 参考：`dsh-connect-workbuddy/docs/DSH-0.2.1-RC1-FOLLOWUP.md`（同批升级的姊妹项目调研）
 > 基线：升级前 660 例全绿（pi-ai 0.85.1 / dsh 0.2.0-rc.1）
@@ -213,3 +213,75 @@ satisfies('0.2.1-rc.1', '>=0.1.7-rc.1 <0.3.0-0', {includePrerelease}) → true  
 
 本记录对应 **3.7.0**（minor —— 它补齐了类型契约并新增回归防线，虽无用户可见行为变化）。
 面向用户的说明见 [`RELEASE_NOTES_v3.7.0.md`](RELEASE_NOTES_v3.7.0.md)。
+
+---
+
+## 九、0.2.1-rc.2 复核（2026-10-17 晚）
+
+宿主随包版本从 `0.2.1-rc.1` 推进到 **`0.2.1-rc.2`**。逐项核对结果如下。
+
+### 9.1 依赖面
+
+| 包 | rc.1 | rc.2 |
+| --- | --- | --- |
+| 13 个 `@deepseek-ai/dsh-*` | `0.2.1-rc.1` | **`0.2.1-rc.2`** |
+| `@deepseek-ai/cordis` | `4.0.5` | `4.0.5`（未变） |
+| `@deepseek-ai/schemastery` | `3.18.5` | `3.18.5`（未变） |
+| `@earendil-works/pi-ai` | `1.1.0` | **`1.1.0`（未变）** |
+| `dsh-llm-pi-ai` 对 pi-ai 的声明 | `^1.1.0` | `^1.1.0`（未变） |
+
+**关键点：pi-ai 仍钉在 1.1.0。** 上一轮那套「1.1.0 只读 transcript、不读顶层字段」的判断继续成立，
+适配层无需任何改动。
+
+### 9.2 契约面：逐字节比对，零变化
+
+对插件消费的宿主包，比对 **`.d.ts` 类型声明**与 **`lib/*.js` 运行时实现**：
+
+```
+= dsh-llm / dsh-llm-pi-ai / dsh-settings / dsh-host-webserver
+= dsh-atomic-write / dsh-home-paths / dsh-attachment
+= dsh-client-ui-renderer                                （类型 + 实现）
+= dsh-app-boot（peer 门禁逻辑）
+```
+
+全部**逐字节相同**，包括 `satisfies()` 用 `{ includePrerelease: true }` 的求值方式。
+pi-ai 的 `openai-completions.js` 与 `utils/transcript.js` 也未变。
+
+> 这说明 rc.1 → rc.2 对**本插件**而言是纯版本号推进：没有新增/删除导出，没有签名变化，
+> 没有行为变化。上一轮的全部结论原样成立。
+
+### 9.3 peer 门禁
+
+```
+0.2.1-rc.1  -> true
+0.2.1-rc.2  -> true     ← 新增，已放行
+0.3.0-rc.1  -> false
+```
+
+范围 `>=0.1.7-rc.1 <0.3.0-0` **无需改动**。
+
+### 9.4 实测复核（真实 rc.2 栈）
+
+重跑线上请求体探针（`dsh-llm-pi-ai@0.2.1-rc.2` + `pi-ai@1.1.0` + 本地 SSE 捕获）：
+
+| 场景 | 线上 `roles` | 线上 system | 线上 `tools` |
+| --- | --- | --- | --- |
+| 走适配器（生产路径） | `["system","user"]` | 完好 | `1` ✅ |
+| 不走适配器 | `["user"]` | `null` | `0` ❌ |
+
+与 rc.1 时完全一致。
+
+### 9.5 一处需要解释的「消失」
+
+payload 的 `node_modules` 里**没有** `dsh-client-ui-primitives` 与 `dsh-client-ui-slots`。
+这不是本次升级造成的：旧宿主里同样没有。原因是这两个包在本插件里**只作类型层引用**
+（`import type {} from ...`，用于 augment 宿主已注册的 service 类型），运行时由宿主 shell 提供。
+它们保留在 `dsh.client.inject` 名册与 devDependency 中是正确做法。
+
+### 9.6 本次改动与验证
+
+- devDependency 13 项 → `0.2.1-rc.2`（`cordis` / `schemastery` / `pi-ai` 不变）
+- `tests/dsh-peer-range.spec.ts` 的 `MUST_ADMIT` 补入 `0.2.1-rc.1` / `0.2.1-rc.2` / `0.2.1`——
+  此前这条清单里**没有当前正在使用的版本**，是本次复核暴露的测试盲点
+- 变异验证：把 peer 上界收窄到 `<0.2.1-rc.2` → 多个包的对应用例立刻变红
+- 双 tsconfig 类型检查通过，**670** 例测试全绿，构建通过
