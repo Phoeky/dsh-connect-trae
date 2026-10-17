@@ -1218,12 +1218,17 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * Until the row's status lands the button waits, disabled, so the row keeps
    * its shape instead of reflowing the moment the read returns.
    */
-  const checkinControl = (account: TraeWebAccount, state: TraeWebAccountState | undefined): ReactNode => {
+  /**
+   * Everything a check-in button needs, derived once. The pool's table replaces
+   * this card's roster table, so the same derivation has to feed both: two
+   * copies would drift the moment one of them learned about a new refusal.
+   */
+  const claimViewOf = (accountId: string, state: TraeWebAccountState | undefined): { label: string; title: string; disabled: boolean; busy: boolean } => {
     const checkin = state?.checkin
     const reward = checkin === undefined ? undefined : formatNumber(checkin.credits)
     const claimed = checkin?.checkedIn === true
-    const deviceSpent = deviceSpentByRegion[activeRegion][account.id] === true || checkin?.didCheckedIn === true
-    const spending = claimingFor === account.id
+    const deviceSpent = deviceSpentByRegion[activeRegion][accountId] === true || checkin?.didCheckedIn === true
+    const spending = claimingFor === accountId
     const usable = checkin !== undefined && checkin.enabled
     const title = reward === undefined || !usable
       ? t('row.checkinDisabled')
@@ -1232,25 +1237,34 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
         : claimed
           ? t('row.checkinClaimed')
           : t('row.checkinReward', { reward })
+    return {
+      label: spending
+        ? t('row.checkinClaiming')
+        : claimed
+          ? t('row.checkinClaimed')
+          : deviceSpent
+            ? t('row.checkinDeviceSpentShort')
+            : /* An account with no usable activity (or one still loading)
+                 shows the bare label: "+0" on a dead button reads as a bug. */
+              !usable || reward === undefined
+              ? t('row.checkinClaim')
+              : t('row.checkinClaimWith', { reward }),
+      title,
+      disabled: !usable || claimed || deviceSpent || spending,
+      busy: spending,
+    }
+  }
+  const checkinControl = (account: TraeWebAccount, state: TraeWebAccountState | undefined): ReactNode => {
+    const view = claimViewOf(account.id, state)
     return (
       <button
         type="button"
         className="dsm-trae-account-checkin"
-        disabled={!usable || claimed || deviceSpent || spending}
-        title={title}
+        disabled={view.disabled}
+        title={view.title}
         onClick={() => { void claimFor(account.id) }}
       >
-        {spending
-          ? t('row.checkinClaiming')
-          : claimed
-            ? t('row.checkinClaimed')
-            : deviceSpent
-              ? t('row.checkinDeviceSpentShort')
-              : /* An account with no usable activity (or one still loading)
-                   shows the bare label: "+0" on a dead button reads as a bug. */
-                !usable || reward === undefined
-                ? t('row.checkinClaim')
-                : t('row.checkinClaimWith', { reward })}
+        {view.label}
       </button>
     )
   }
@@ -1434,7 +1448,17 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                   Trae spends one check-in per DEVICE per day, so there is
                   deliberately no "for every account" control anywhere in this
                   block (the check-in button below stays a single-account click). */}
-              <section className="dsm-trae-accounts" aria-label={t('row.accountsTitle')}>
+              {/* ONE account table, not two. Once the pool document exists the
+                  pool's member table below lists the same accounts with the same
+                  credits and the same check-in state, so this roster would be a
+                  verbatim second copy of it — the row names, balances and check-in
+                  words all appeared twice on one screen. Its unique controls
+                  (rescan, import/export, the manual binding) move into the pool
+                  block's settings, which is also where the WorkBuddy card keeps
+                  them. */}
+              {status.status === 'signed-in' && status.pool !== undefined
+                ? null
+                : <section className="dsm-trae-accounts" aria-label={t('row.accountsTitle')}>
                 <div className="dsm-trae-accounts-head">
                   <div>
                     <h3 className="dsm-trae-accounts-title">{t('row.accountsTitle')}</h3>
@@ -1583,68 +1607,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     plugin can reach reports tenant spend, so the figure lives
                     only in the enterprise console. Said plainly instead of
                     leaving an empty area the user would read as a failure. */}
-                {status.status === 'signed-in' && status.creditsUnavailable === 'enterprise'
-                  ? <p className="dsm-trae-credits-unavailable" role="note">{t('row.enterpriseCreditsNotice')}</p>
-                  : null}
-                {status.status === 'signed-in' && status.alternatives !== undefined && status.alternatives.length > 0
-                  ? <div className="dsm-trae-usage-alternative" role="status">
-                    <p className="dsm-trae-usage-alternative-text">
-                      {t('row.creditsExhausted', { account: status.accountName })}
-                      {' '}
-                      {t('row.creditsAlternative', {
-                        accounts: status.alternatives
-                          .map(alt => `${alt.accountName}（${t(`row.edition${alt.edition === 'cn' ? 'Cn' : alt.edition === 'sg' ? 'Sg' : alt.edition === 'solo' ? 'Solo' : 'SoloSg'}`)}：${formatNumber(alt.workAvailable + alt.generalAvailable)}）`)
-                          .join('、'),
-                      })}
-                    </p>
-                    <button
-                      type="button"
-                      className="dsm-trae-usage-switch-button"
-                      disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
-                      onClick={() => {
-                        const target = status.alternatives?.[0]
-                        if (target !== undefined) void switchAccount(target.id)
-                      }}
-                    >
-                      {t('row.creditsAlternativeSwitch')}
-                    </button>
-                  </div>
-                  : null}
-                {/* Credit about to lapse. Sits in the usage tab, right after the
-                    exhausted/alternative rows, because it answers the same
-                    question those do — "is there anything I should do about my
-                    balance?" — and unlike them it is actionable while the account
-                    still works. */}
-                {status.status === 'signed-in' && status.credits?.expiry !== undefined
-                  ? <ExpiryNotice
-                      expiry={status.credits.expiry}
-                      t={t}
-                      formatNumber={formatNumber}
-                      formatDateTime={formatDateTime}
-                    />
-                  : null}
-                {/* The app signed in to a DIFFERENT account than this plugin is
-                    bound to (issue #29). Reported by the Host only on that
-                    mismatch, so the row exists exactly when the binding is stale
-                    — the failure that used to require hunting the account list
-                    after every Trae sign-out. Goes through the same
-                    `switchAccount` write as the table's own buttons. */}
-                {status.status === 'signed-in' && status.appLogin !== undefined
-                  ? <div className="dsm-trae-usage-alternative" role="status">
-                    <p className="dsm-trae-usage-alternative-text">
-                      {t('row.appLoginMismatch', { account: status.appLogin.accountName, bound: status.accountName })}
-                    </p>
-                    <button
-                      type="button"
-                      className="dsm-trae-usage-switch-button"
-                      disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
-                      onClick={() => { void followAppLogin() }}
-                    >
-                      {t('row.appLoginFollow', { account: status.appLogin.accountName })}
-                    </button>
-                  </div>
-                  : null}
-                {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
                 {/*
                   Import / export (issue #37). Rendered on BOTH sign-in states,
                   and outside the `signed-in` branch above on purpose: a machine
@@ -1669,7 +1631,69 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))
                   }}
                 />
-              </section>
+              </section>}
+              {status.status === 'signed-in' && status.creditsUnavailable === 'enterprise'
+                ? <p className="dsm-trae-credits-unavailable" role="note">{t('row.enterpriseCreditsNotice')}</p>
+                : null}
+              {status.status === 'signed-in' && status.alternatives !== undefined && status.alternatives.length > 0
+                ? <div className="dsm-trae-usage-alternative" role="status">
+                  <p className="dsm-trae-usage-alternative-text">
+                    {t('row.creditsExhausted', { account: status.accountName })}
+                    {' '}
+                    {t('row.creditsAlternative', {
+                      accounts: status.alternatives
+                        .map(alt => `${alt.accountName}（${t(`row.edition${alt.edition === 'cn' ? 'Cn' : alt.edition === 'sg' ? 'Sg' : alt.edition === 'solo' ? 'Solo' : 'SoloSg'}`)}：${formatNumber(alt.workAvailable + alt.generalAvailable)}）`)
+                        .join('、'),
+                    })}
+                  </p>
+                  <button
+                    type="button"
+                    className="dsm-trae-usage-switch-button"
+                    disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
+                    onClick={() => {
+                      const target = status.alternatives?.[0]
+                      if (target !== undefined) void switchAccount(target.id)
+                    }}
+                  >
+                    {t('row.creditsAlternativeSwitch')}
+                  </button>
+                </div>
+                : null}
+              {/* Credit about to lapse. Sits in the usage tab, right after the
+                  exhausted/alternative rows, because it answers the same
+                  question those do — "is there anything I should do about my
+                  balance?" — and unlike them it is actionable while the account
+                  still works. */}
+              {status.status === 'signed-in' && status.credits?.expiry !== undefined
+                ? <ExpiryNotice
+                    expiry={status.credits.expiry}
+                    t={t}
+                    formatNumber={formatNumber}
+                    formatDateTime={formatDateTime}
+                  />
+                : null}
+              {/* The app signed in to a DIFFERENT account than this plugin is
+                  bound to (issue #29). Reported by the Host only on that
+                  mismatch, so the row exists exactly when the binding is stale
+                  — the failure that used to require hunting the account list
+                  after every Trae sign-out. Goes through the same
+                  `switchAccount` write as the table's own buttons. */}
+              {status.status === 'signed-in' && status.appLogin !== undefined
+                ? <div className="dsm-trae-usage-alternative" role="status">
+                  <p className="dsm-trae-usage-alternative-text">
+                    {t('row.appLoginMismatch', { account: status.appLogin.accountName, bound: status.accountName })}
+                  </p>
+                  <button
+                    type="button"
+                    className="dsm-trae-usage-switch-button"
+                    disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
+                    onClick={() => { void followAppLogin() }}
+                  >
+                    {t('row.appLoginFollow', { account: status.appLogin.accountName })}
+                  </button>
+                </div>
+                : null}
+              {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
               {status.status === 'signed-in'
                 ? <>
                     {status.pool !== undefined
@@ -1679,6 +1703,39 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                           models={visibleModels}
                           t={t}
                           settingsScope={settingsScope}
+                          tools={<div className="dsm-trae-pool-tool-row">
+                            <button
+                              type="button"
+                              className="dsm-btn dsm-btn-outline"
+                              disabled={busy}
+                              onClick={() => { void rescanAccounts() }}
+                            >
+                              {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
+                            </button>
+                            <AccountTransfer
+                              t={t}
+                              region={activeRegion === 'ai' ? 'ai' : 'cn'}
+                              accounts={status.accounts.map(account => ({ id: account.id, accountName: account.accountName }))}
+                              onChanged={async () => {
+                                const fresh = await refreshUsage(activeRegion)
+                                if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))
+                              }}
+                            />
+                          </div>}
+                          details={Object.fromEntries(status.accounts.map(account => {
+                            const warn = refreshTokenWarning(account.refreshExpiresAtMs, Date.now(), t, formatDateTime)
+                            return [account.id, {
+                              meta: `${editionLabel(account.edition)} · ${sourceLabel(account.source)}`,
+                              ...warn === undefined ? {} : { warn: warn.text, warnTone: warn.tone },
+                            }]
+                          }))}
+                          claims={status.pool.checkinSupported === true
+                            ? Object.fromEntries(status.accounts.map(account =>
+                                [account.id, claimViewOf(account.id, accountStatusByRegion[activeRegion][account.id])]))
+                            : undefined}
+                          onClaim={(accountId) => { void claimFor(accountId) }}
+                          onBind={(accountId) => { void switchAccount(accountId) }}
+                          bindingBusy={switchingAccount}
                           onChanged={async () => {
                             const fresh = await refreshUsage(activeRegion)
                             if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))

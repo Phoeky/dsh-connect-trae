@@ -393,7 +393,29 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-members{display:flex;flex-direction:column;gap:10px}
-.dsm-trae-pool-settings{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24));border-radius:12px}
+/* Prose, not a box. Every explanation in this section is one line of muted
+   text; boxing each one is what made the block look like a stack of cards. */
+.dsm-trae-pool-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+/* A setting row: label + hint on the left, the control on the right, one
+   rhythm for the switch, the target select and the manual binding. */
+.dsm-trae-pool-set{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-pool-set:first-child{border-top:0}
+.dsm-trae-pool-set-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dsm-trae-pool-set-copy b{font-size:13px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pool-set-copy span{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-set-ctl{display:flex;align-items:center;gap:8px;flex:none}
+.dsm-trae-pool-bind{border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-pool-account-select{min-width:180px}
+.dsm-trae-pool-tools{display:flex;flex-direction:column;gap:8px}
+.dsm-trae-pool-tool-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-trae-pool-meta{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8);white-space:nowrap}
+.dsm-trae-pool-warn-tag{font-size:11px;line-height:16px;white-space:nowrap}
+.dsm-trae-pool-warn-tag-soon{color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-warn-tag-lapsed{color:var(--dsw-alias-state-error-primary,#d92d20)}
+.dsm-trae-pool-claim{padding:2px 8px;font-size:12px;line-height:16px}
+.dsm-trae-pool-settings-wrap{display:flex;flex-direction:column;gap:10px}
+
+.dsm-trae-pool-settings{display:flex;flex-direction:column;gap:0;padding:0;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-pool-members-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .dsm-trae-pool-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .dsm-trae-pool-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
@@ -453,9 +475,9 @@ export const TRAE_CARD_CSS = `
    rectangles in one section would read as five different severities. */
 .dsm-trae-pool-ghost-note{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
 .dsm-trae-pool-unsaved{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
-.dsm-trae-pool-off-notice{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
-.dsm-trae-pool-target-none{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
-.dsm-trae-pool-target-stale{display:flex;align-items:center;justify-content:space-between;gap:10px;border-color:var(--dsw-alias-state-warn-secondary,#fbbf24)}
+.dsm-trae-pool-off-notice{margin:0;padding:0 12px 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-target-none{margin:0;padding:0 12px 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-target-stale{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 12px;padding-bottom:10px;color:var(--dsw-alias-state-warn-primary,#b45309)}
 .dsm-trae-pool-warning{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--dsw-alias-state-warn-secondary,#fbbf24);border-radius:10px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:12px;line-height:18px}
 .dsm-trae-pool-warning-title{font-weight:600}
 .dsm-trae-pool-warning-hint{opacity:.85}
@@ -464,7 +486,7 @@ export const TRAE_CARD_CSS = `
 /* "Every member is unusable" is the one case that IS the pool's fault, so it
    keeps the warn tone the base class sets. */
 .dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
-.dsm-trae-pool-settings-save{display:flex;align-items:center;gap:8px}
+.dsm-trae-pool-settings-save{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
 .dsm-trae-pool-dirty{padding:0 6px;border-radius:999px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:10px;line-height:16px}
 .dsm-trae-pool-save-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-target{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}

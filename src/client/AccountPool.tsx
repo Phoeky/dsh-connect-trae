@@ -13,7 +13,7 @@
  * regions-write helper.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import {
   regionPoolOf,
   nextRegionPool,
@@ -35,6 +35,24 @@ import type {
 import { writeSettingsField } from './TraeUsageCard.tsx'
 import type { TraeSettingsKey } from './locales.ts'
 
+/** Facts the pool document does not carry, joined from the card's roster by id. */
+export interface TraePoolRowDetail {
+  /** edition · credential source, already worded by the card. */
+  meta?: string
+  /** Token-expiry countdown, already worded, and only when it matters. */
+  warn?: string
+  /** `soon` = renewal ends shortly, `lapsed` = it already did. */
+  warnTone?: 'soon' | 'lapsed' | undefined
+}
+
+/** The daily check-in control for one row, pre-derived by the card. */
+export interface TraePoolRowClaim {
+  label: string
+  disabled: boolean
+  title?: string
+  busy: boolean
+}
+
 interface AccountPoolProps {
   panel: TraePanel
   pool: TraeWebPool
@@ -50,6 +68,26 @@ interface AccountPoolProps {
   onChanged?: () => void
   /** Re-read the region's usage after a remove/checkin/test so rows refresh. */
   onRefresh?: () => void
+  /**
+   * Account management (rescan, import/export), rendered inside the settings
+   * block. The pool's table IS this card's account table once `pool` exists, so
+   * the controls that manage accounts belong here rather than in a second table
+   * above it that repeats the same names, credits and check-in states.
+   */
+  tools?: ReactNode
+  /** edition · source and the token countdown, keyed by account id. */
+  details?: Readonly<Record<string, TraePoolRowDetail>> | undefined
+  /** Per-row check-in buttons, keyed by account id. */
+  claims?: Readonly<Record<string, TraePoolRowClaim>> | undefined
+  /** Claim one row's check-in. */
+  onClaim?: (accountId: string) => void
+  /**
+   * Bind a specific account by hand. Offered only while the pool is OFF: with it
+   * on, the Host picks who bills and a manual picker would look authoritative
+   * while changing nothing.
+   */
+  onBind?: (accountId: string) => void
+  bindingBusy?: boolean
 }
 
 interface LogEntry {
@@ -194,7 +232,7 @@ function consumeTestNdjson(
   return sawAny
 }
 
-export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh }: AccountPoolProps): ReactElement | null {
+export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, details, claims, onClaim, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
   // Re-read saved preferences whenever the settings scope changes (a save here,
   // or a save elsewhere / a profile import). Without this the `saved` memo is
   // keyed on `settingsScope`/`pool` field PRIMITIVES, so a write that only
@@ -443,14 +481,40 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   return (
     <section className="dsm-trae-pool" aria-label={t('row.poolTitle')}>
       <header className="dsm-trae-pool-head">
-        <div>
-          <h3 className="dsm-trae-pool-title">{t('row.poolTitle')}</h3>
-          <p className="dsm-trae-pool-region-note">{t('row.poolRegionNote')}</p>
-        </div>
-        {serving !== undefined
-          ? <span className="dsm-trae-pool-current">{t('row.poolCurrentHeader', { account: serving.accountName })}</span>
-          : null}
+        <h3 className="dsm-trae-pool-title">{t('row.poolTitle')}</h3>
       </header>
+      {/* Which account bills is stated ONCE, on its row (the tinted row with the
+          「派单中」 pill). A second statement in the header was the duplicate a
+          reader had to reconcile when the two disagreed mid-refresh. */}
+      <p className="dsm-trae-pool-note">{t('row.poolRegionNote')}</p>
+
+      {/* Manual mode: with the pool off the plugin does not choose, so the user
+          must be able to — and no other control is left to do it. */}
+      {pool.enabled !== true && onBind !== undefined
+        ? <div className="dsm-trae-pool-set dsm-trae-pool-bind">
+            <span className="dsm-trae-pool-set-copy">
+              <b>{t('row.poolManualAccountLabel')}</b>
+              <span>{t('row.poolManualAccountHint')}</span>
+            </span>
+            <span className="dsm-trae-pool-set-ctl">
+              <select
+                className="dsm-trae-select dsm-trae-pool-account-select"
+                value={serving?.accountId ?? ''}
+                disabled={bindingBusy === true || !writable}
+                onChange={(event) => {
+                  const next = event.target.value
+                  if (next !== '') onBind(next)
+                }}
+              >
+                {serving === undefined
+                  ? <option value="" disabled>{t('row.poolManualAccountNone')}</option>
+                  : null}
+                {pool.accounts.map(account =>
+                  <option key={account.accountId} value={account.accountId}>{account.accountName}</option>)}
+              </select>
+            </span>
+          </div>
+        : null}
 
       {/* Action row: check in all + test all + a busy line. */}
       <div className="dsm-trae-pool-actions">
@@ -501,6 +565,9 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               models={models}
               rows={rows}
               checked={selected.has(account.accountId)}
+              detail={details?.[account.accountId]}
+              claim={claims?.[account.accountId]}
+              onClaim={onClaim}
               onToggle={() => { toggleMember(account.accountId) }}
               onTest={() => { void runSingleTest(account) }}
               t={t}
@@ -532,28 +599,45 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         {dirty ? <p className="dsm-trae-pool-unsaved" role="status">{t('row.poolUnsavedMembers')}</p> : null}
       </div>
 
-      {/* Settings block. */}
-      <div className="dsm-trae-pool-settings">
-        <div className="dsm-trae-pool-settings-head">
-          <h4 className="dsm-trae-pool-subtitle">{t('row.poolSettingsTitle')}</h4>
-          <p className="dsm-trae-pool-subnote">{t('row.poolSettingsHint')}</p>
+      {/* Settings block: a heading, a real hint, account management, then one
+          bordered box of label+hint rows with the control on the right — the
+          same shape the WorkBuddy card uses, so a reader who knows one card can
+          read the other. */}
+      <div className="dsm-trae-pool-settings-wrap">
+        <div className="dsm-trae-pool-head">
+          <h3 className="dsm-trae-pool-title">{t('row.poolSettingsTitle')}</h3>
+          {dirty ? <span className="dsm-trae-pool-dirty" role="status">{t('row.poolDirty')}</span> : null}
         </div>
-
-        <label className="dsm-trae-switch">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={busy !== undefined || !writable}
-            onChange={(e) => { setEnabled(e.target.checked) }}
-          />
-          <span>{t('row.poolEnabled')}</span>
-        </label>
+        <p className="dsm-trae-pool-note">{t('row.poolSettingsHint')}</p>
+        {tools === undefined ? null : <div className="dsm-trae-pool-tools">{tools}</div>}
+        <div className="dsm-trae-pool-settings">
+        <div className="dsm-trae-pool-set">
+          <span className="dsm-trae-pool-set-copy">
+            <b>{t('row.poolEnabled')}</b>
+            <span>{t('row.poolEnabledHint')}</span>
+          </span>
+          <span className="dsm-trae-pool-set-ctl">
+            <label className="dsm-trae-switch">
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={busy !== undefined || !writable}
+                aria-label={t('row.poolEnabled')}
+                onChange={(e) => { setEnabled(e.target.checked) }}
+              />
+            </label>
+          </span>
+        </div>
         {saved.enabled === true && enabled === false
           ? <p className="dsm-trae-pool-off-notice" role="status">{t('row.poolOffNotice')}</p>
           : null}
 
-        <label className="dsm-trae-pool-target">
-          <span className="dsm-trae-pool-target-label">{t('row.poolTargetLabel')}</span>
+        <div className="dsm-trae-pool-set">
+          <span className="dsm-trae-pool-set-copy">
+            <b>{t('row.poolTargetLabel')}</b>
+            <span>{t('row.poolTargetHint')}</span>
+          </span>
+          <span className="dsm-trae-pool-set-ctl">
           <select
             className="dsm-trae-select"
             value={targetModelId}
@@ -566,7 +650,9 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               ? <option value={pool.staleTargetModelId}>{t('row.poolTargetStaleOption', { model: pool.staleTargetModelId })}</option>
               : null}
           </select>
-          {pool.targetModelSource === 'stale'
+          </span>
+        </div>
+        {pool.targetModelSource === 'stale'
             ? <div className="dsm-trae-pool-target-stale" role="status">
                 <span>{t('row.poolTargetStale', { model: pool.staleTargetModelId ?? '' })}</span>
                 <button
@@ -582,7 +668,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           {pool.targetModelSource === 'none'
             ? <p className="dsm-trae-pool-target-none" role="status">{t('row.poolTargetNone')} — {t('row.poolTargetNoneHint')}</p>
             : null}
-        </label>
 
         {saveError === undefined ? null : <p className="dsm-trae-pool-save-error" role="alert">{saveError}</p>}
         <div className="dsm-trae-pool-settings-save">
@@ -590,7 +675,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || busy !== undefined} onClick={() => { void save() }}>
             {busy === 'save' ? t('row.poolSaving') : t('row.poolSaved')}
           </button>
-          {dirty ? <span className="dsm-trae-pool-dirty" role="status">{t('row.poolDirty')}</span> : null}
+        </div>
         </div>
       </div>
 
@@ -641,6 +726,9 @@ interface MemberRowProps {
   models: readonly TraeWebModel[]
   rows: Readonly<Record<string, TraePoolTestRowView>>
   checked: boolean
+  detail?: TraePoolRowDetail | undefined
+  claim?: TraePoolRowClaim | undefined
+  onClaim?: ((accountId: string) => void) | undefined
   onToggle: () => void
   onTest: () => void
   t: T
@@ -651,7 +739,7 @@ interface MemberRowProps {
   relativeAt: (at: number, now: number, t: T) => string
 }
 
-function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt }: MemberRowProps): ReactElement {
+function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim }: MemberRowProps): ReactElement {
   const isCurrent = account.current === true
   // NON-NEGOTIABLE #7: show General as the number (what chat spends); never
   // rank/display `available` (the wider sum) as "credits".
@@ -676,7 +764,15 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
         </label>
         <span className="dsm-trae-pool-account-name">
           <span className={`dsm-trae-pool-dot dsm-trae-pool-dot-${excluded ? 'excluded' : 'ok'}`} aria-hidden="true" />
-          {account.accountName}
+          <b>{account.accountName}</b>
+          {/* edition · credential source, and the countdown that ends automatic
+              renewal. Both used to live in the roster table this section
+              replaces, so leaving them out would have been a silent loss of the
+              only warning that a token is about to die. */}
+          {detail?.meta === undefined ? null : <span className="dsm-trae-pool-meta">{detail.meta}</span>}
+          {detail?.warn === undefined
+            ? null
+            : <span className={`dsm-trae-pool-warn-tag dsm-trae-pool-warn-tag-${detail.warnTone ?? 'soon'}`} role="status">{detail.warn}</span>}
         </span>
         <span className="dsm-trae-pool-account-tags">
           {isCurrent ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-current">{t('row.poolCurrentBadge')}</span> : null}
@@ -694,9 +790,11 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
       </div>
 
       {/* Credit: the General bucket. Work is only a hint (never shown as the number). */}
+      {/* The column header already says 「通用积分」, so repeating 「通用」 under
+          every number was the same word twice in one cell. The tooltip keeps the
+          explanation one hover away. */}
       <div className="dsm-trae-pool-credit" title={t('row.poolWorkHint')}>
         <span className="dsm-trae-pool-credit-num">{credit === undefined ? t('row.poolCreditNone') : formatNumber(credit)}</span>
-        <span className="dsm-trae-pool-credit-label">{t('row.poolGeneralLabel')}</span>
       </div>
 
       {/* Probe result. */}
@@ -716,6 +814,17 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
             : checkin ? t('row.poolCheckedIn')
               : device === true ? t('row.poolDeviceUsed') : t('row.poolNotCheckedIn')}
         </span>
+        {claim === undefined || onClaim === undefined
+          ? null
+          : <button
+              type="button"
+              className="dsm-btn dsm-btn-outline dsm-trae-pool-claim"
+              disabled={claim.disabled || disabled}
+              title={claim.title}
+              onClick={() => { onClaim(account.accountId) }}
+            >
+              {claim.label}
+            </button>}
       </div>
 
       {/* Row actions: Test / Remove. */}
