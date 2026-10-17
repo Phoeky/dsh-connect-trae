@@ -795,25 +795,26 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
 
         {/* Save bar OUTSIDE the preference box, on the line below it: the two
             buttons apply to everything above, so they must not look like a row of
-            the box they would be the last row of. The star link sits on the left
-            of the same line, where the sibling card keeps it. */}
+            the box they would be the last row of. Deliberately the same bar the
+            models section ends with — one card, one way to save. */}
         <div className="dsm-trae-pool-save-row">
           <a
-            className="dsm-trae-pool-star"
+            className="dsm-trae-usage-cheer"
             href="https://github.com/dingminhua/dsh-connect-trae"
             target="_blank"
             rel="noreferrer noopener"
           >
-            {t('row.poolStar')} ★
+            {t('row.cheer')}
+            <span className="dsm-trae-usage-cheer-star" aria-hidden="true">★</span>
           </a>
-          <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || busy !== undefined} onClick={discard}>{t('row.poolDiscard')}</button>
-          <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || busy !== undefined} onClick={() => { void save() }}>
-            {busy === 'save' ? t('row.poolSaving') : t('row.poolSaved')}
-          </button>
+          <div className="dsm-trae-pool-save-buttons">
+            <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || busy !== undefined} onClick={discard}>{t('row.poolDiscard')}</button>
+            <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || busy !== undefined} onClick={() => { void save() }}>
+              {busy === 'save' ? t('row.poolSaving') : t('row.poolSaved')}
+            </button>
+          </div>
         </div>
       </div>
-
-      <p className="dsm-trae-pool-note">{t('row.poolRegionNote')}</p>
 
       {/* Activity log. */}
       <ActivityLog log={log} t={t} now={now} relativeAt={relativeAt} onClear={() => setLog([])} />
