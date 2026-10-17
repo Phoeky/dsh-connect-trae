@@ -53,7 +53,11 @@ async function runScript(root: string, args: string[], env: NodeJS.ProcessEnv = 
  * test exists to exercise, so the registry side must be faked rather than
  * skipped.
  */
-async function fixtureRepo(files: Record<string, string | Buffer>, packaged: Record<string, string | Buffer>): Promise<{ root: string, env: NodeJS.ProcessEnv }> {
+async function fixtureRepo(
+  files: Record<string, string | Buffer>,
+  packaged: Record<string, string | Buffer>,
+  options: { postTagFiles?: Record<string, string | Buffer> } = {},
+): Promise<{ root: string, env: NodeJS.ProcessEnv }> {
   const root = await mkdtemp(join(tmpdir(), 'trae-verify-release-')); cleanup.push(root)
   await mkdir(join(root, 'scripts'), { recursive: true })
 
@@ -80,6 +84,16 @@ async function fixtureRepo(files: Record<string, string | Buffer>, packaged: Rec
   await git(['add', '-A'])
   await git(['commit', '-qm', 'fixture'])
   await git(['tag', '-a', 'v9.9.9', '-m', 'v9.9.9'])
+
+  // Commits AFTER the tag are the normal case for post-release docs/CI fixes.
+  if (options.postTagFiles !== undefined) {
+    for (const [path, content] of Object.entries(options.postTagFiles)) {
+      await mkdir(join(root, path, '..'), { recursive: true })
+      await writeFile(join(root, path), content)
+    }
+    await git(['add', '-A'])
+    await git(['commit', '-qm', 'post-tag'])
+  }
 
   // The "published" tree, served by the shims below.
   const servedRoot = join(root, '.served')
@@ -182,6 +196,23 @@ describe('verify-release: preconditions are distinguished from verdicts', () => 
     // 2 means "could not start", which must never be confused with "found a
     // mismatch" (1) or "all clear" (0).
     expect(result.code).toBe(2)
+  })
+
+  it('still passes when commits land AFTER the tag', async () => {
+    // RELEASING.md: post-release docs/CI fixes do not move an already-pushed
+    // tag. An earlier version of this script required `tag == HEAD` and failed
+    // here — a false alarm that would have sent someone hunting for a
+    // corruption that does not exist. A non-shipped file (RELEASING.md itself)
+    // is the realistic shape of such a commit.
+    const text = '# ok\n'
+    const { root, env } = await fixtureRepo(
+      { 'README.md': text },
+      { 'README.md': text },
+      { postTagFiles: { 'RELEASING.md': '# release flow\n' } },
+    )
+    const result = await runScript(root, [], env)
+    expect(result.stdout).toContain('核验通过')
+    expect(result.code).toBe(0)
   })
 
   it('exits 2 when the version is not on the registry', async () => {

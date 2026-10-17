@@ -113,6 +113,11 @@ if (explicit !== undefined && explicit !== manifest.version) {
   console.log(`核验 ${tag}（注意：与 package.json 的 ${manifest.version} 不同）`)
 }
 
+/** Package-relative paths found in the published archive; empty under --skip-npm. */
+const entries = []
+/** Published bytes keyed by package-relative path, kept past the temp dir's removal. */
+const publishedBytes = new Map()
+
 // ---------------------------------------------------------------------------
 // 2. The tag must exist, and the work tree must match it.
 //
@@ -139,7 +144,37 @@ if (!tagExists) {
 
 const tagCommit = await git(['rev-parse', `${tag}^{commit}`])
 const headCommit = await git(['rev-parse', 'HEAD'])
-record('tag 指向 HEAD', tagCommit === headCommit, `${tag} -> ${tagCommit.slice(0, 8)}${tagCommit === headCommit ? '' : `，HEAD 为 ${headCommit.slice(0, 8)}`}`)
+const releaseVersion = JSON.parse(await git(['show', `${tag}:package.json`])).version
+record(
+  `tag 的 package.json 是 ${version}`,
+  releaseVersion === version,
+  releaseVersion === version
+    ? `${tag} -> ${tagCommit.slice(0, 8)}`
+    : `${tag} 里的版本是 ${releaseVersion}，与待核验的 ${version} 不符`,
+)
+
+// Commits AFTER the tag are normal and explicitly allowed: RELEASING.md notes
+// that post-release docs and CI fixes do not move an already-pushed tag. What
+// matters is not "which paths changed" but "does the tree still produce the
+// published package" — and that is already answered, byte for byte, by the
+// tarball comparison below (every shipped file vs `git show <tag>:<path>`) and
+// by the lib/ rebuild. So this step only reports the divergence for context.
+if (tagCommit !== headCommit) {
+  const changed = await git(['diff', '--name-only', `${tag}..HEAD`])
+  const changedPaths = changed === '' ? [] : changed.split('\n')
+  const shippedSet = entries.length > 0 ? entries : manifest.files ?? []
+  const touched = changedPaths.filter(path => shippedSet.some(prefix =>
+    prefix.endsWith('/') ? path.startsWith(prefix) : path === prefix,
+  ))
+  record(
+    'tag 之后的提交',
+    true,
+    touched.length === 0
+      ? `无（HEAD = ${headCommit.slice(0, 8)}）`
+      : `${changedPaths.length} 个文件，其中随包文件：${touched.join(', ')}；内容一致性由下方逐文件比对判定`,
+    { blocking: false },
+  )
+}
 
 const dirty = await git(['status', '--porcelain'])
 record(
@@ -213,9 +248,6 @@ if (!skipNpm) {
 // from the registry and diffing against the tag's tree closes that gap.
 // ---------------------------------------------------------------------------
 
-const entries = []
-/** Published bytes keyed by package-relative path, kept past the temp dir's removal. */
-const publishedBytes = new Map()
 if (!skipNpm) {
   tarballDir = await mkdtemp(join(tmpdir(), 'trae-verify-'))
   try {
