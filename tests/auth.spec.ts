@@ -640,4 +640,55 @@ describe('consumer panels withhold tenant logins', () => {
     expect((await store.accounts()).map(account => account.accountName)).toEqual(['tenant-user'])
     await expect(store.current()).resolves.toMatchObject({ userId: 'tenant-user' })
   })
+
+  /**
+   * The card offers a list, and the row marked `selected` is what it saves when
+   * the user presses "use this account". So `selected` MUST name the account
+   * `current()` bills — otherwise the card shows one account while the chat
+   * spends another, and the next press rewrites the binding to the account that
+   * was only ever DISPLAYED.
+   */
+  async function assertSelectionAgrees(store: TraeCredentialStore): Promise<string> {
+    const accounts = await store.accounts()
+    const current = await store.current()
+    const marked = accounts.filter(account => account.selected)
+    expect(marked).toHaveLength(1)
+    expect(marked[0].id).toBe(traeAccountId(current!))
+    return marked[0].accountName!
+  }
+
+  it('marks the account it bills, not the first one the filter happens to keep', async () => {
+    // The tenant login sorts FIRST on this machine. A consumer store defaults
+    // its billing to `preferred(offered)`, so if `selected` were derived from
+    // the filtered list independently it would land on whichever account came
+    // first and the card would disagree with the chat.
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, tenantStorageLocal('tenant', Date.now() + 3_600_000, 'tenant-user'))
+    await writeFile(solo, storage('personal', Date.now() + 3_600_000, undefined, 'personal-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), hideTenantAccounts: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [
+      { edition: 'cn', path: cn, source: 'desktop' },
+      { edition: 'solo', path: solo, source: 'desktop' },
+    ]
+    await expect(assertSelectionAgrees(store)).resolves.toBe('personal-user')
+  })
+
+  it('keeps a hidden account on the list when it is the one being billed', async () => {
+    // Withholding is a display filter; an explicit binding outranks it. Dropping
+    // the bound account from the list would leave no row marked `selected` at
+    // all, and the card reads that as "nothing is signed in".
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, tenantStorageLocal('tenant', Date.now() + 3_600_000, 'tenant-user'))
+    await writeFile(solo, storage('personal', Date.now() + 3_600_000, undefined, 'personal-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), hideTenantAccounts: true, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [
+      { edition: 'cn', path: cn, source: 'desktop' },
+      { edition: 'solo', path: solo, source: 'desktop' },
+    ]
+    store.selectAccount(traeAccountId({ edition: 'cn', userId: 'tenant-user' }))
+    await expect(assertSelectionAgrees(store)).resolves.toBe('tenant-user')
+    expect((await store.accounts()).map(account => account.accountName)).toEqual(['personal-user', 'tenant-user'])
+  })
 })

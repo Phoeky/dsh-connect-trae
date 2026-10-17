@@ -451,27 +451,45 @@ export class TraeCredentialStore {
     }
   }
 
-  async accounts(): Promise<TraeAccountChoice[]> {
-    const discovered = await this.readAll()
-    /**
-     * The OFFERED list is scoped to who this store may bill:
-     *   - a consumer store withholds tenant accounts (the enterprise pool is a
-     *     separate tab and a separate billing decision), and
-     *   - a tenant store withholds personal accounts (they cannot bill that
-     *     pool; the tenant gateway answers their chat with 4019).
-     *
-     * Either filter backs off when it would hide EVERYTHING, so a machine whose
-     * only login is on the other side keeps working instead of reading as
-     * "signed out". Resolution (`current`/`resolve`) is never affected.
-     */
+  /**
+   * The accounts this store is willing to OFFER.
+   *
+   * Scoped to who this store may bill:
+   *   - a consumer store withholds tenant accounts (the enterprise pool is a
+   *     separate tab and a separate billing decision), and
+   *   - a tenant store withholds personal accounts (they cannot bill that
+   *     pool; the tenant gateway answers their chat with 4019).
+   *
+   * Either filter backs off when it would hide EVERYTHING, so a machine whose
+   * only login is on the other side keeps working instead of reading as
+   * "signed out".
+   */
+  private offered(discovered: TraeCredential[]): TraeCredential[] {
     const eligible = this.requireTenant
       ? discovered.filter(credential => isEnterpriseAccount(credential))
       : this.hideTenantAccounts
         ? discovered.filter(credential => !isEnterpriseAccount(credential))
         : discovered
-    const credentials = eligible.length > 0 ? eligible : discovered
-    const selectedExists = this.accountId !== undefined && credentials.some(credential => traeAccountId(credential) === this.accountId)
-    const defaultSelected = this.preferred(credentials)
+    return eligible.length > 0 ? eligible : discovered
+  }
+
+  async accounts(): Promise<TraeAccountChoice[]> {
+    const discovered = await this.readAll()
+    const offered = this.offered(discovered)
+    const inUse = this.inUse(discovered, offered)
+    /**
+     * Never hide the account we are actually billing.
+     *
+     * An explicit binding outranks the display filter (`inUse` honours it even
+     * when the offered list withholds it), and a list whose active row is
+     * invisible is worse than no list: the card's "save the selected account"
+     * press reads `selected`, so a hidden binding would be rewritten to whichever
+     * account merely happened to be DISPLAYED — silently moving the user's
+     * billing to an account they never chose. Re-appending it costs one extra
+     * row and makes the card tell the truth.
+     */
+    const credentials = inUse !== undefined && !offered.includes(inUse) ? [...offered, inUse] : offered
+    const inUseId = inUse === undefined ? undefined : traeAccountId(inUse)
     return credentials.map(credential => ({
       id: traeAccountId(credential),
       accountName: credential.accountName ?? (credential.userId || `${credential.edition} account`),
@@ -481,25 +499,56 @@ export class TraeCredentialStore {
       source: credential.source,
       tokenExpiresAtMs: credential.expiresAtMs,
       ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: credential.refreshExpiresAtMs },
-      selected: selectedExists ? traeAccountId(credential) === this.accountId : credential === defaultSelected,
+      // Exactly one row reads as `selected`, and it is the SAME account
+      // `current()` bills. Deriving this flag any other way is how the card and
+      // the chat came to disagree.
+      selected: inUseId !== undefined && traeAccountId(credential) === inUseId,
     }))
   }
 
-  async current(): Promise<TraeCredential | undefined> {
-    const credentials = await this.readAll()
-    if (this.accountId === undefined) return this.preferred(credentials)
-    const selected = credentials.find(credential => traeAccountId(credential) === this.accountId)
-    // A tenant-scoped store cannot bill through a personal account, and the
-    // tenant gateway only reveals that at the first chat (`4019`). Honour the
-    // binding when it is eligible; otherwise fall back to the preferred tenant
-    // account, which is the one the user's enterprise tab is meant to use.
-    if (this.requireTenant && !isEnterpriseAccount(selected)) return this.preferred(credentials)
-    // A saved account can disappear when Trae replaces its local login. Do NOT
-    // silently fall back to a different account: that would bill a different
-    // account than the one the user explicitly selected. Return undefined so the
-    // caller surfaces "no signed-in account" and the user can re-select, instead
-    // of the plugin quietly switching accounts behind their back.
+  /**
+   * The credential this store bills, given every credential it can see.
+   *
+   * This is the ONE resolution rule, and it exists so that `current()` and
+   * `accounts()` cannot disagree: `current()` applies it to `readAll()`, and
+   * `accounts()` applies the SAME verdict to decide which row reads as
+   * `selected`. Deriving that flag independently is exactly how the two drifted
+   * apart — and a card that marks a different account than the one the chat
+   * bills is worse than no card at all, because a press that "saves the
+   * selected account" then rewrites the binding to the account that was only
+   * ever DISPLAYED.
+   *
+   * Order of business:
+   *   1. No binding — the detected default (`preferred`) is in use, chosen from
+   *      the OFFERED list rather than from every login on the machine. A
+   *      consumer store that withholds tenant accounts must not default its
+   *      billing to the tenant pool merely because that login sorts first;
+   *      withholding is a billing decision, not a display detail.
+   *   2. A binding — honour it verbatim, even when the OFFERED list hides that
+   *      account. Resolution is never scoped by `hideTenantAccounts`: the user's
+   *      explicit choice outranks a display filter.
+   *   3. A tenant-scoped store cannot bill through a personal account, and the
+   *      tenant gateway only reveals that at the first chat (`4019`). Honour the
+   *      binding when it is eligible; otherwise fall back to the preferred
+   *      tenant account, which is the one the user's enterprise tab is meant to
+   *      use.
+   *   4. A saved account can disappear when Trae replaces its local login. Do
+   *      NOT silently fall back to a different account: that would bill a
+   *      different account than the one the user explicitly selected. Return
+   *      undefined so the caller surfaces "no signed-in account" and the user
+   *      can re-select, instead of the plugin quietly switching accounts behind
+   *      their back.
+   */
+  private inUse(discovered: TraeCredential[], offered: TraeCredential[]): TraeCredential | undefined {
+    if (this.accountId === undefined) return this.preferred(offered)
+    const selected = discovered.find(credential => traeAccountId(credential) === this.accountId)
+    if (this.requireTenant && !isEnterpriseAccount(selected)) return this.preferred(offered)
     return selected
+  }
+
+  async current(): Promise<TraeCredential | undefined> {
+    const discovered = await this.readAll()
+    return this.inUse(discovered, this.offered(discovered))
   }
 
   /**
