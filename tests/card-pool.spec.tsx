@@ -217,6 +217,46 @@ function clearTargetButton(): HTMLButtonElement {
   return within(poolSection()).getByRole('button', { name: 'row.poolTargetStaleClear' }) as HTMLButtonElement
 }
 
+describe('the pool section keeps one spacing and one radius scale', () => {
+  // The section used to mix 10/12/14px insets and 10/12/14px radii, one per block,
+  // which is exactly what reads as "inconsistent" even when each block looks fine
+  // alone. These assertions pin the scale so a new block cannot invent its own.
+  const rule = (selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = TRAE_CARD_CSS.match(new RegExp(`${escaped}\\{([^}]*)\\}`))
+    return match?.[1] ?? ''
+  }
+
+  it('declares the scale on the section and uses it everywhere', () => {
+    expect(rule('.dsm-trae-pool')).toContain('--dsm-trae-pool-pad-x:14px')
+    expect(rule('.dsm-trae-pool')).toContain('--dsm-trae-pool-pad-y:10px')
+    expect(rule('.dsm-trae-pool')).toContain('--dsm-trae-pool-radius:14px')
+    for (const selector of [
+      '.dsm-trae-pool-row',
+      '.dsm-trae-pool-row-head',
+      '.dsm-trae-pool-card-head',
+      '.dsm-trae-pool-card-note',
+      '.dsm-trae-pool-set',
+    ]) {
+      expect(rule(selector), selector).toContain('var(--dsm-trae-pool-pad-x)')
+    }
+  })
+
+  it('only uses the card-wide radius scale inside the pool section', () => {
+    // The card already has a scale: 14px for a surface, 10px for a box INSIDE a
+    // surface, 999px for a pill. Anything else here is drift that shows up as
+    // "these blocks do not belong together".
+    const allowed = new Set(['0', '10px', '14px', '999px', '50%', 'var(--dsm-trae-pool-radius)'])
+    const poolRules = TRAE_CARD_CSS.match(/\.[^{}]*dsm-trae-pool[^{}]*\{[^}]*\}/g) ?? []
+    expect(poolRules.length).toBeGreaterThan(40)
+    for (const block of poolRules) {
+      for (const match of block.matchAll(/border-radius:([^;}]+)/g)) {
+        expect(allowed.has(match[1]!.trim()), `${block.slice(0, 60)} → ${match[1]}`).toBe(true)
+      }
+    }
+  })
+})
+
 describe('AccountPool card section', () => {
   it('renders rows from a pool document, including a ghost member and its removal', () => {
     // Seed the saved cn membership so the DRAFT starts with acc-a AND the ghost.

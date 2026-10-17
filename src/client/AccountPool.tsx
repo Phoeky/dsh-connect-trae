@@ -143,6 +143,13 @@ function shortWhen(atMs: number): string {
   return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}, ${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
 
+/** `MM/DD`, for a line that has room for a date but not a clock time. */
+function shortDate(atMs: number): string {
+  const at = new Date(atMs)
+  const pad = (value: number): string => (value < 10 ? `0${value}` : String(value))
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())}`
+}
+
 function relativeAt(atMs: number, now: number, t: T): string {
   const mins = Math.max(0, Math.round((now - atMs) / 60_000))
   if (mins < 1) return t('row.poolAgoNow')
@@ -817,7 +824,7 @@ function NoCandidateNotice({ noCandidate, t }: { noCandidate: TraeWebPoolExclusi
 function MemberRowHeader({ t, checkinSupported }: { t: T; checkinSupported: boolean }): ReactElement {
   return (
     <div className="dsm-trae-pool-row dsm-trae-pool-row-head" role="row">
-      <span>{t('row.poolColumnAccount')}</span>
+      <span className="dsm-trae-pool-col-account">{t('row.poolColumnAccount')}</span>
       <span>{t('row.poolColumnCredits')}</span>
       <span>{t('row.poolColumnProbe')}</span>
       {checkinSupported ? <span>{t('row.poolColumnCheckin')}</span> : null}
@@ -861,6 +868,15 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
   const checkin = account.checkedInToday
   const device = account.deviceCheckedIn
   const testRow = rows[account.accountId]
+  /**
+   * Whether the probe column already explains WHY this row is excluded.
+   *
+   * The exclusion tag and the probe cell are derived from the same verdict, so a
+   * row that shows both says 「登录凭据被拒」 twice, six centimetres apart. Keep
+   * the tag only for the case the cell cannot cover: no probe to show at all
+   * (e.g. a stored member whose last test predates this session).
+   */
+  const probeOnScreen = testRow !== undefined || account.probe !== undefined
 
   return (
     <div className={`dsm-trae-pool-row${isCurrent ? ' dsm-trae-pool-row-current' : ''}`} role="row" data-account-id={account.accountId}>
@@ -898,10 +914,12 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
           <span className={checked ? 'dsm-trae-pool-member' : 'dsm-trae-pool-not-member'}>
             {checked ? t('row.poolMember') : t('row.poolNotMember')}
           </span>
-          {excluded ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span> : null}
+          {excluded && !probeOnScreen
+            ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span>
+            : null}
           {/* A lapsed access token explains the empty credit cell: the balance
               is not zero, it is unreadable until the user signs in again. */}
-          {account.tokenExpired === true
+          {account.tokenExpired === true && excluded !== 'credential-rejected'
             ? <span className="dsm-trae-pool-warn-tag dsm-trae-pool-warn-tag-lapsed">{t('row.poolTokenExpired')}</span>
             : null}
         </span>
@@ -920,7 +938,7 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
         <span className="dsm-trae-pool-credit-num">{credit === undefined ? t('row.poolCreditNone') : formatNumber(credit)}</span>
         {credit === undefined || account.nearestExpiryMs === undefined
           ? null
-          : <span className="dsm-trae-pool-credit-meta">{t('row.poolCreditExpiry', { when: shortWhen(account.nearestExpiryMs) })}</span>}
+          : <span className="dsm-trae-pool-credit-meta">{t('row.poolCreditExpiry', { when: shortDate(account.nearestExpiryMs) })}</span>}
       </div>
 
       {/* Probe result. */}
