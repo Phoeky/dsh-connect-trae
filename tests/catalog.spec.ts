@@ -165,6 +165,15 @@ describe('traeModelDisplayName', () => {
   it('keeps the pure name when Trae advertises no multiplier', () => {
     expect(traeModelDisplayName({ name: 'GLM-5.3' })).toBe('GLM-5.3')
   })
+
+  it('omits the rate entirely when the caller does not bill one', () => {
+    // The enterprise pool does not bill the consumer multiplier, so its model
+    // picker entries must not carry a price at all. The rate travels inside
+    // the NAME that reaches DSH, which is why this is decided here and not by
+    // whatever renders the picker.
+    expect(traeModelDisplayName({ name: 'DeepSeek-V4.1-Flash', creditMultiplier: 0.06 }, false)).toBe('DeepSeek-V4.1-Flash')
+    expect(traeModelDisplayName({ name: 'DeepSeek-V4.1-Flash', creditMultiplier: 0.06 }, true)).toBe('DeepSeek-V4.1-Flash · x0.06')
+  })
 })
 
 describe('mergeTraeModelSources', () => {

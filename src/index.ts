@@ -1458,9 +1458,12 @@ export function apply(ctx: Context, config: Config): void {
           await stacks[panel].discoverModels(cancellation),
           imageSet(current(), panel),
         )
+        // Same name the adapter publishes for this provider, rate included
+        // only where it is actually billed (see traeModelDisplayName).
+        const withRate = panel !== 'enterprise'
         return next.map(model => ({
           id: model.id,
-          name: traeModelDisplayName(model),
+          name: traeModelDisplayName(model, withRate),
           ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
           ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
           // Current dsh-llm discovery types do not yet declare this field, but

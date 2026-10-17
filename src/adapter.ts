@@ -120,10 +120,10 @@ const REQUEST_IMAGE_BUDGETS = {
  */
 const FALLBACK_CONTEXT_WINDOW = 200_000
 
-function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string): Model<Api> {
+function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string, withRate = true): Model<Api> {
   return {
     id: info.id,
-    name: traeModelDisplayName(info),
+    name: traeModelDisplayName(info, withRate),
     api: 'openai-completions',
     provider: providerId,
     baseUrl,
@@ -434,8 +434,13 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   // Getting it from the host would be wrong in exactly the case that produced
   // issue #27 — a nested older copy shadows the host's newer one.
   const generation = options.piAiGeneration ?? piAiRuntimeInfo().generation
+  /**
+   * The enterprise provider shows no rate: the multiplier belongs to the
+   * consumer pool, and this provider bills the tenant pool.
+   */
+  const showRate = options.provider !== TRAE_ENTERPRISE_PROVIDER
   const buildModels = (): Model<Api>[] => options.catalog.current()
-    .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId))
+    .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId, showRate))
 
   const base = createProvider({
     id: providerId,
