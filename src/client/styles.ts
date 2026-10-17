@@ -392,7 +392,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-remove{color:var(--dsw-alias-label-secondary,#c6c9d0)}
 .dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
-.dsm-trae-pool-members{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24));border-radius:12px}
+.dsm-trae-pool-members{display:flex;flex-direction:column;gap:10px}
 .dsm-trae-pool-settings{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24));border-radius:12px}
 .dsm-trae-pool-members-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .dsm-trae-pool-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
@@ -400,30 +400,32 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-subnote{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-select-actions{display:flex;flex:none;gap:6px}
 .dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-settings-save .dsm-btn{padding:2px 10px;font-size:12px}
-.dsm-trae-pool-table{display:flex;flex-direction:column;gap:2px}
-.dsm-trae-pool-row{display:grid;grid-template-columns:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;align-items:start;gap:10px;padding:7px 6px;border-radius:8px}
-.dsm-trae-pool-row+.dsm-trae-pool-row{border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-pool-table{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-pool-row{display:grid;grid-template-columns:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+.dsm-trae-pool-row:first-child{border-top:0}
 /* The header carries labels for the first three tracks only: the check-in and
    action cells are self-describing ("Not checked in", "Test"), and a header word
    for an empty cell would be a promise the table does not keep. */
-.dsm-trae-pool-row-head{padding-bottom:4px;border-top:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-row-head{padding:8px 14px;border-top:0;background:var(--dsw-alias-bg-layer-3,#2a2c33);font-size:11px;line-height:16px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 /* The row that would bill the next request. Tinted, not bordered: a border here
    reads as a selection control, and the checkbox beside it already is one. */
-.dsm-trae-pool-row-current{background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-row-current{background:rgba(86,134,254,.07);box-shadow:inset 3px 0 0 var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-pool-row-ghost{opacity:.7}
 .dsm-trae-pool-row-actions{grid-column:-2/-1;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
-.dsm-trae-pool-account{display:flex;flex-direction:column;gap:4px;min-width:0}
-.dsm-trae-pool-check{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer}
+.dsm-trae-pool-account{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:2px 8px;min-width:0}
+.dsm-trae-pool-check{display:inline-flex;align-items:center;flex:none;grid-column:1;grid-row:1;cursor:pointer}
 .dsm-trae-pool-check input{flex:none;margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-pool-check:has(input:disabled){opacity:.6;cursor:default}
-.dsm-trae-pool-account-name{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-trae-pool-account-name{display:flex;align-items:center;gap:6px;min-width:0;grid-column:2;grid-row:1;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-trae-pool-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed,#777)}
 .dsm-trae-pool-dot-ok{background:var(--dsw-alias-state-success-primary,#12b76a)}
 .dsm-trae-pool-dot-excluded{background:var(--dsw-alias-state-warn-primary,#b45309)}
 .dsm-trae-pool-dot-ghost{background:var(--dsw-alias-label-dimmed,#777)}
-.dsm-trae-pool-account-tags{display:flex;flex-wrap:wrap;gap:4px}
+.dsm-trae-pool-account-tags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;grid-column:2;grid-row:2;min-width:0}
 .dsm-trae-pool-tag{padding:0 6px;border-radius:999px;font-size:10px;line-height:16px;white-space:nowrap}
-.dsm-trae-pool-tag-current{background:var(--dsw-alias-brand-primary,#5686fe);color:var(--dsw-alias-bg-layer-3,#202126)}
+.dsm-trae-pool-member{font-size:11px;line-height:16px;color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-pool-not-member{font-size:11px;line-height:16px;color:var(--dsw-alias-label-dimmed,#9aa0a6)}
+.dsm-trae-pool-tag-current{padding:1px 6px;border-radius:999px;background:rgba(86,134,254,.16);color:var(--dsw-alias-brand-primary,#5686fe);font-size:11px;font-weight:600;line-height:16px}
 .dsm-trae-pool-tag-member{border:1px solid var(--dsw-alias-border-l2,#3a3d45);color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-tag-excluded{background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
 .dsm-trae-pool-tag-ghost{border:1px dashed var(--dsw-alias-border-l2,#3a3d45);color:var(--dsw-alias-label-tertiary,#9aa0a8)}

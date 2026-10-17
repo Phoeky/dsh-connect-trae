@@ -156,10 +156,6 @@ function renderRouteError(t: T, status: number, body: { reason?: unknown } | und
 }
 
 /** Whether one row is a saved member (dictates the in-pool tag / ghost badge). */
-function isSavedMember(memberAccountIds: readonly string[] | undefined, accountId: string): boolean {
-  return (memberAccountIds ?? []).includes(accountId)
-}
-
 interface TestMediaLine {
   row?: TraePoolTestRowView
   rows?: TraePoolTestRowView[]
@@ -505,7 +501,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               models={models}
               rows={rows}
               checked={selected.has(account.accountId)}
-              savedMember={isSavedMember(pool.memberAccountIds ?? saved.memberAccountIds, account.accountId)}
               onToggle={() => { toggleMember(account.accountId) }}
               onTest={() => { void runSingleTest(account) }}
               t={t}
@@ -646,7 +641,6 @@ interface MemberRowProps {
   models: readonly TraeWebModel[]
   rows: Readonly<Record<string, TraePoolTestRowView>>
   checked: boolean
-  savedMember: boolean
   onToggle: () => void
   onTest: () => void
   t: T
@@ -657,7 +651,7 @@ interface MemberRowProps {
   relativeAt: (at: number, now: number, t: T) => string
 }
 
-function MemberRow({ account, models, rows, checked, savedMember, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt }: MemberRowProps): ReactElement {
+function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt }: MemberRowProps): ReactElement {
   const isCurrent = account.current === true
   // NON-NEGOTIABLE #7: show General as the number (what chat spends); never
   // rank/display `available` (the wider sum) as "credits".
@@ -679,14 +673,22 @@ function MemberRow({ account, models, rows, checked, savedMember, onToggle, onTe
             onChange={onToggle}
             aria-label={t('row.poolSelectAria', { accountName: account.accountName })}
           />
-          <span className="dsm-trae-pool-account-name">
-            <span className={`dsm-trae-pool-dot dsm-trae-pool-dot-${excluded ? 'excluded' : 'ok'}`} aria-hidden="true" />
-            {account.accountName}
-          </span>
         </label>
+        <span className="dsm-trae-pool-account-name">
+          <span className={`dsm-trae-pool-dot dsm-trae-pool-dot-${excluded ? 'excluded' : 'ok'}`} aria-hidden="true" />
+          {account.accountName}
+        </span>
         <span className="dsm-trae-pool-account-tags">
           {isCurrent ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-current">{t('row.poolCurrentBadge')}</span> : null}
-          {savedMember ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-member">{t('row.poolMember')}</span> : null}
+          {/* Membership is stated in WORDS on every row, and it follows the
+              DRAFT (the checkbox), never the saved list: an unchecked row that
+              still says 「已在池中」 is the one contradiction a user cannot
+              resolve. It is also what makes an unselected row look different
+              from a selected one at a glance — a tick alone is 13 pixels of
+              difference in a five-column table. */}
+          <span className={checked ? 'dsm-trae-pool-member' : 'dsm-trae-pool-not-member'}>
+            {checked ? t('row.poolMember') : t('row.poolNotMember')}
+          </span>
           {excluded ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span> : null}
         </span>
       </div>
@@ -755,12 +757,15 @@ function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRem
             onChange={onToggle}
             aria-label={t('row.poolSelectAria', { accountName: ghost.accountName })}
           />
-          <span className="dsm-trae-pool-account-name">
-            <span className="dsm-trae-pool-dot dsm-trae-pool-dot-ghost" aria-hidden="true" />
-            {ghost.accountName}
-          </span>
         </label>
+        <span className="dsm-trae-pool-account-name">
+          <span className="dsm-trae-pool-dot dsm-trae-pool-dot-ghost" aria-hidden="true" />
+          {ghost.accountName}
+        </span>
         <span className="dsm-trae-pool-account-tags">
+          <span className={checked ? 'dsm-trae-pool-member' : 'dsm-trae-pool-not-member'}>
+            {checked ? t('row.poolMember') : t('row.poolNotMember')}
+          </span>
           <span className="dsm-trae-pool-tag dsm-trae-pool-tag-ghost">{t('row.poolExcludedUnusable')}</span>
         </span>
       </div>
