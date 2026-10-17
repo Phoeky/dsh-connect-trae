@@ -551,6 +551,14 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   const noCandidate = pool.noCandidate
   const showNoCandidate = pool.enabled && noCandidate !== undefined
   const serving = servingAccount(pool)
+  /**
+   * The batch buttons are disabled for reasons the user cannot see (they are not
+   * under the pointer, so a `title` only helps after a hover). Name them here.
+   */
+  const actionNotes: string[] = []
+  if (selected.size === 0) actionNotes.push(t('row.poolActionNoteNoMembers'))
+  if (deviceClaimed) actionNotes.push(t('row.poolActionNoteCheckinDevice'))
+  if (pool.targetModelSource === 'none') actionNotes.push(t('row.poolActionNoteTestNone'))
 
   return (
     <section className="dsm-trae-pool" aria-label={t('row.poolTitle')}>
@@ -618,6 +626,11 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           : null}
         {topActions === undefined ? null : <span className="dsm-trae-pool-actions-end">{topActions}</span>}
       </div>
+
+      {/* A disabled batch button with the reason only in a hover tooltip is a
+          dead end: the controls sit in a row, not under a cursor, so the row
+          itself has to say why it cannot be used. */}
+      {actionNotes.length === 0 ? null : <p className="dsm-trae-pool-action-note">{actionNotes.join(' · ')}</p>}
 
       {showNoCandidate ? <NoCandidateNotice noCandidate={noCandidate} t={t} /> : null}
 

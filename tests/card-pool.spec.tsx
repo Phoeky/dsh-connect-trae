@@ -266,6 +266,26 @@ describe('the batch check-in action', () => {
     expect(button.getAttribute('title')).toBe('row.checkinDeviceSpent')
   })
 
+  it('says why it is disabled, in the row itself', () => {
+    // A disabled control whose reason lives only in a `title` is a dead end: the
+    // user sees a grey button and has to guess. The row states the reason.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, true))
+    expect(screen.getByText('row.poolActionNoteCheckinDevice')).toBeTruthy()
+  })
+
+  it('names a missing free model as the reason tests cannot run', () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    render(renderPoolAndReturn(basePool({ checkinSupported: true, targetModelSource: 'none' }), scope, false))
+    expect(screen.getByText('row.poolActionNoteTestNone')).toBeTruthy()
+  })
+
+  it('asks for members before offering a batch run', () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: [] }))
+    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))
+    expect(screen.getByText('row.poolActionNoteNoMembers')).toBeTruthy()
+  })
+
   it('stays available while the device has not claimed', () => {
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
     render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))

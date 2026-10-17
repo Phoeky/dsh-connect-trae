@@ -402,6 +402,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-remove{color:var(--dsw-alias-label-secondary,#c6c9d0)}
 .dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
 .dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-action-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:var(--dsm-trae-pool-radius);background:var(--dsw-alias-bg-layer-2,#24262c);overflow:hidden}
 .dsm-trae-pool-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px var(--dsm-trae-pool-pad-x) 0}
 .dsm-trae-pool-card-title{margin:0;font-size:13px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6)}
