@@ -47,6 +47,361 @@ export const TRAE_ACCOUNT_STATUS_PATH = '/plugins/dsh-connect-trae/account-statu
  */
 export const TRAE_CHECKIN_PATH = '/plugins/dsh-connect-trae/checkin'
 /**
+ * Plugin-owned account-pool endpoint: one route for the pool's batch actions.
+ *
+ * 参考：`dsh-connect-workbuddy` 的 `WORKBUDDY_POOL_PATH`。本路由与该实现同形
+ *   （同一 `?action=` 风格、POST、loopback-only、per-row `accountId`），这样同时
+ *   装了两个插件的用户面对的是同一套交互。
+ *
+ * `?action=checkin` and `?action=test` run over the whole member set; `remove`
+ * addresses ONE account (the body carries `accountId`) and is the only way a
+ * measurement of an account the user no longer wants can leave the store — a
+ * deleted member otherwise keeps its row in the file forever, and a re-added
+ * member would silently inherit an old exclusion.
+ *
+ * POST + loopback-only because both batches SPEND something: check-in sends a
+ * claim, and a test is a real chat call. A page that is not the Host's own
+ * loopback must not be able to trigger either.
+ */
+export const TRAE_POOL_PATH = '/plugins/dsh-connect-trae/pool'
+/** Query parameter selecting which pool batch action a request means. */
+export const TRAE_POOL_ACTION_PARAM = 'action'
+/** Query parameter naming ONE pool account a per-row request addresses. */
+export const TRAE_POOL_ACCOUNT_PARAM = 'accountId'
+/** The pool batch actions. `remove` is per-account and never batch-wide. */
+export type TraePoolAction = 'checkin' | 'test' | 'remove'
+/** Read the pool action off a request URL; unknown/absent means undefined. */
+export function poolActionOf(url: string): TraePoolAction | undefined {
+  const at = url.indexOf('?')
+  if (at === -1) return undefined
+  const value = new URLSearchParams(url.slice(at + 1)).get(TRAE_POOL_ACTION_PARAM)
+  return value === 'checkin' || value === 'test' || value === 'remove' ? value : undefined
+}
+/**
+ * Read the ONE account a per-row pool request addresses, from the QUERY string.
+ *
+ * Unlike the transfer route, the pool's `accountId` rides the URL rather than the
+ * body, so a row action and a batch action are distinguishable before any bytes
+ * are read — which is what lets the route refuse a malformed request without ever
+ * touching the store.
+ */
+export function poolAccountIdOf(url: string): string | undefined {
+  const at = url.indexOf('?')
+  if (at === -1) return undefined
+  const value = new URLSearchParams(url.slice(at + 1)).get(TRAE_POOL_ACCOUNT_PARAM)
+  return value === null || value === '' ? undefined : value
+}
+/**
+ * Address one panel's pool route with its action.
+ *
+ * Kept as its own helper (rather than a `withTraeRegion` + hand-appended
+ * `&action=`) because a missing action parameter means "no action", not a
+ * default one — the typo has to be impossible rather than merely unlikely.
+ */
+export function withTraePoolAction(panel: TraePanel, action: TraePoolAction): string {
+  return `${TRAE_POOL_PATH}?${TRAE_REGION_PARAM}=${panel}&${TRAE_POOL_ACTION_PARAM}=${action}`
+}
+
+/**
+ * Address one panel's pool route for ONE account, e.g. a row's Test or Remove.
+ *
+ * Kept beside {@link withTraePoolAction} for the same reason that one exists: the
+ * account id is a 24-char hex string, and hand-appending `&accountId=` at a call
+ * site is one typo away from a request the route answers 400 to — or worse, from
+ * one that addresses the wrong action. Both parameters are therefore spelled by
+ * this module and nowhere else.
+ */
+export function withTraePoolAccount(panel: TraePanel, action: TraePoolAction, accountId: string): string {
+  return `${withTraePoolAction(panel, action)}&${TRAE_POOL_ACCOUNT_PARAM}=${encodeURIComponent(accountId)}`
+}
+
+/**
+ * Outcome vocabulary of one account probe, shared by the Host and the card.
+ *
+ * Mirrors `TraePoolOutcome` in `./account-pool.ts`, and is DECLARED again here
+ * rather than imported for the same reason workbuddy repeats it: this module is
+ * the node-free bridge for the browser build target and must not pull in the
+ * Host-side pool module (which imports the credential type). The two lists must
+ * stay in step — the card renders one label per value, and a value Host can send
+ * that the card has no label for renders as the raw token.
+ *
+ * `plan-gated` is Trae-only (upstream `1005`: this ACCOUNT's plan does not cover
+ * the model) and has no workbuddy counterpart.
+ */
+export type TraeWebPoolOutcome =
+  | 'ok'
+  | 'rate-limited'
+  /**
+   * The MODEL is loaded, not the account.
+   *
+   * Kept apart from `rate-limited` because the two need OPPOSITE advice:
+   * `rate-limited` is this account's volume wall (wait, or bill another account),
+   * while `model-busy` follows the model everywhere — every account hits the same
+   * wall, so switching only spends a request per account to learn what the first
+   * already said.
+   */
+  | 'model-busy'
+  | 'out-of-credit'
+  | 'credential-rejected'
+  | 'policy-rejected'
+  | 'plan-gated'
+  | 'unavailable'
+  | 'not-found'
+  | 'failed'
+
+/** Why one account is currently out of the pool. */
+export type TraeWebPoolExclusion =
+  | 'unusable'
+  | 'rate-limited'
+  | 'model-busy'
+  | 'out-of-credit'
+  | 'credential-rejected'
+  | 'policy-rejected'
+  | 'plan-gated'
+  | 'not-found'
+  | 'unavailable'
+  | 'failed'
+
+/**
+ * One account's row in the pool, as the card renders it.
+ *
+ * Ties together the three facts the card shows per account — credits, the last
+ * test, and whether it can serve right now — so the ranking the card displays
+ * comes from ONE Host answer rather than being re-derived in the browser. The
+ * browser re-deriving it is how a card ends up calling an excluded account "in
+ * use", which is the inconsistency this document exists to prevent.
+ */
+export interface TraeWebPoolAccount {
+  accountId: string
+  accountName: string
+  /** Total remaining credit, absent when this account's balance read failed. */
+  credits?: number
+  /**
+   * The GENERAL bucket — the credit this plugin's chat can actually spend.
+   *
+   * Trae-only, because a Trae balance is TWO buckets and SOLO chat only drains
+   * General (measured on the live `available_endpoint` split). A row whose total
+   * looks rich but whose General reads zero cannot serve a request, which is the
+   * same trap workbuddy hit with its expiry rule: a ranking keyed on a figure that
+   * the billing path cannot reach is not a ranking. The card shows both.
+   */
+  generalAvailable?: number
+  /** The WORK bucket, kept for display: this plugin's chat never spends it. */
+  workAvailable?: number
+  /** Credit lapsing inside 3 days. Zero means "measured, nothing at risk". */
+  expiringSoon?: number
+  /** When the nearest pack lapses, epoch ms. */
+  nearestExpiryMs?: number
+  /**
+   * The last test of this account, absent when never tested.
+   *
+   * `modelId` lives INSIDE the measurement rather than being assumed from the
+   * row's current setting: the setting can change after the test, and a result
+   * must keep naming what it actually measured.
+   */
+  probe?: {
+    outcome: TraeWebPoolOutcome
+    atMs: number
+    /**
+     * What wrote this measurement, so the card can explain a change the user
+     * watched happen: `test-batch` is a deliberate test, `live-request` is a real
+     * request that failed and overwrote it. ABSENT for records written before the
+     * field existed — the card must then say "unknown", not guess.
+     */
+    source?: 'test-batch' | 'live-request'
+    /** WHICH model this measurement is about; absent = unknown scope. */
+    modelId?: string
+    /** Only when the upstream named a time; never invented locally. */
+    retryAtMs?: number
+    /** Upstream's own words, already redacted. Absent on success. */
+    message?: string
+  }
+  /** Set when this account cannot serve right now. */
+  excludedBy?: TraeWebPoolExclusion
+  /**
+   * Whether this is the account billing traffic for this panel RIGHT NOW.
+   *
+   * The pool's runtime pick when enabled, else the saved selection. It is the
+   * HOST's answer, not the card's guess: a card that derived "in use" from the
+   * saved setting would contradict the pool after a rotation.
+   */
+  current: boolean
+  /**
+   * Whether the user checked this account into this panel's pool.
+   *
+   * Listed rows include UNCHECKED accounts so the card can offer them to check:
+   * membership is an explicit opt-in and a user can only opt in to something they
+   * can see. Only checked rows can bill or be batched.
+   */
+  member: boolean
+  /**
+   * Whether this machine still holds a usable sign-in for the account.
+   *
+   * `false` marks a GHOST: checked or listed, but no local credential resolves, so
+   * a batch can neither test it nor check it in. It is kept as a row (rather than
+   * filtered out) because the only way to stop carrying a broken entry is to see
+   * it and remove it — a filtered row would leave the saved list permanently dirty
+   * with nothing on screen to explain why the pool runs on fewer accounts than the
+   * checkbox count says.
+   */
+  reachable?: boolean
+  /**
+   * Today's check-in state for this account.
+   *
+   * ABSENT means it was not read — the card must then say so rather than render a
+   * definite "not checked in", which would contradict a claim the user just
+   * watched succeed.
+   */
+  checkedInToday?: boolean
+  /**
+   * Whether today's check-in is spent on this MACHINE for this account.
+   *
+   * Trae-only, because Trae keys the daily claim to `x-device-id` (code `9095`).
+   * `checkedInToday === false` together with this true is the "switched account"
+   * case the check-in card already documents: this device has no claim left.
+   */
+  deviceCheckedIn?: boolean
+}
+
+/**
+ * The pool's state for one panel.
+ *
+ * `targetModelId`/`targetModelSource` exist so the card can state WHICH model a
+ * test would use and WHERE that choice came from. `none` is a real, common
+ * answer for Trae — the CN static fallback catalog carries no `creditMultiplier`
+ * at all until its first live refresh, and "missing multiplier ≠ free" means the
+ * card must render "no free model" rather than silently substituting a paid one.
+ */
+export interface TraeWebPool {
+  enabled: boolean
+  /**
+   * Whether this panel offers the daily check-in at all.
+   *
+   * Only `cn` does. The ai gateways answer 404 for the whole `/trae/api/v2/ug/*`
+   * family (probed 2026-09-24) and the enterprise panel has no personal reward,
+   * so the card hides the action entirely rather than rendering a button whose
+   * only outcome is a refusal.
+   */
+  checkinSupported: boolean
+  /** The model a test would use right now; absent when none can be resolved. */
+  targetModelId?: string
+  /**
+   * Where the target came from. `'stale'` means the SAVED id is no longer in the
+   * catalog — a distinct state from `'none'` (no free model exists), because the
+   * two need opposite advice (offer a way back to automatic / say there is no
+   * free model at all).
+   */
+  targetModelSource: 'preferred' | 'free' | 'none' | 'stale'
+  /** The saved target id that this panel's catalog no longer offers. */
+  staleTargetModelId?: string
+  /** The account ids the user has checked into this panel's pool. */
+  memberAccountIds?: readonly string[]
+  /**
+   * The subset of {@link TraeWebPool.memberAccountIds} that resolves to a real
+   * local credential — i.e. what a batch actually runs on.
+   *
+   * Sent so the card never re-derives it. Counting the raw saved list is what
+   * lets a UI claim "1 of 1 selected" and enable both buttons while the Host ran
+   * on ZERO accounts and reported success.
+   */
+  effectiveMemberAccountIds?: readonly string[]
+  /**
+   * Last measured display name per saved member id, including members that have
+   * since stopped resolving.
+   *
+   * A member whose sign-in disappeared would otherwise be listed as a bare id
+   * and an unexplained count, and the user could not tell WHICH one they unchecked.
+   */
+  memberNames?: Record<string, string>
+  /** Rows in the Host's ranking order: candidates first, excluded rows last. */
+  accounts: readonly TraeWebPoolAccount[]
+  /**
+   * Why the pool could not pick anybody, when it could not.
+   *
+   * Set when every member is excluded, so the card can explain that traffic is
+   * going to the saved selection rather than leaving the user to assume the pool
+   * is serving the top row.
+   */
+  noCandidate?: TraeWebPoolExclusion | 'empty'
+}
+
+/**
+ * One check-in row of the pool batch answer, as the card sees it.
+ *
+ * The same fields the Host's batch runner produces (`TraePoolCheckinRow`),
+ * restated here because this module is the node-free bridge and the browser must
+ * not import the Host module. `message` crosses only after redaction.
+ */
+export interface TraePoolCheckinRowView {
+  accountId: string
+  accountName: string
+  status: 'claimed' | 'already' | 'device-already' | 'disabled' | 'failed'
+  credit?: number
+  message?: string
+}
+
+/**
+ * One test row of the pool batch answer, as the card sees it.
+ *
+ * `outcome` is the POOL vocabulary (see {@link TraeWebPoolOutcome}), not the
+ * model-probe verdict the batch runner returns: the card must not have to know
+ * that `gated` and `1005` are the same event, and translating here is what keeps
+ * the pool table and the automatic routing reading one outcome set.
+ */
+export interface TraePoolTestRowView {
+  accountId: string
+  accountName: string
+  modelId: string
+  outcome: TraeWebPoolOutcome
+  detail: string
+  retryAtMs?: number
+}
+
+/** The answer to `?action=remove`: whether the measurement left the store. */
+export interface TraeWebPoolRemoveAnswer {
+  accountId: string
+  removed: boolean
+}
+
+/**
+ * The pool's saved preferences for one panel, as stored in `regions[panel].pool`.
+ *
+ * Declared in the node-free bridge because BOTH halves touch it: the Host reads
+ * it to decide membership and ranking, the card drafts and saves it. Keeping one
+ * declaration is what stops the card from writing a field the Host ignores (or
+ * vice versa) — the failure workbuddy hit when its client and Host each had a
+ * private copy of this shape.
+ *
+ * Every field is optional because this is a user-edited draft: a partially filled
+ * slot must still load, and a missing `enabled` means OFF rather than ON.
+ */
+export interface TraePoolPreferences {
+  /** Whether this panel bills through the pool at all. Default OFF. */
+  enabled?: boolean
+  /**
+   * The model a test batch probes. Absent or `''` means "automatic": pick the
+   * free model (see `pickFreeModel` in `./account-pool.ts`). An id this panel no
+   * longer offers is PRESERVED so the user's choice survives a catalog blip, and
+   * reported as `stale` rather than silently replaced.
+   */
+  targetModelId?: string
+  /**
+   * The accounts the user checked into this panel's pool, in the order they were
+   * checked.
+   *
+   * Explicit opt-in with NO default: an account never joins the pool because it
+   * exists. Order is only a display hint — the ranking is the Host's.
+   *
+   * A MUTABLE array, not `readonly`: this interface is also the shape the
+   * settings schema declares (`z.array(z.string())`), and the schema rebuilds the
+   * config document on every save — a readonly type there is a compile-time
+   * mismatch that would take the whole Config schema down. Readers still treat it
+   * as immutable; only the owner of a draft copies it.
+   */
+  memberAccountIds?: string[]
+}
+
+/**
  * Plugin-owned account transfer endpoint: batch export and import of a region's
  * stored credentials (issue #37).
  *
@@ -129,6 +484,17 @@ export interface TraeWebCreditAccount {
    * so a consumer can tell "no date" apart from "1970".
    */
   expiresAtMs?: number
+  /**
+   * Raw upstream `available_endpoint`: which bucket this pack lives in.
+   *
+   * Measured on the live response — `0` is the GENERAL bucket that SOLO chat
+   * actually spends, `1` is the WORK bucket it cannot reach. The projection
+   * dropped this field until the account pool needed it: the pool ranks accounts
+   * by what they can SERVE, and credit lapsing in the WORK bucket is not a
+   * reason to bill that account first, because nothing here can ever spend it.
+   * Absent, not guessed, when the upstream omits it.
+   */
+  endpoint?: number
 }
 
 /** Credit lapsing inside one horizon, as the card reports it. */
@@ -664,6 +1030,53 @@ export function nextRegionCreditPosition(
   return nextRegionSlots(regionsMapOf(value), panel, { ...regionSlotOf(value, panel), creditPosition: position })
 }
 
+/**
+ * One panel's saved pool PREFERENCES, as the card's settings block edits them.
+ *
+ * Read from the settings document rather than from the usage answer for the same
+ * reason `regionCreditPositionOf` is: the card must paint its controls correctly
+ * on the FIRST frame, before any fetch lands, and a control that starts on a
+ * default and jumps when data arrives is the "looks like it did nothing" defect.
+ *
+ * Absent reads as `{}` — every field of {@link TraePoolPreferences} is optional
+ * by design, and a profile written by an older build has no `pool` slot at all.
+ * The caller applies the defaults it means (OFF, automatic model, no members);
+ * this function never invents them, because `targetModelId: ''` and
+ * `targetModelId: undefined` mean the same thing and only the CALLER may decide
+ * to collapse them.
+ *
+ * `value` may be the whole settings section or the `regions` map (see
+ * {@link regionsMapOf}).
+ */
+export function regionPoolOf(value: unknown, panel: TraePanel): TraePoolPreferences {
+  const unwrapped = unwrapVolatileDeep(regionSlotOf(value, panel)['pool'])
+  return typeof unwrapped === 'object' && unwrapped !== null && !Array.isArray(unwrapped)
+    ? unwrapped as TraePoolPreferences
+    : {}
+}
+
+/**
+ * Build the next `regions` settings value for one panel's pool preferences.
+ *
+ * Same merge rule as every sibling region write: only the addressed panel's
+ * `pool` slot changes, so saving the pool cannot drop that slot's model
+ * directory, selection, budgets, enabled flag or credit seat, and cannot touch
+ * the other panels. Panels are independent even where they share credentials
+ * (`cn` and `enterprise` bill the same Trae CN account): membership is a choice
+ * per panel, not per credential.
+ *
+ * `value` may be the whole settings section or the `regions` map; the RETURN
+ * value is always the `regions` map, i.e. exactly what `settingsScope.set(
+ * 'regions', ...)` needs.
+ */
+export function nextRegionPool(
+  value: unknown,
+  panel: TraePanel,
+  pool: TraePoolPreferences,
+): Record<string, unknown> {
+  return nextRegionSlots(regionsMapOf(value), panel, { ...regionSlotOf(value, panel), pool })
+}
+
 /** Subscription status of an international (ai) account, rendered instead of the CN credit packs. */
 export interface TraeWebPayStatus {
   isDollarUsageBilling: boolean
@@ -769,5 +1182,14 @@ export type TraeWebUsage =
     /** Subscription status of an international account (region ai only). */
     payStatus?: TraeWebPayStatus
     payStatusError?: string
+    /**
+     * This panel's account-pool state, when the Host build supports it.
+     *
+     * Absent on a Host without pool support, so the card renders no pool section
+     * instead of an empty one. Assembled LAST in the status document and never
+     * allowed to fail it: the pool reads per-account credit, and one dead account
+     * must not blank out the panel the user is looking at.
+     */
+    pool?: TraeWebPool
   }
   | { status: 'error'; message: string }

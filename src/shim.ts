@@ -23,6 +23,45 @@ export interface TraeShimRoute {
   /** Stable label used to look the route's secret up (`solo` | `enterprise`). */
   label: string
   client: TraeUpstreamClient
+  /**
+   * Account-pool hooks for this route (issue #44). Absent means "one fixed
+   * account, no rotation and no failover" — the behaviour before the pool
+   * existed, and still the behaviour when the pool is switched off.
+   */
+  pool?: TraeShimPool
+}
+
+/**
+ * What an account pool tells the shim around one chat attempt.
+ *
+ * The shim owns the HTTP surface and the pool owns "who bills", so the two meet
+ * here: the pool may re-point the next request, hand back a client for a
+ * different account after a failure, and hear about failures that only a real
+ * request — not a probe — can produce.
+ *
+ * Every method must resolve rather than throw: a pool failure must never turn a
+ * chat request into a 500 when a plain answer was possible.
+ */
+export interface TraeShimPool {
+  /**
+   * Choose the account for this request and report which one it is. Called once,
+   * before the first attempt; `undefined` means "the pool chose nobody", which
+   * leaves the route's own client to bill the bound account.
+   */
+  prepare(): Promise<string | undefined>
+  /**
+   * The client for the next account worth trying after the current one failed,
+   * or `undefined` when the pool has nothing left to try.
+   *
+   * The returned client must be bound to that account's OWN credential:
+   * failing over is not a rebind, so it must not move the account the user
+   * selected (the same rule per-account probes already follow).
+   */
+  next(tried: readonly string[]): Promise<{ accountId: string; client: TraeUpstreamClient } | undefined>
+  /** Record a real request's failure against the account that hit it. */
+  failed(accountId: string, kind: TraeUpstreamErrorKind, message: string): Promise<void>
+  /** One clause naming why no other account can serve, for the error text. */
+  shortfall(tried: readonly string[]): Promise<string | undefined>
 }
 
 export interface TraeShimOptions {
@@ -52,6 +91,26 @@ const STATUS_BY_KIND: Readonly<Record<TraeUpstreamErrorKind, number>> = {
   client: 400,
   unconfigured: 503,
 }
+
+/**
+ * Failures that say something about the ACCOUNT and are therefore worth another
+ * account: a rejected token, a drained quota, a rate limit, a 5xx.
+ *
+ * `not_found`, `client` and `unconfigured` are deliberately absent — they say
+ * something about the request or this build, and replaying them on a second
+ * account would burn the same error twice while teaching the pool a false fact
+ * about an account that never got a chance to serve.
+ */
+const FAILOVER_KINDS: ReadonlySet<TraeUpstreamErrorKind> = new Set(['authentication', 'hard_credit', 'soft_rate', 'server'])
+
+/**
+ * Accounts one request may try.
+ *
+ * Not "all of them": every attempt costs a round-trip before the user sees a
+ * byte, and a pool whose every member is down must fail with a reason instead of
+ * turning one request into a slow tour of the roster.
+ */
+const MAX_POOL_ATTEMPTS = 3
 
 function hostnameOfHost(host: string): string {
   let hostname = host.trim().toLowerCase()
@@ -141,6 +200,53 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
     return undefined
   }
 
+  /**
+   * Run one chat request, failing over across pooled accounts when the account
+   * that was chosen cannot serve it (issue #44).
+   *
+   * The happy path makes exactly one upstream call, so a pool that is switched
+   * off — or on, with the first choice healthy — costs nothing but one cheap
+   * ranking lookup. A failure is reported to the pool BEFORE the decision to
+   * retry, because a rate limit the pool never hears about is a rate limit it
+   * will walk straight back into on the next request.
+   */
+  async function chatWithFailover(
+    route: TraeShimRoute & { secret: string },
+    raw: string,
+    signal: AbortSignal,
+  ): Promise<
+    | { kind: 'stream'; response: Response }
+    | { kind: 'failed'; status: number; code: string; message: string }
+  > {
+    const pool = route.pool
+    let client: TraeUpstreamClient = route.client
+    let accountId = pool === undefined ? undefined : await pool.prepare().catch(() => undefined)
+    const tried: string[] = []
+    for (let attempt = 0; ; attempt += 1) {
+      const result = await client.chatStream(raw, signal)
+      if (result.ok) return { kind: 'stream', response: result.response }
+      const retryable = pool !== undefined && !signal.aborted && FAILOVER_KINDS.has(result.kind)
+      // Only account-scoped failures are recorded: a bad model id is not evidence
+      // that the account cannot serve, and writing it would exclude the account
+      // from the pool permanently over one typo.
+      if (retryable && accountId !== undefined) await pool.failed(accountId, result.kind, result.message).catch(() => {})
+      const failed = { kind: 'failed' as const, status: STATUS_BY_KIND[result.kind], code: result.kind, message: result.message }
+      if (!retryable) return failed
+      if (accountId !== undefined) tried.push(accountId)
+      // A spent attempt budget and an empty pool end the request the same way, so
+      // the pool is asked once, at the end, whether it can explain the shortfall
+      // (`undefined` when it has nothing to add — e.g. accounts remain, this
+      // request simply ran out of tries).
+      const next = attempt + 1 >= MAX_POOL_ATTEMPTS ? undefined : await pool.next(tried).catch(() => undefined)
+      if (next === undefined) {
+        const reason = await pool.shortfall(tried).catch(() => undefined)
+        return reason === undefined ? failed : { ...failed, message: `${failed.message} (${reason})` }
+      }
+      client = next.client
+      accountId = next.accountId
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!hostIsLoopback(req.headers.host)) return writeError(res, 403, 'host_not_allowed', 'Host must be loopback')
@@ -177,8 +283,8 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
         const abort = (): void => controller.abort()
         req.once('aborted', abort)
         req.socket.once('close', abort)
-        const result = await route.client.chatStream(raw, controller.signal)
-        if (!result.ok) return writeError(res, STATUS_BY_KIND[result.kind], result.kind, result.message)
+        const result = await chatWithFailover(route, raw, controller.signal)
+        if (result.kind === 'failed') return writeError(res, result.status, result.code, result.message)
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',

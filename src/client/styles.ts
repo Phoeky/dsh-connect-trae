@@ -340,6 +340,120 @@ export const TRAE_CARD_CSS = `
 @keyframes dsm-trae-veil-spin{to{transform:rotate(360deg)}}
 @keyframes dsm-trae-veil-dash{0%{stroke-dasharray:12 150;stroke-dashoffset:0}50%{stroke-dasharray:24 150;stroke-dashoffset:-6}to{stroke-dasharray:12 150;stroke-dashoffset:0}}
 @media (prefers-reduced-motion: reduce){.dsm-trae-veil-spinner{animation:none}.dsm-trae-veil-spinner-arc{animation:none;stroke-dasharray:18 150;stroke-dashoffset:-3}}
+
+/* ------------------------------------------------------------------ *
+ * The account pool (3.9.0).                                           *
+ *                                                                     *
+ * Five tracks, because the table answers "which accounts, and what is  *
+ * each one worth right now" — a single picker could only ever show the *
+ * one already chosen, and every field here is a reason to include or   *
+ * exclude a row. The check-in track is CONDITIONAL (only the CN panel  *
+ * grants a daily reward), so the actions cell is pinned to the LAST    *
+ * track (grid-column:-2/-1) rather than to the fifth one: otherwise     *
+ * a four-cell row would drop Test/Remove into the check-in slot and    *
+ * leave a hole on the right.                                          *
+ * ------------------------------------------------------------------ */
+.dsm-trae-pool{display:flex;flex-direction:column;gap:12px;margin-top:4px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:14px;background:var(--dsw-alias-bg-layer-2,#24262c)}
+.dsm-trae-pool-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dsm-trae-pool-title{margin:0;font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pool-region-note{margin:3px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-current{flex:none;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#c6c9d0);white-space:nowrap}
+.dsm-trae-pool-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.dsm-trae-pool-action-checkin{flex:none;white-space:nowrap}
+.dsm-trae-pool-action-test{flex:none;white-space:nowrap}
+/* Removing an account from the pool is destructive (it drops THIS panel's saved
+   membership), so the hover state takes the error tone rather than the neutral
+   one every other outline button gets. */
+.dsm-trae-pool-remove{color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
+.dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-members{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24));border-radius:12px}
+.dsm-trae-pool-settings{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24));border-radius:12px}
+.dsm-trae-pool-members-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dsm-trae-pool-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dsm-trae-pool-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pool-subnote{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-select-actions{display:flex;flex:none;gap:6px}
+.dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-settings-save .dsm-btn{padding:2px 10px;font-size:12px}
+.dsm-trae-pool-table{display:flex;flex-direction:column;gap:2px}
+.dsm-trae-pool-row{display:grid;grid-template-columns:minmax(0,1.5fr) 74px minmax(0,1.3fr) 104px 132px;align-items:start;gap:10px;padding:7px 6px;border-radius:8px}
+.dsm-trae-pool-row+.dsm-trae-pool-row{border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}
+/* The header carries labels for the first three tracks only: the check-in and
+   action cells are self-describing ("Not checked in", "Test"), and a header word
+   for an empty cell would be a promise the table does not keep. */
+.dsm-trae-pool-row-head{padding-bottom:4px;border-top:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+/* The row that would bill the next request. Tinted, not bordered: a border here
+   reads as a selection control, and the checkbox beside it already is one. */
+.dsm-trae-pool-row-current{background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-row-ghost{opacity:.7}
+.dsm-trae-pool-row-actions{grid-column:-2/-1;display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.dsm-trae-pool-account{display:flex;flex-direction:column;gap:4px;min-width:0}
+.dsm-trae-pool-check{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer}
+.dsm-trae-pool-check input{flex:none;margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-pool-check:has(input:disabled){opacity:.6;cursor:default}
+.dsm-trae-pool-account-name{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-trae-pool-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed,#777)}
+.dsm-trae-pool-dot-ok{background:var(--dsw-alias-state-success-primary,#12b76a)}
+.dsm-trae-pool-dot-excluded{background:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-dot-ghost{background:var(--dsw-alias-label-dimmed,#777)}
+.dsm-trae-pool-account-tags{display:flex;flex-wrap:wrap;gap:4px}
+.dsm-trae-pool-tag{padding:0 6px;border-radius:999px;font-size:10px;line-height:16px;white-space:nowrap}
+.dsm-trae-pool-tag-current{background:var(--dsw-alias-brand-primary,#5686fe);color:var(--dsw-alias-bg-layer-3,#202126)}
+.dsm-trae-pool-tag-member{border:1px solid var(--dsw-alias-border-l2,#3a3d45);color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-tag-excluded{background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-tag-ghost{border:1px dashed var(--dsw-alias-border-l2,#3a3d45);color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-credit{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dsm-trae-pool-credit-num{font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6);font-variant-numeric:tabular-nums}
+.dsm-trae-pool-credit-label{font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-probe{min-width:0}
+.dsm-trae-pool-probe-cell{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dsm-trae-pool-probe-outcome{display:flex;align-items:center;gap:5px;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-pool-probe-ok{color:var(--dsw-alias-state-success-primary,#12b76a)}
+.dsm-trae-pool-probe-warn{color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-probe-meta{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-trae-pool-probe-detail{font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary,#9aa0a8);overflow-wrap:anywhere}
+.dsm-trae-pool-probe-none{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-checkin{min-width:0}
+.dsm-trae-pool-checkin-state{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-checkin-ok{color:var(--dsw-alias-state-success-primary,#12b76a)}
+.dsm-trae-pool-checkin-no{color:var(--dsw-alias-state-warn-primary,#b45309)}
+/* "Unknown" and "device already claimed" are facts, not faults: a muted line
+   says so without dressing either one up as an error. */
+.dsm-trae-pool-checkin-unknown{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-checkin-device{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+/* The advisory lines share one shape (a quiet bordered box): each is a fact the
+   user may need to act on, none of them is an error, and five different
+   rectangles in one section would read as five different severities. */
+.dsm-trae-pool-ghost-note{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-unsaved{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-off-notice{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-target-none{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
+.dsm-trae-pool-target-stale{display:flex;align-items:center;justify-content:space-between;gap:10px;border-color:var(--dsw-alias-state-warn-secondary,#fbbf24)}
+.dsm-trae-pool-warning{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--dsw-alias-state-warn-secondary,#fbbf24);border-radius:10px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:12px;line-height:18px}
+.dsm-trae-pool-warning-title{font-weight:600}
+.dsm-trae-pool-warning-hint{opacity:.85}
+/* "Empty" is an unfinished setup, not a fault: neutral tone. */
+.dsm-trae-pool-warning-empty{border-color:var(--dsw-alias-border-l2,#3a3d45);background:var(--dsw-alias-bg-layer-3,#2a2c33);color:var(--dsw-alias-label-secondary,#c6c9d0)}
+/* "Every member is unusable" is the one case that IS the pool's fault, so it
+   keeps the warn tone the base class sets. */
+.dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-settings-save{display:flex;align-items:center;gap:8px}
+.dsm-trae-pool-dirty{padding:0 6px;border-radius:999px;background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:10px;line-height:16px}
+.dsm-trae-pool-save-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary,#d92d20)}
+.dsm-trae-pool-target{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-pool-target-label{color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-select{max-width:220px;padding:2px 6px;font:inherit;font-size:12px;color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-3,#2a2c33);border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:8px}
+.dsm-trae-select:disabled{opacity:.6;cursor:default}
+.dsm-trae-pool-log{display:flex;flex-direction:column;gap:6px;padding-top:2px}
+.dsm-trae-pool-log-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dsm-trae-pool-log-empty{margin:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pool-log-list{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;list-style:none;max-height:160px;overflow-y:auto}
+.dsm-trae-pool-log-item{padding:0 0 0 8px;border-left:2px solid var(--dsw-alias-border-l2,#3a3d45);font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+.dsm-trae-pool-log-info{border-left-color:var(--dsw-alias-border-l2,#3a3d45)}
+.dsm-trae-pool-log-ok{border-left-color:var(--dsw-alias-state-success-primary,#12b76a)}
+.dsm-trae-pool-log-warn{border-left-color:var(--dsw-alias-state-warn-primary,#b45309)}
+.dsm-trae-pool-log-error{border-left-color:var(--dsw-alias-state-error-primary,#d92d20)}
+.dsm-trae-pool-log-text{overflow-wrap:anywhere}
 `
 
 

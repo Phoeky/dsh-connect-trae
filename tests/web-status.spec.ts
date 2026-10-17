@@ -122,8 +122,11 @@ describe('traeWebUsage', () => {
       workAvailable: 0,
       generalAvailable: 20.3712,
       accounts: [
-        { displayDesc: '老用户福利', remain: 0, size: 2000, expiresAtMs: 1788340660000 },
-        { displayDesc: '签到奖励', remain: 20.3712, size: 200, expiresAtMs: 1789837484000 },
+        // `endpoint` is the pack's bucket (0 = General, what SOLO chat spends;
+        // 1 = Work, unreachable from here). Carried through so the account pool
+        // can rank by spendable credit instead of a total it cannot drain.
+        { displayDesc: '老用户福利', remain: 0, size: 2000, expiresAtMs: 1788340660000, endpoint: 1 },
+        { displayDesc: '签到奖励', remain: 20.3712, size: 200, expiresAtMs: 1789837484000, endpoint: 0 },
       ],
       // Both packs in this fixture lapsed before the assertion runs, and one of
       // them still carries 20.3712 credit — exactly the case the notice exists

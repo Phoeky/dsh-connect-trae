@@ -237,6 +237,24 @@ export function traeAccountId(credential: Pick<TraeCredential, 'edition' | 'user
   return createHash('sha256').update(stable).digest('hex').slice(0, 24)
 }
 
+/**
+ * The exact shape of an account id — sha256 hex sliced to 24 characters, which is
+ * what {@link traeAccountId} emits and therefore the only string a request may
+ * legitimately name.
+ *
+ * This regex is a traversal guard as much as a validator: an id becomes part of a
+ * path (`$DSH_HOME/.trae-pool.<panel>.json` uses it as a key, and a credential
+ * lookup receives it), so `../../etc/passwd` has to fail here rather than fail
+ * somewhere closer to the filesystem. Exported so an HTTP route can answer a bad
+ * id with 400 instead of letting an exception surface as a 500.
+ */
+export const TRAE_ACCOUNT_ID_RE = /^[0-9a-f]{24}$/
+
+/** Whether a request-supplied value is a well-formed Trae account id. */
+export function isTraeAccountId(value: unknown): value is string {
+  return typeof value === 'string' && TRAE_ACCOUNT_ID_RE.test(value)
+}
+
 /** One stored credential, validated. Returns undefined for a malformed row. */
 function credentialOfStored(stored: unknown): TraeCredential | undefined {
   if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return undefined
@@ -305,6 +323,17 @@ export class TraeCredentialStore {
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
   private inflight: Promise<TraeCredential> | undefined
+  /**
+   * The account the NEXT request should bill, when a pool — not the user's
+   * binding — is choosing (issue #44).
+   *
+   * Runtime only, never persisted: the binding in settings is what a save
+   * writes and what the card's account table reports as selected, while this is
+   * "who serves right now". Keeping them apart is what lets the pool rotate
+   * without silently rewriting the user's choice, and what makes turning the
+   * pool off restore the bound account with no rebind at all.
+   */
+  private rotatedAccountId: string | undefined
 
   constructor(options: TraeCredentialStoreOptions) {
     this.storagePathOverride = options.storagePath
@@ -546,9 +575,60 @@ export class TraeCredentialStore {
     return selected
   }
 
+  /**
+   * Point this store at one specific account for the NEXT request, without
+   * touching the user's saved binding (issue #44).
+   *
+   * Called by the account pool before each chat request. `undefined` clears the
+   * override, which is how switching the pool off immediately restores the
+   * binding — no rebind, no settings write, nothing to undo.
+   *
+   * A rotation is a REQUEST, not an assertion: `current()` honours it only when
+   * the account still exists locally and this store's own eligibility rules
+   * allow it, and otherwise falls back to the binding. So a rotation can never
+   * invent a credential that {@link current} would refuse.
+   */
+  setRotatedAccount(accountId: string | undefined): void {
+    if (this.rotatedAccountId === accountId) return
+    this.rotatedAccountId = accountId
+    // A pending refresh belongs to the account that was being resolved when it
+    // started. Serving it to a different account would hand out the wrong token,
+    // so a rotation starts clean.
+    this.inflight = undefined
+  }
+
+  /** The rotation currently in effect, for diagnostics and the pool's own card. */
+  rotatedAccount(): string | undefined {
+    return this.rotatedAccountId
+  }
+
+  /**
+   * The credential a rotation points at, or `undefined` when it cannot be
+   * honoured (the login was removed from this machine, or a tenant-scoped store
+   * refuses a personal account).
+   *
+   * Never substitutes a different account here: the caller then applies the
+   * user's binding, which is the honest answer when the pool's choice is gone.
+   */
+  private rotated(discovered: readonly TraeCredential[], offered: readonly TraeCredential[]): TraeCredential | undefined {
+    const id = this.rotatedAccountId
+    if (id === undefined) return undefined
+    // The OFFERED list first, because that is the roster the pool enumerated; the
+    // discovered list still honours an explicit id the display filter hides, the
+    // same way a binding does.
+    const credential = offered.find(item => traeAccountId(item) === id)
+      ?? discovered.find(item => traeAccountId(item) === id)
+    if (credential === undefined) return undefined
+    if (this.requireTenant && !isEnterpriseAccount(credential)) return undefined
+    return credential
+  }
+
   async current(): Promise<TraeCredential | undefined> {
     const discovered = await this.readAll()
-    return this.inUse(discovered, this.offered(discovered))
+    const offered = this.offered(discovered)
+    const rotated = this.rotated(discovered, offered)
+    if (rotated !== undefined) return rotated
+    return this.inUse(discovered, offered)
   }
 
   /**

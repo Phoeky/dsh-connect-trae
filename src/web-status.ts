@@ -12,30 +12,38 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { TraeCredentialStore } from './auth.ts'
+import { isTraeAccountId, type TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { regionOfPanel, type TraePanel, type TraeRegion } from './region.ts'
+import { effectiveMembersOf, outcomeOfVerdict, resolveTargetModel, rankPool, type TraePoolAccount, type TraePoolMember } from './account-pool.ts'
+import type { TraePoolCheckinRow, TraePoolTestRow } from './account-pool-run.ts'
 import {
   regionOfTraeStatusUrl,
+  poolAccountIdOf,
+  poolActionOf,
   TRAE_ACCOUNT_CREDITS_PATH,
   TRAE_ACCOUNT_STATUS_PATH,
   TRAE_ACCOUNTS_REFRESH_PATH,
   TRAE_CHECKIN_PATH,
   TRAE_MODELS_REFRESH_PATH,
   TRAE_MODELS_TEST_PATH,
+  TRAE_POOL_ACTION_PARAM,
+  TRAE_POOL_ACCOUNT_PARAM,
+  TRAE_POOL_PATH,
+  TRAE_REGION_PARAM,
   TRAE_TRANSFER_PATH,
   TRAE_USAGE_PATH,
   transferActionOf,
 } from './status-paths.ts'
 import { mergeTransferRecords, parseTransferFile, previewTransferFile, traeTransferRecordOf } from './transfer.ts'
 import type { TraeTransferRecord } from './transfer.ts'
-import type { TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCreditExpiry, TraeWebCredits, TraeWebExpiringCredits, TraeWebUsage, TraeWebPayStatus } from './status-paths.ts'
+import type { TraePoolPreferences, TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCreditExpiry, TraeWebCredits, TraeWebExpiringCredits, TraeWebPool, TraeWebPoolAccount, TraeWebPoolOutcome, TraeWebUsage, TraeWebPayStatus, TraePoolCheckinRowView, TraePoolTestRowView } from './status-paths.ts'
 import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 
 export { TRAE_USAGE_PATH, TRAE_ACCOUNT_CREDITS_PATH } from './status-paths.ts'
-export type { TraeWebUsage } from './status-paths.ts'
+export type { TraeWebUsage, TraeWebPool } from './status-paths.ts'
 
 /**
  * The upstream's business code for "该设备今日已参与签到" — this DEVICE already
@@ -105,6 +113,75 @@ export interface TraeUsageRouteOptions {
   probeModels?(panel: TraePanel, ids: readonly string[]): Promise<{ results: { id: string; verdict: string; detail: string }[]; skipped?: string[] }>
   /** Raw-Chat capability state of the requested panel. */
   rawDiagnostic?(panel: TraePanel): TraeRawDiagnostic
+  /**
+   * The account pool's host side, when the panel can run one. Optional on
+   * purpose: the pool is an add-on to the status document, and a harness without
+   * it (a test host, or a panel stack that failed to build) must still get a
+   * complete usage answer with no `pool` field.
+   */
+  pool?: TraePoolDeps
+}
+
+/**
+ * What the pool surface needs from the Host, addressed by panel.
+ *
+ * The split is deliberate. The card never learns a credential and never writes a
+ * measurement: it sends an ACTION (`checkin` / `test` / `remove`) and reads the
+ * ranking back out of the status document. Everything here is therefore either a
+ * cheap local read (preferences, roster, saved names) or an explicitly user-
+ * triggered spend (the batches). The one thing that must never happen on a GET is
+ * an upstream call made for every row on every poll — the card already lazy-loads
+ * per-account state, so `checkedInToday` is cached and skippable by design.
+ */
+export interface TraePoolDeps {
+  /** The panel's saved pool preferences, read from live settings. */
+  preferences(panel: TraePanel): TraePoolPreferences
+  /**
+   * The full pool membership WITH live credit reads — the expensive version.
+   * Only the status document's own assembly and an explicit batch call it.
+   */
+  members(panel: TraePanel): Promise<readonly TraePoolMember[]>
+  /**
+   * The checked ids that still resolve to a local sign-in, from a local scan only.
+   * The batch route's empty-pool guard runs this on every request, so it must not
+   * cost an upstream call — {@link members} is not suitable there.
+   */
+  effectiveMemberAccountIds?(panel: TraePanel): Promise<readonly string[]>
+  /** Last measured display name per saved id, for members whose sign-in is gone. */
+  memberNames?(panel: TraePanel): Promise<Record<string, string>>
+  /** Local sign-ins the pool does NOT cover, so the card can offer them to check. */
+  otherAccounts?(panel: TraePanel): Promise<readonly TraePoolAccount[]>
+  /** Which account the request path would bill right now, after applying the pool. */
+  currentAccountId?(panel: TraePanel): Promise<string | undefined>
+  /** Whether this panel's upstream rewards a daily check-in at all. */
+  checkinSupported?(panel: TraePanel): boolean
+  /**
+   * Today's check-in state per account, from the cached per-account reads.
+   *
+   * A missing entry means "not read", which the card renders as unknown rather
+   * than as a definite "not checked in". `deviceCheckedIn` is the Trae half of the
+   * pair: the daily claim is keyed to `x-device-id`, so an account can be unpaid
+   * TODAY because this machine already spent its claim on another account.
+   */
+  checkinState?(panel: TraePanel): Promise<Record<string, TraePoolCheckinState>>
+  /** Run the check-in batch. Persists nothing to settings; drops its own caches. */
+  checkin?(panel: TraePanel): Promise<readonly TraePoolCheckinRow[]>
+  /** Run the model-availability batch and persist its measurements. */
+  test?(panel: TraePanel, modelId: string, onRow?: (row: TraePoolTestRow) => void): Promise<readonly TraePoolTestRow[]>
+  /** Probe ONE account against the target model (the row's own test button). */
+  testOne?(panel: TraePanel, accountId: string): Promise<TraePoolTestRow | undefined>
+  /** Forget an account's measurement — used when the user removes it from the pool. */
+  removeOne?(panel: TraePanel, accountId: string): Promise<boolean>
+  /** The panel's catalog, the source of the free-model default and the stale check. */
+  catalog?(panel: TraePanel): readonly TraeModelInfo[]
+}
+
+/** One row's cached check-in facts; see {@link TraePoolDeps.checkinState}. */
+export interface TraePoolCheckinState {
+  checkedIn: boolean
+  deviceCheckedIn?: boolean
+  /** Whether this account is offered the reward at all; false renders `disabled`. */
+  enabled?: boolean
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -265,6 +342,10 @@ export function toCredits(snapshot: { summary: { totalAmount: number; consumedAm
     // not a new read. Omitted rather than zeroed when there is no usable time:
     // a `0` here would read as 1970 and sort ahead of every real date.
     ...(usableExpiry(pack.endTimeMs) ? { expiresAtMs: pack.endTimeMs } : {}),
+    // Which bucket this pack lives in, verbatim from upstream. The pool ranking
+    // needs it to tell spendable credit from credit that only the Work surface
+    // can reach; see {@link TraeWebCreditAccount.endpoint}.
+    ...(pack.availableEndpoint === undefined ? {} : { endpoint: pack.availableEndpoint }),
   }))
   // `usage.credits_amount` is consumed credit, not remaining balance. Derive
   // each bucket's balance from its quota, matching total - consumed upstream.
@@ -461,6 +542,10 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
     enabledModelIds: [...deps.enabledModelIds(panel)],
     ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(panel) },
   }
+  // The pool is assembled LAST and never allowed to fail this document: it is
+  // the one section whose own reads touch every member account, and a member
+  // with a broken balance must not take the sign-in panel down with it.
+  const poolSection = await poolSectionOf(deps, panel)
   const client = deps.client(panel)
   if (regionOfPanel(panel) === 'ai') {
     // The international panel is subscription-based: read its pay status
@@ -468,9 +553,9 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
     // payStatusError, exactly like creditsError on the CN side.
     try {
       const payStatus = await client.payStatus()
-      return { status: 'signed-in', ...account, payStatus }
+      return { status: 'signed-in', ...account, ...poolSection, payStatus }
     } catch (error: unknown) {
-      return { status: 'signed-in', ...account, payStatusError: safeMessage(error) }
+      return { status: 'signed-in', ...account, ...poolSection, payStatusError: safeMessage(error) }
     }
   }
   /**
@@ -488,6 +573,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
     return {
       status: 'signed-in',
       ...account,
+      ...poolSection,
       creditsUnavailable: 'enterprise',
     }
   }
@@ -507,6 +593,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
   return {
     status: 'signed-in',
     ...account,
+    ...poolSection,
     ...credits === undefined
       ? { creditsError: snapshotResult.status === 'rejected' ? safeMessage(snapshotResult.reason) : 'unknown' }
       : { credits },
@@ -556,6 +643,204 @@ async function creditAlternatives(
   }))
   const alternatives = found.filter((entry): entry is TraeWebCreditAlternative => entry !== undefined)
   return alternatives.length === 0 ? undefined : alternatives
+}
+
+/**
+ * The panel's pool section, or an empty standpoint when this Host cannot run one.
+ *
+ * THE rule of this file: the pool is an ADD-ON to the status document, so no
+ * failure inside it may cost the user the sign-in panel. A member with a broken
+ * balance read, a probe store that cannot be parsed, a clock — all of it degrades
+ * to "no pool section" rather than to a 500 that hides the account table.
+ *
+ * What is deliberately NOT swallowed here: a `credential`-class failure of the
+ * BOUND account, which `traeWebUsage` reports as `status: error` before the pool
+ * is even assembled.
+ */
+export async function poolSectionOf(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<{ pool?: TraeWebPool }> {
+  if (deps.pool === undefined) return {}
+  try {
+    const pool = await traeWebPool(deps, panel)
+    return pool === undefined ? {} : { pool }
+  } catch {
+    // The document is worth more than the section: the card then renders its
+    // single-account view and offers no pool controls, which is a truthful
+    // "this Host has no pool right now".
+    return {}
+  }
+}
+
+/**
+ * Assemble one panel's pool document (see {@link TraeWebPool}).
+ *
+ * Rows come from TWO sources and are kept in the Host's ranking order: checked
+ * members (ranked by {@link rankPool}) first, then the local sign-ins the pool
+ * does NOT cover, so the card can offer them to check. Unchecked rows carry no
+ * credits and no measurement — nothing has been read for an account the pool does
+ * not bill, and printing a friendlier-looking zero would be a lie.
+ *
+ * Every per-row read is failure-tolerant on purpose: one account whose balance
+ * read throws must not remove the other members from the table.
+ */
+export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<TraeWebPool | undefined> {
+  const pool = deps.pool
+  if (pool === undefined) return undefined
+  const preferences = pool.preferences(panel)
+  const members = await pool.members(panel)
+  const nowMs = Date.now()
+  const ranked = rankPool(members, nowMs)
+  const catalog = pool.catalog?.(panel) ?? []
+  const target = resolveTargetModel(catalog, preferences.targetModelId)
+  const byId = new Map(members.map(member => [member.account.id, member]))
+  const excludedById = new Map(ranked.flatMap(row => row.excludedBy === undefined ? [] : [[row.account.id, row.excludedBy] as const]))
+  const rankedIds = new Set(ranked.map(row => row.account.id))
+  const others = (await pool.otherAccounts?.(panel) ?? []).filter(account => !rankedIds.has(account.id))
+  const checkinState = await pool.checkinState?.(panel).catch((): Record<string, TraePoolCheckinState> => ({})) ?? {}
+  const memberNames = await pool.memberNames?.(panel).catch((): Record<string, string> => ({})) ?? {}
+  const currentAccountId = await pool.currentAccountId?.(panel).catch((): undefined => undefined)
+  /**
+   * A row per listed account, members first.
+   *
+   * `member` is the membership source of truth: the saved list is what a batch
+   * runs on, so a local sign-in that is not checked must not render as one —
+   * otherwise the card would claim "N accounts will be tested" over a set the
+   * Host never touches.
+   */
+  // Membership is the SAVED membership, not `ranked`: `ranked` holds every account
+  // this machine can reach, which is a superset — the pool only runs on what the
+  // user checked. Rows carry it so the card can render a ghost (saved, unreachable)
+  // as a distinct thing rather than as a member that silently does nothing.
+  const savedMembers = new Set(preferences.memberAccountIds ?? [])
+  const rows: { account: TraePoolAccount; member: boolean }[] = []
+  const rowIds = new Set<string>()
+  for (const row of ranked) {
+    rows.push({ account: row.account, member: savedMembers.has(row.account.id) })
+    rowIds.add(row.account.id)
+  }
+  for (const account of others) {
+    rows.push({ account, member: savedMembers.has(account.id) })
+    rowIds.add(account.id)
+  }
+  // A saved id that NOBODY lists is still a row. It is the case where the sign-in
+  // disappeared entirely (or `otherAccounts` does not know the account), and if it
+  // were dropped the user could neither see nor remove the thing keeping it in the
+  // saved list — it would just silently never run.
+  for (const accountId of savedMembers) {
+    if (rowIds.has(accountId)) continue
+    rows.push({ account: { id: accountId, accountName: '' }, member: true })
+    rowIds.add(accountId)
+  }
+  // `members` is the roster of accounts this machine can actually reach, so it is
+  // also the reachability set — one definition, used by the row and by
+  // `effectiveMemberAccountIds` alike.
+  const reachableIds = new Set(members.map(member => member.account.id))
+  const accounts: TraeWebPoolAccount[] = rows.map(row => {
+    const entry = byId.get(row.account.id)
+    const measured = entry?.probe
+    const credits = entry?.credits
+    const checkin = checkinState[row.account.id]
+    const excludedBy = excludedById.get(row.account.id)
+    // A ghost member (saved, no live sign-in) keeps whatever name was measured
+    // for it; a live row uses the store's current name.
+    const accountName = row.account.accountName !== ''
+      ? row.account.accountName
+      : memberNames[row.account.id] ?? measured?.accountName ?? ''
+    return {
+      accountId: row.account.id,
+      accountName,
+      ...credits === undefined ? {} : {
+        credits: credits.total,
+        ...credits.generalAvailable === undefined ? {} : { generalAvailable: credits.generalAvailable },
+        ...credits.workAvailable === undefined ? {} : { workAvailable: credits.workAvailable },
+        expiringSoon: credits.expiringSoon,
+        ...credits.nearestExpiryMs === undefined ? {} : { nearestExpiryMs: credits.nearestExpiryMs },
+      },
+      ...measured === undefined ? {} : {
+        probe: {
+          outcome: measured.outcome,
+          atMs: measured.atMs,
+          ...measured.source === undefined ? {} : { source: measured.source },
+          ...measured.modelId === undefined ? {} : { modelId: measured.modelId },
+          ...measured.retryAtMs === undefined ? {} : { retryAtMs: measured.retryAtMs },
+          ...measured.message === undefined ? {} : { message: safeMessage(measured.message) },
+        },
+      },
+      ...excludedBy === undefined ? {} : { excludedBy },
+      current: currentAccountId !== undefined && currentAccountId === row.account.id,
+      member: row.member,
+      reachable: reachableIds.has(row.account.id),
+      ...checkin === undefined ? {} : {
+        checkedInToday: checkin.checkedIn,
+        ...checkin.deviceCheckedIn === undefined ? {} : { deviceCheckedIn: checkin.deviceCheckedIn },
+      },
+    }
+  })
+  /**
+   * Why the pool cannot pick anybody, when it cannot.
+   *
+   * Only meaningful for an ENABLED pool: a disabled pool is not picking anybody by
+   * design, and saying "no candidate" there would describe a fault that is not
+   * one. Every member excluded is the case the card must explain, because traffic
+   * then falls back to the saved selection while the table shows a full roster.
+   */
+  let noCandidate: TraeWebPool['noCandidate']
+  if (preferences.enabled === true) {
+    if (members.length === 0) {
+      noCandidate = 'empty'
+    } else if (ranked.every(row => row.excludedBy !== undefined)) {
+      const reasons = new Set(ranked.map(row => row.excludedBy))
+      // One shared reason is reported as itself (the useful case: "every account
+      // is out of credit"). Mixed reasons have no single sentence, so the generic
+      // "unusable" is used rather than picking one account's reason for all.
+      noCandidate = reasons.size === 1 ? ranked[0]?.excludedBy ?? 'unusable' : 'unusable'
+    }
+  }
+  const effectiveMemberAccountIds = effectiveMembersOf(
+    rows.filter(row => row.member).map(row => row.account.id),
+    new Set(members.map(member => member.account.id)),
+  )
+  return {
+    enabled: preferences.enabled === true,
+    checkinSupported: pool.checkin !== undefined && regionOfPanel(panel) === 'cn',
+    ...target.modelId === undefined ? {} : { targetModelId: target.modelId },
+    targetModelSource: target.source,
+    ...target.staleModelId === undefined ? {} : { staleTargetModelId: target.staleModelId },
+    ...preferences.memberAccountIds === undefined ? {} : { memberAccountIds: preferences.memberAccountIds },
+    effectiveMemberAccountIds,
+    ...Object.keys(memberNames).length === 0 ? {} : { memberNames },
+    accounts,
+    ...noCandidate === undefined ? {} : { noCandidate },
+  }
+}
+
+/**
+ * One test row, translated into the pool vocabulary the card renders.
+ *
+ * The runner answers in the model-probe verdicts (`available` / `auth` / `gated` /
+ * `rate_limited` / `unsupported`); the card must not have to know that `gated` and
+ * `1005` are the same event, so the translation happens here — once, for both the
+ * batch and the single-row probe.
+ */
+function poolTestRowViewOf(row: TraePoolTestRow): TraePoolTestRowView {
+  return {
+    accountId: row.accountId,
+    accountName: row.accountName,
+    modelId: row.modelId,
+    outcome: outcomeOfVerdict(row.outcome),
+    detail: safeMessage(row.detail),
+    ...row.retryAtMs === undefined ? {} : { retryAtMs: row.retryAtMs },
+  }
+}
+
+/** One check-in row, redacted on the way out. */
+function poolCheckinRowViewOf(row: TraePoolCheckinRow): TraePoolCheckinRowView {
+  return {
+    accountId: row.accountId,
+    accountName: row.accountName,
+    status: row.status,
+    ...row.credit === undefined ? {} : { credit: row.credit },
+    ...row.message === undefined ? {} : { message: safeMessage(row.message) },
+  }
 }
 
 /**
@@ -939,7 +1224,150 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
       },
     })
+    /**
+     * The account pool's ONE mutation surface: `?action=checkin|test|remove`.
+     *
+     * Everything the pool does that costs something happens here and nowhere else —
+     * `checkin` sends a claim, `test` spends a real chat call per member, `remove`
+     * drops one account's measurement. The pool is therefore POST-only and
+     * loopback-only, like the model test and the check-in it wraps.
+     *
+     * The empty-pool guard runs on `effectiveMemberAccountIds` — what this Host can
+     * actually reach — rather than on the saved list. A saved id whose sign-in
+     * disappeared would otherwise let a batch answer `200` with zero rows, which
+     * the card reads as "全部正常".
+     *
+     * Answers are JSON except for a streaming test batch, which writes one NDJSON
+     * line per account as it lands: the loop is serial, so without a stream a user
+     * cannot tell a slow member from a dead button.
+     */
+    const disposePool = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_POOL_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        const panel = requestRegion(req, res)
+        if (panel === undefined) return
+        const pool = deps.pool
+        if (pool === undefined) return json(res, 503, { error: 'account pool unavailable' })
+        const url = req.url ?? '/'
+        const action = poolActionOf(url)
+        if (action === undefined) {
+          return json(res, 400, { error: `missing or unknown action parameter (${TRAE_POOL_ACTION_PARAM})` })
+        }
+        const accountId = poolAccountIdOf(url)
+        // A malformed id is refused BEFORE any store write or upstream call: the id
+        // becomes part of a file path in the probe store, so the check is the
+        // traversal guard as much as a 400.
+        if (accountId !== undefined && !isTraeAccountId(accountId)) {
+          return json(res, 400, { error: 'malformed account id' })
+        }
+        if (action === 'remove') {
+          if (accountId === undefined) return json(res, 400, { error: 'remove needs an accountId' })
+          if (pool.removeOne === undefined) return json(res, 503, { error: 'pool removal unavailable' })
+          try {
+            json(res, 200, { accountId, removed: await pool.removeOne(panel, accountId) })
+          } catch (error: unknown) {
+            json(res, 500, { error: safeMessage(error) })
+          }
+          return
+        }
+        /**
+         * Both remaining actions need a NON-EMPTY effective pool.
+         *
+         * `effectiveMemberAccountIds` is optional; when the Host does not supply it
+         * the guard falls back to the saved list, which is weaker but never worse
+         * than no guard at all. `no-live-members` and `no-members` are separate
+         * reasons because the advice differs: re-check the accounts you lost versus
+         * check some accounts in.
+         */
+        const saved = pool.preferences(panel).memberAccountIds ?? []
+        let effective: readonly string[] = saved
+        if (pool.effectiveMemberAccountIds !== undefined) {
+          try {
+            effective = await pool.effectiveMemberAccountIds(panel)
+          } catch (error: unknown) {
+            return json(res, 500, { error: safeMessage(error) })
+          }
+        }
+        if (effective.length === 0) {
+          return json(res, 409, {
+            action,
+            reason: saved.length === 0 ? 'no-members' : 'no-live-members',
+            error: saved.length === 0 ? 'no accounts are checked into this pool' : 'none of the checked accounts can be reached on this machine',
+          })
+        }
+        if (action === 'checkin') {
+          // The PANEL is the gate, and it is checked before the call is attempted:
+          // only the CN personal panel has a daily reward, and the other two would
+          // answer 404 for the whole `/trae/api/v2/ug/*` family — so a refusal here
+          // saves an upstream request that could only fail.
+          const supported = pool.checkinSupported?.(panel) ?? true
+          if (!supported || pool.checkin === undefined) {
+            return json(res, 409, {
+              action,
+              reason: 'checkin-unsupported',
+              error: supported ? 'check-in is unavailable in this build' : 'this panel has no daily check-in',
+            })
+          }
+          try {
+            const rows = await pool.checkin(panel)
+            json(res, 200, { rows: rows.map(row => poolCheckinRowViewOf(row)) })
+          } catch (error: unknown) {
+            json(res, 500, { error: safeMessage(error) })
+          }
+          return
+        }
+        // `test`: one model for the whole batch, resolved by the Host from the
+        // panel's saved preference — never from the request, so a caller cannot
+        // spend the pool's credits on a model the user did not choose.
+        const targetModelId = pool.preferences(panel).targetModelId
+        if (pool.test === undefined) {
+          return json(res, 409, { action, reason: 'test-unsupported', error: 'the pool cannot test this panel' })
+        }
+        const single = accountId === undefined ? undefined : pool.testOne
+        let modelId = ''
+        if (single !== undefined && accountId !== undefined) {
+          // The row's own test button names ONE account; it uses the same target
+          // model the batch would, so the two answers stay comparable.
+          const catalog = pool.catalog?.(panel) ?? []
+          const resolved = resolveTargetModel(catalog, targetModelId)
+          if (resolved.modelId === undefined) {
+            return json(res, 409, {
+              action,
+              reason: resolved.source === 'stale' ? 'stale-target' : 'no-target-model',
+              error: resolved.source === 'stale'
+                ? 'the saved test model is no longer offered by this panel'
+                : 'no free model is available to test against',
+            })
+          }
+          modelId = resolved.modelId
+        }
+        if (single !== undefined && accountId !== undefined) {
+          try {
+            const row = await single(panel, accountId)
+            if (row === undefined) return json(res, 404, { error: 'unknown account' })
+            return json(res, 200, { rows: [poolTestRowViewOf(row)] })
+          } catch (error: unknown) {
+            return json(res, 500, { error: safeMessage(error) })
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' })
+        const writeLine = (value: unknown): void => { res.write(`${JSON.stringify(value)}\n`) }
+        try {
+          const rows = await pool.test(panel, targetModelId ?? '', row => { writeLine({ row: poolTestRowViewOf(row) }) })
+          // The trailing summary line repeats what was already streamed: a client
+          // that only reads the last line still gets the whole answer.
+          writeLine({ rows: rows.map(row => poolTestRowViewOf(row)) })
+        } catch (error: unknown) {
+          writeLine({ reason: 'pool-failed', error: safeMessage(error) })
+        }
+        res.end()
+      },
+    })
     return () => {
+      disposePool()
       disposeCheckin()
       disposeRefresh()
       disposeTransfer()

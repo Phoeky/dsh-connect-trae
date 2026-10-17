@@ -18,19 +18,20 @@ import {
 } from './adapter.ts'
 import type { TraeWebAccountState, TraeWebAppLogin, TraeWebCredits } from './status-paths.ts'
 import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
-import { configuredAccountsOf, followAppLoginEnabled, unwrapVolatile } from './status-paths.ts'
+import { configuredAccountsOf, followAppLoginEnabled, unwrapVolatile, unwrapVolatileDeep } from './status-paths.ts'
 import type { TraeAdapter } from './adapter.ts'
-import { traeAccountId, TraeCredentialStore } from './auth.ts'
+import { isTraeAccountId, traeAccountId, TraeCredentialStore } from './auth.ts'
 import { piAiRuntimeInfo } from './pi-ai-runtime.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
-import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
+import { readTraeIdentity, resolveTraeIdentity, type TraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
 import { panelOfProvider, providerOfPanel, regionOfCredential, regionOfEdition, regionOfHost, regionOfPanel, regionOfUserRegion, REGION_GATEWAYS, TRAE_PANELS, type TraePanel, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
-import type { TraeShim, TraeShimRoute } from './shim.ts'
+import type { TraeShim, TraeShimPool, TraeShimRoute } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import type { TraeChatRoute } from './solo.ts'
+import type { TraeChatResult, TraeUpstreamClient, TraeUpstreamErrorKind } from './upstream.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
 import type { TraeWireTarget } from './solo-bridge.ts'
 import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
@@ -39,9 +40,15 @@ import { createTraeRawGateway } from './raw-gateway.ts'
 import { resolveTraeRawRuntime } from './raw-resolver.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
-import { probeModelsSequentially } from './model-probe.ts'
+import { probeBody, probeModelsSequentially, probeOneModel } from './model-probe.ts'
 import { TraeUsageClient } from './usage.ts'
-import { registerTraeUsageRoute, toCheckin, toCredits } from './web-status.ts'
+import { registerTraeUsageRoute, toCheckin, toCredits, type TraePoolCheckinState, type TraePoolDeps } from './web-status.ts'
+import type { TraePoolPreferences } from './status-paths.ts'
+import { billableMembers, effectiveMembersOf, pickAccount, poolKeyOfPanel, rankPool, resolveTargetModel } from './account-pool.ts'
+import type { TraePoolCredits, TraePoolMember, TraePoolOutcome, TraePoolProbe } from './account-pool.ts'
+import { checkinAllAccounts, probeUpdatesOf, testAllAccounts, type TraePoolRunnerDeps } from './account-pool-run.ts'
+import type { TraePoolCheckinRow, TraePoolTestRow } from './account-pool-run.ts'
+import { dropTraePoolProbe, readTraePoolProbes, writeTraePoolProbes } from './account-pool-store.ts'
 
 export {
   adaptLegacyPiAiContext,
@@ -226,6 +233,15 @@ export interface TraeRegionState {
    * beside dsh-connect-workbuddy's rows — so the setting applies here too.
    */
   creditPosition?: TraeCreditPosition
+  /**
+   * This region's account pool (issue #44), as the card saves it.
+   *
+   * Read through {@link regionStateOf} and written by the card's pool section.
+   * `enabled` absent means OFF: an account pool decides where money is spent, so
+   * it is opt-in and a config written before it existed must keep billing the
+   * account the user picked.
+   */
+  pool?: TraePoolPreferences
 }
 
 export interface Config {
@@ -445,6 +461,28 @@ const regionStateConfig = z.object({
   // rather than from a schema default alone — a profile written before this
   // field existed must still read as `composer`.
   creditPosition: z.union([z.const('composer'), z.const('stats')]).default('composer').description('积分读数显示位置："composer" = 输入框工具栏（默认），"stats" = 输入框下方（与「轮次 / 步数 / token」统计同一行）。装了别的插件后读数不显示时改成 stats。'),
+  // Account pool (issue #44): which accounts this panel may bill, which model a
+  // test probes, and whether the pool routes at all. Declared HERE because the
+  // settings channel rebuilds the document through this schema, and a field
+  // absent here is dropped on every save — the failure that once reset
+  // `wireConfigName` and turned every save into a 4001.
+  //
+  // DEFAULTS ARE DECLARED, not merely documented, so this slot reads the same
+  // everywhere it is read: the settings form's initial values, `regionStateOf()`
+  // output, and the draft the card compares against. Without them schemastery
+  // materialises `pool` as `{ memberAccountIds: [] }` and DROPS `enabled` /
+  // `targetModelId`, which would surface on the settings form as an
+  // uninitialised control instead of the OFF/auto the code actually means.
+  //
+  // `probeInputTokens` is deliberately ABSENT (unlike the WorkBuddy pool): that
+  // knob sizes a probe against a measured context threshold, while Trae's probe
+  // is a fixed minimal chat — offering a size selector here would promise a
+  // measurement the probe does not make.
+  pool: z.object({
+    enabled: z.boolean().default(false).description('账号池：打开后本面板由池中可用账号轮流计费（关闭时按下面的绑定账号）'),
+    targetModelId: z.string().default('').description('账号池测速使用的模型 id（留空 = 自动选择免费模型）'),
+    memberAccountIds: z.array(z.string()).default([]).description('加入本面板账号池的账号 id（显式勾选，默认为空）'),
+  }).default({}),
 })
 
 const accountSelectionConfig = z.object({
@@ -490,6 +528,29 @@ export const Config: z<Config> = z.object({
 
 /** Every region, in card tab order. */
 const REGION_KEYS: readonly TraeRegion[] = ['cn', 'ai']
+
+/**
+ * What ONE failed real request means for the account that served it (issue #44).
+ *
+ * The shim only reports account-scoped kinds here, so this table never has to
+ * interpret `not_found` (a model the account cannot see) or `client` (our own bad
+ * body) — both would exclude a healthy account for good over something that is
+ * not about the account at all.
+ *
+ * `credential-rejected` is the one permanent entry, and deliberately so: a 401
+ * from the chat gateway means the stored token cannot be refreshed into one that
+ * works, and the honest recovery is a re-login (which the card offers), not a
+ * silent retry every half hour.
+ */
+const POOL_OUTCOME_BY_KIND: Readonly<Record<TraeUpstreamErrorKind, TraePoolOutcome>> = {
+  authentication: 'credential-rejected',
+  hard_credit: 'out-of-credit',
+  soft_rate: 'rate-limited',
+  server: 'unavailable',
+  not_found: 'not-found',
+  client: 'failed',
+  unconfigured: 'failed',
+}
 
 /**
  * One region's complete runtime stack: its own credential store, model
@@ -570,6 +631,16 @@ interface TraeRegionStack {
   lastDiscovery: readonly TraeModelInfo[]
   /** Raw-Chat capability state for this region's card route. */
   rawDiagnostic: () => TraeRawDiagnostic
+  /**
+   * Display id → wire `config_name` for THIS region. Exposed so the account pool
+   * can build a bridge for an account that is not the selected one and still
+   * resolve ids exactly as a real chat would.
+   */
+  wireResolver: (displayId: string) => TraeWireTarget | undefined
+  /** This region's best-effort device identity (the shared `x-device-id`). */
+  identity: () => Promise<TraeIdentity>
+  /** The route this panel's primary provider bills through. */
+  routeOf: (provider: string) => TraeChatRoute
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -870,7 +941,7 @@ export function apply(ctx: Context, config: Config): void {
       // delegate asynchronously, but it stays disabled until a probe succeeds.
       const delegating = new TraeDelegatingUpstreamClient(bridge)
       routeClients[provider] = { provider, route, client, upstream: delegating, secret: '' }
-      shimRoutes.push({ label: route, client: delegating })
+      shimRoutes.push({ label: route, client: delegating, pool: poolShimHooksOf(panel) })
     }
     const shim = createTraeShim({ catalog, routes: shimRoutes, logger: ctx.logger })
     for (const entry of Object.values(routeClients)) entry.secret = shim.tokenOf(entry.route)
@@ -1101,6 +1172,415 @@ export function apply(ctx: Context, config: Config): void {
     },
     invalidateAdapter: () => {},
       rawDiagnostic: () => rawDiagnostic(),
+      // Exposed so the pool can build a bridge for an account that is NOT the
+      // selected one: without it a batch probe would resolve display ids through
+      // a resolver of its own making and could probe a different config_name
+      // than a real chat.
+      wireResolver,
+      identity,
+      routeOf: provider => routeOfTraeProvider(provider) ?? 'solo',
+    }
+  }
+
+  /** This panel's saved pool preferences, unwrapped and defaulted to OFF. */
+  const poolPreferencesOf = (panel: TraePanel): TraePoolPreferences =>
+    unwrapVolatileDeep(regionStateOf(current(), panel).pool) ?? {}
+
+  /**
+   * Project one account's card credits onto the pool's ranking shape.
+   *
+   * The pool's `total` is the figure a request can SPEND, which on Trae is the
+   * General bucket alone (SOLO chat never drains Work). The card's `total` is the
+   * wider `available` figure, so it is deliberately NOT reused here: ranking by it
+   * would put an account with a large Work balance and no General credit in front
+   * of one that can actually serve. `undefined` (the read failed) stays undefined
+   * so `rankPool` treats it as zero rather than as full.
+   */
+  /**
+   * Credit totals the pool ranks on, cached per account.
+   *
+   * The CHAT path must not spend an upstream round-trip per candidate just to
+   * decide who bills: {@link poolMembersOf} reads every balance, which is right
+   * for the card (one read per poll) and far too slow per request. So the card's
+   * poll warms this cache and the router only reads it.
+   *
+   * A cold cache means "unknown", not "no credit": `rankPool` orders a missing
+   * figure as zero and then falls back to token freshness, so a cold start still
+   * picks a member — the user chose the roster — instead of refusing to bill.
+   */
+  const poolCreditCache: Record<TraePanel, Map<string, TraePoolCredits>> = {
+    cn: new Map(),
+    enterprise: new Map(),
+    ai: new Map(),
+  }
+
+  const poolCreditsOfAccount = async (panel: TraePanel, accountId: string): Promise<TraePoolCredits | undefined> => {
+    const credits = await stacks[panel].creditsOfAccount(accountId)
+    if (credits === undefined) return undefined
+    const within3d = credits.expiry?.within3d
+    const projected: TraePoolCredits = {
+      // The SPENDABLE figure, not the wider `available`: SOLO chat only drains the
+      // General bucket, so ranking by the total would put an account with a large
+      // Work balance and no General credit in front of one that can serve.
+      total: credits.generalAvailable,
+      generalAvailable: credits.generalAvailable,
+      workAvailable: credits.workAvailable,
+      expiringSoon: within3d?.total ?? 0,
+      ...within3d?.earliestExpiresAtMs === undefined ? {} : { nearestExpiryMs: within3d.earliestExpiresAtMs },
+    }
+    // Every successful read is also the router's copy of this balance.
+    poolCreditCache[panel].set(accountId, projected)
+    return projected
+  }
+
+  /**
+   * Assemble one pool member per LOCAL account, in the store's order.
+   *
+   * "Member" means the account still has a sign-in this machine can use: a saved
+   * id whose desktop credentials vanished is a ghost, and a ghost cannot be tested
+   * or checked in, so listing it as a member would enable a batch over nothing.
+   * The saved list is intersected separately (see
+   * {@link TraePoolDeps.effectiveMemberAccountIds}) — here the store is the source.
+   *
+   * Balance reads are settled independently: one account whose credit read fails
+   * must not take the whole pool document down, and it ranks as zero rather than
+   * disappearing.
+   */
+  const poolMembersOf = async (panel: TraePanel): Promise<readonly TraePoolMember[]> => {
+    const probes = await readTraePoolProbes(poolKeyOfPanel(panel))
+    const choices = await stacks[panel].store.accounts()
+    const members = await Promise.all(choices.map(async choice => {
+      const credits = await poolCreditsOfAccount(panel, choice.id).catch((): undefined => undefined)
+      return {
+        account: { id: choice.id, accountName: choice.accountName },
+        ...credits === undefined ? {} : { credits },
+        ...probes[choice.id] === undefined ? {} : { probe: probes[choice.id] },
+        ...choice.tokenExpiresAtMs === undefined ? {} : { tokenExpiresAtMs: choice.tokenExpiresAtMs },
+      } satisfies TraePoolMember
+    }))
+    return members
+  }
+
+  /**
+   * The catalog a pool test resolves its target model against.
+   *
+   * The LAST discovery wins, and the saved/live catalog is the fallback: a test
+   * clicked before the first discovery lands must still find the free models the
+   * region already knows, and one clicked after it must not be judged against a
+   * roster the upstream has since replaced.
+   */
+  const poolCatalogOf = (panel: TraePanel): readonly TraeModelInfo[] =>
+    stacks[panel].lastDiscovery.length > 0 ? stacks[panel].lastDiscovery : stacks[panel].catalog.current()
+
+  /** Id → display name for one panel, for the rows a batch reports. */
+  const poolMemberNamesOf = async (panel: TraePanel): Promise<Record<string, string>> => {
+    const names: Record<string, string> = {}
+    for (const member of await poolMembersOf(panel)) names[member.account.id] = member.account.accountName
+    return names
+  }
+
+  /**
+   * The accounts a batch runs on: the SAVED member list, narrowed to what this
+   * machine can still reach, in the user's own order.
+   *
+   * Order is the user's, not the ranking's, on purpose: a batch result table that
+   * reorders itself between presses is hard to read row by row, and the ranking
+   * is already shown by the table above it.
+   */
+  const poolTargetsOf = async (panel: TraePanel): Promise<{ accountId: string; accountName: string }[]> => {
+    const saved = poolPreferencesOf(panel).memberAccountIds ?? []
+    const names = await poolMemberNamesOf(panel)
+    return effectiveMembersOf(saved, new Set(Object.keys(names)))
+      .map(accountId => ({ accountId, accountName: names[accountId] ?? '' }))
+  }
+
+  /**
+   * Pool members from LOCAL state only: the store's logins, the saved probes and
+   * the cached credit totals. No upstream call, so it is safe on the request
+   * path (see {@link poolCreditCache} for why the cache exists).
+   */
+  async function localPoolMembers(panel: TraePanel): Promise<readonly TraePoolMember[]> {
+    const probes = await readTraePoolProbes(poolKeyOfPanel(panel)).catch((): Record<string, TraePoolProbe> => ({}))
+    const choices = await stacks[panel].store.accounts().catch(() => [])
+    const cache = poolCreditCache[panel]
+    return choices.map(choice => {
+      const credits = cache.get(choice.id)
+      return {
+        account: { id: choice.id, accountName: choice.accountName },
+        ...credits === undefined ? {} : { credits },
+        ...probes[choice.id] === undefined ? {} : { probe: probes[choice.id] },
+        ...choice.tokenExpiresAtMs === undefined ? {} : { tokenExpiresAtMs: choice.tokenExpiresAtMs },
+      } satisfies TraePoolMember
+    })
+  }
+
+  /**
+   * The members that may actually be billed: the user's SAVED opt-in list
+   * intersected with what this machine can still reach, minus the accounts that
+   * already failed this request (`billableMembers` is the one definition of that
+   * rule, shared with the batch paths).
+   */
+  async function poolBillableMembers(
+    panel: TraePanel,
+    tried: readonly string[] = [],
+  ): Promise<readonly TraePoolMember[]> {
+    const members = await localPoolMembers(panel)
+    const saved = poolPreferencesOf(panel).memberAccountIds ?? []
+    return billableMembers(members, saved, tried)
+  }
+
+  /**
+   * Point the NEXT request at the best pooled account, or back at the bound one
+   * when the pool is off (issue #44).
+   *
+   * Returns the account it chose. Both the chat path and the card's usage read go
+   * through here, so "currently serving" on screen and the next real request
+   * cannot disagree — one rule, one answer.
+   *
+   * When EVERY member is excluded the rotation is cleared rather than pointed at
+   * an excluded account: the bound account then serves, which is the user's own
+   * explicit choice and the only account a refusal would not have served anyway.
+   * The card reports the exclusion reasons, so this is never silent.
+   */
+  async function applyPoolSelection(panel: TraePanel): Promise<string | undefined> {
+    const store = stacks[panel].store
+    if (poolPreferencesOf(panel).enabled !== true) {
+      // Switching the pool off must restore the user's own choice immediately,
+      // with no rebind: clearing the override IS the undo.
+      store.setRotatedAccount(undefined)
+      return undefined
+    }
+    try {
+      const winner = pickAccount(await poolBillableMembers(panel), Date.now())
+      store.setRotatedAccount(winner?.id)
+      return winner?.id
+    } catch {
+      // A pool that cannot rank must not move billing: leave the binding in
+      // charge rather than guessing at an account.
+      store.setRotatedAccount(undefined)
+      return undefined
+    }
+  }
+
+  /**
+   * The client for the next account worth trying, bound to THAT account.
+   *
+   * Built per attempt from the account's own stored credential, so a failover
+   * never rebinds the store and never disturbs a request that is already billing
+   * the chosen account (the same rule per-account probes follow, issue #25). The
+   * bridge is the same one a normal turn uses, so display ids still resolve to
+   * their wire names.
+   */
+  async function failoverClientFor(
+    panel: TraePanel,
+    tried: readonly string[],
+  ): Promise<{ accountId: string; client: TraeUpstreamClient } | undefined> {
+    const next = pickAccount(await poolBillableMembers(panel, tried), Date.now())
+    if (next === undefined) return undefined
+    const stack = stacks[panel]
+    const accountId = next.id
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => {
+        const credential = await stack.store.credentialOf(accountId)
+        if (credential === undefined) throw new Error(`no stored credential for account ${accountId}`)
+        return credential
+      },
+      identity: () => stack.identity(),
+      route: stack.routeOf(providerOfPanel(panel)),
+      log: (message, detail) => ctx.logger.warn(message, detail),
+    })
+    return { accountId, client: new TraeSoloBridge(client, stack.catalog, stack.wireResolver) }
+  }
+
+  /**
+   * Persist what a real request taught us about an account (issue #44).
+   *
+   * Written as a `live-request` probe so the card can tell a measurement taken by
+   * a batch from one taken by traffic, and so the ranking excludes the account on
+   * its next turn instead of walking back into the same limit.
+   */
+  async function recordPoolFailure(
+    panel: TraePanel,
+    accountId: string,
+    kind: TraeUpstreamErrorKind,
+    message: string,
+  ): Promise<void> {
+    const outcome = POOL_OUTCOME_BY_KIND[kind]
+    if (outcome === undefined) return
+    await writeTraePoolProbes(poolKeyOfPanel(panel), {
+      [accountId]: { outcome, atMs: Date.now(), source: 'live-request', message: `${kind}: ${message}` },
+    }).catch(() => {})
+  }
+
+  /**
+   * Why nothing else could serve, as one clause for the error the caller sees.
+   *
+   * `undefined` when the pool is off (the plain upstream error is the whole
+   * story) or when there was in fact a candidate left — the shim asked because it
+   * ran out of attempts, not out of accounts.
+   */
+  async function poolShortfallOf(panel: TraePanel, tried: readonly string[]): Promise<string | undefined> {
+    if (poolPreferencesOf(panel).enabled !== true) return undefined
+    let members: readonly TraePoolMember[]
+    let remaining: readonly TraePoolMember[]
+    try {
+      members = await poolBillableMembers(panel)
+      if (members.length === 0) return 'the account pool is enabled but has no usable member'
+      remaining = await poolBillableMembers(panel, tried)
+    } catch {
+      return undefined
+    }
+    // Two different failures, two different sentences: "everything was tried" is
+    // not the same thing as "the ones left are unusable", and the user can only
+    // act on the second one (by fixing a sign-in or waiting out a limit).
+    if (remaining.length === 0) return `all ${members.length} pooled account(s) were tried for this request`
+    const ranked = rankPool(remaining, Date.now())
+    const reasons = [...new Set(ranked.flatMap(entry => entry.excludedBy === undefined ? [] : [entry.excludedBy]))]
+    return reasons.length === 0 ? undefined : `every remaining pooled account is excluded (${reasons.join(', ')})`
+  }
+
+  /**
+   * The shim's view of one panel's pool.
+   *
+   * Declared as a hoisted function because the shim's route table is built ABOVE
+   * this point in `apply`; only the bodies run later, on a real request.
+   */
+  function poolShimHooksOf(panel: TraePanel): TraeShimPool {
+    return {
+      prepare: () => applyPoolSelection(panel),
+      next: tried => failoverClientFor(panel, tried),
+      failed: (accountId, kind, message) => recordPoolFailure(panel, accountId, kind, message),
+      shortfall: tried => poolShortfallOf(panel, tried),
+    }
+  }
+
+  /**
+   * The pool's dependency bag for ONE panel.
+   *
+   * Every member re-reads the store on each call rather than capturing a list:
+   * a batch runs for minutes, and a sign-in the user performed half-way through
+   * must be visible to the rows it has not reached yet.
+   *
+   * The bag is built per REQUEST, so it captures the panel and never has to be
+   * told which tab asked.
+   */
+  const poolDepsOf = (panel: TraePanel): TraePoolDeps => {
+    // One `chatStream` bridge PER credential for the life of this bag: a test
+    // batch must address the account it is measuring, never whichever account is
+    // currently selected (issue #25's rule — looking at a neighbour is not a
+    // switch, and a test must not move billing).
+    const bridges = new Map<string, (body: string, signal?: AbortSignal) => Promise<TraeChatResult>>()
+    const chatBridgeFor = (accountId: string): ((body: string, signal?: AbortSignal) => Promise<TraeChatResult>) => {
+      const existing = bridges.get(accountId)
+      if (existing !== undefined) return existing
+      const stack = stacks[panel]
+      const client = new TraeSoloUpstreamClient({
+        credential: async () => {
+          const credential = await stack.store.credentialOf(accountId)
+          if (credential === undefined) throw new Error(`no stored credential for account ${accountId}`)
+          return credential
+        },
+        identity: () => stack.identity(),
+        route: stack.routeOf(providerOfPanel(panel)),
+        log: (message, detail) => ctx.logger.warn(message, detail),
+      })
+      // The wire resolver is the stack's live one, so a display id resolves to the
+      // same config_name a real chat would use.
+      const bridge = new TraeSoloBridge(client, stack.catalog, stack.wireResolver)
+      const chat = (body: string, signal?: AbortSignal): Promise<TraeChatResult> => bridge.chatStream(body, signal)
+      bridges.set(accountId, chat)
+      return chat
+    }
+    const probeDeps = (): TraePoolRunnerDeps => ({
+      credentialFor: accountId => stacks[panel].store.credentialOf(accountId),
+      checkinStatusOf: async credential => {
+        const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[panel].identity()).deviceId })
+        return client.checkinStatus()
+      },
+      claimCheckinOf: async credential => {
+        const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[panel].identity()).deviceId })
+        return client.claimCheckin()
+      },
+      chatFor: credential => chatBridgeFor(traeAccountId(credential)),
+    })
+    /** One account's row, through the same bridge and probe the batch uses. */
+    const testWith = async (target: { accountId: string; accountName: string }, modelId: string): Promise<TraePoolTestRow> => {
+      const [row] = await testAllAccounts([target], modelId, (chatFor, credential, id) => {
+        if (credential === undefined) {
+          return Promise.resolve({ id, verdict: 'auth' as const, detail: 'no stored credential for this account' })
+        }
+        return probeOneModel(chatFor(credential), id)
+      }, probeDeps())
+      return row as TraePoolTestRow
+    }
+    return {
+      preferences: stored => poolPreferencesOf(stored),
+      members: stored => poolMembersOf(stored),
+      effectiveMemberAccountIds: async stored => {
+        const saved = poolPreferencesOf(stored).memberAccountIds ?? []
+        return effectiveMembersOf(saved, new Set((await poolMembersOf(stored)).map(member => member.account.id)))
+      },
+      memberNames: async stored => {
+        const names: Record<string, string> = {}
+        for (const member of await poolMembersOf(stored)) names[member.account.id] = member.account.accountName
+        return names
+      },
+      otherAccounts: async stored => (await poolMembersOf(stored)).map(member => member.account),
+      currentAccountId: async stored => {
+        const configured = configuredAccountsOf(current())[stored]
+        return isTraeAccountId(configured) ? configured : undefined
+      },
+      catalog: stored => poolCatalogOf(stored),
+      checkinSupported: stored => regionOfPanel(stored) === 'cn',
+      checkin: async stored => checkinAllAccounts(await poolTargetsOf(stored), probeDeps()),
+      checkinState: async stored => {
+        const state: Record<string, TraePoolCheckinState> = {}
+        for (const target of await poolTargetsOf(stored)) {
+          const credential = await stacks[stored].store.credentialOf(target.accountId)
+          if (credential === undefined) continue
+          const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[stored].identity()).deviceId })
+          try {
+            const status = await client.checkinStatus()
+            state[target.accountId] = { checkedIn: status.checkedIn, deviceCheckedIn: status.didCheckedIn, enabled: status.enabled }
+          } catch {
+            // An unreadable row simply carries no check-in figure.
+          }
+        }
+        return state
+      },
+      test: async (stored, modelId, onRow) => {
+        const rows = await testAllAccounts(
+          await poolTargetsOf(stored),
+          modelId,
+          (chatFor, credential, id) => {
+            if (credential === undefined) {
+              return Promise.resolve({ id, verdict: 'auth' as const, detail: 'no stored credential for this account' })
+            }
+            return probeOneModel(chatFor(credential), id)
+          },
+          probeDeps(),
+          onRow,
+        )
+        // Persisted AFTER the batch (one write, one timestamp for the run) so the
+        // card's "tested N minutes ago" describes the batch, not its first row.
+        await writeTraePoolProbes(poolKeyOfPanel(stored), probeUpdatesOf(rows))
+        return rows
+      },
+      testOne: async (stored, accountId) => {
+        const model = resolveTargetModel(poolCatalogOf(stored), poolPreferencesOf(stored).targetModelId)
+        if (model.modelId === undefined) return undefined
+        const names = await poolMemberNamesOf(stored)
+        const row = await testWith({ accountId, accountName: names[accountId] ?? '' }, model.modelId)
+        await writeTraePoolProbes(poolKeyOfPanel(stored), probeUpdatesOf([row]))
+        return row
+      },
+      removeOne: async (stored, accountId) => {
+        // The MEASUREMENT is only half of a removal: membership lives in settings,
+        // which has its own single writer. Forgetting the probe here is what stops
+        // a re-added account from inheriting an old exclusion.
+        await dropTraePoolProbe(poolKeyOfPanel(stored), accountId)
+        return true
+      },
     }
   }
 
@@ -1170,6 +1650,34 @@ export function apply(ctx: Context, config: Config): void {
     // document carries when the app's sign-in differs. Degrades to `undefined`
     // (no hint) rather than failing a status read.
     liveLogin: panel => liveLoginOf(panel),
+    // The account pool (issue #44). Built per request so the bag always describes
+    // the panel that asked, and so a batch sees sign-ins the user added while an
+    // earlier batch was still running.
+    pool: {
+      preferences: panel => poolPreferencesOf(panel),
+      members: panel => poolMembersOf(panel),
+      effectiveMemberAccountIds: async panel => {
+        const saved = poolPreferencesOf(panel).memberAccountIds ?? []
+        return effectiveMembersOf(saved, new Set((await poolMembersOf(panel)).map(member => member.account.id)))
+      },
+      memberNames: panel => poolMemberNamesOf(panel),
+      otherAccounts: async panel => (await poolMembersOf(panel)).map(member => member.account),
+      currentAccountId: async panel => {
+        // The account that would bill the NEXT request, not the saved binding:
+        // with the pool on, those differ, and the card's "serving now" line must
+        // match what the router actually does.
+        await applyPoolSelection(panel).catch(() => undefined)
+        const credential = await stacks[panel].store.current().catch(() => undefined)
+        return credential === undefined ? undefined : traeAccountId(credential)
+      },
+      catalog: panel => poolCatalogOf(panel),
+      checkinSupported: panel => regionOfPanel(panel) === 'cn',
+      checkin: panel => poolDepsOf(panel).checkin?.(panel) ?? Promise.resolve([]),
+      checkinState: panel => poolDepsOf(panel).checkinState?.(panel) ?? Promise.resolve({}),
+      test: (panel, modelId, onRow) => poolDepsOf(panel).test?.(panel, modelId, onRow) ?? Promise.resolve([]),
+      testOne: (panel, accountId) => poolDepsOf(panel).testOne?.(panel, accountId) ?? Promise.resolve(undefined),
+      removeOne: (panel, accountId) => poolDepsOf(panel).removeOne?.(panel, accountId) ?? Promise.resolve(false),
+    },
   }))
 
   /**

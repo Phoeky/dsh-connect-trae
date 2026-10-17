@@ -32,6 +32,7 @@ import { regionOfPanel, type TraePanel } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import { BusyOverlay } from './BusyOverlay.tsx'
+import { AccountPool } from './AccountPool.tsx'
 import { AccountTransfer } from './AccountTransfer.tsx'
 import { planVerdict as payVerdict } from './plan-text.ts'
 import type { TraeSettingsKey } from './locales.ts'
@@ -91,7 +92,7 @@ interface TraeDraft {
  *
  * @throws {TraeSettingsWriteError} when the write was refused or did not land.
  */
-class TraeSettingsWriteError extends Error {
+export class TraeSettingsWriteError extends Error {
   constructor(field: string, detail?: string) {
     super(detail === undefined || detail === ''
       ? `trae: settings field "${field}" was not persisted by the settings write`
@@ -100,7 +101,7 @@ class TraeSettingsWriteError extends Error {
   }
 }
 
-async function writeSettingsField(
+export async function writeSettingsField(
   scope: NonNullable<TraeUsageCardInjected['settingsScope']>,
   field: string,
   value: unknown,
@@ -1670,6 +1671,23 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
               </section>
               {status.status === 'signed-in'
                 ? <>
+                    {status.pool !== undefined
+                      ? <AccountPool
+                          panel={activeRegion}
+                          pool={status.pool}
+                          models={visibleModels}
+                          t={t}
+                          settingsScope={settingsScope}
+                          onChanged={async () => {
+                            const fresh = await refreshUsage(activeRegion)
+                            if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))
+                          }}
+                          onRefresh={async () => {
+                            const fresh = await refreshUsage(activeRegion)
+                            if (fresh !== undefined) setStatusByRegion(current => ({ ...current, [activeRegion]: fresh }))
+                          }}
+                        />
+                      : null}
                     {status.checkin !== undefined && !status.checkin.enabled
                       ? <p className="dsm-trae-usage-error">{t('row.checkinDisabled')}</p>
                       : null}
