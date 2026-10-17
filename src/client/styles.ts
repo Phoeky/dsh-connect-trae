@@ -447,7 +447,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pool-subtitle{margin:0;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-pool-subnote{margin:2px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-select-actions{display:flex;flex:none;gap:6px}
-.dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn,.dsm-trae-pool-save-row .dsm-btn{padding:4px 10px;font-size:12px;line-height:1.4}
+.dsm-trae-pool-select-actions .dsm-btn,.dsm-trae-pool-row-actions .dsm-btn{padding:4px 10px;font-size:12px;line-height:1.4}
 .dsm-trae-pool-table{--dsm-trae-pool-cols:minmax(0,1.4fr) 128px minmax(0,1.2fr) 96px 128px;display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:var(--dsm-trae-pool-radius);overflow:hidden;background:var(--dsw-alias-bg-layer-2,#24262c)}
 .dsm-trae-pool-table-no-checkin{--dsm-trae-pool-cols:minmax(0,1.4fr) 128px minmax(0,1.2fr) 128px}
 .dsm-trae-pool-row{display:grid;grid-template-columns:var(--dsm-trae-pool-cols);align-items:start;gap:10px;padding:var(--dsm-trae-pool-pad-y) var(--dsm-trae-pool-pad-x);border-top:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.18))}

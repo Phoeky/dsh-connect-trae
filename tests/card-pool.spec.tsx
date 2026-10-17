@@ -217,6 +217,16 @@ function clearTargetButton(): HTMLButtonElement {
   return within(poolSection()).getByRole('button', { name: 'row.poolTargetStaleClear' }) as HTMLButtonElement
 }
 
+describe('the save bar uses the card\'s normal button size', () => {
+  it('is not caught by the rule that shrinks the tiny in-row buttons', () => {
+    // The save bar is a footer bar like the models section's, so its buttons must
+    // keep `.dsm-btn`'s own padding; the compact padding belongs to 测速/移除.
+    const compact = /\.dsm-trae-pool-select-actions \.dsm-btn[^{]*\{/.exec(TRAE_CARD_CSS)
+    expect(compact).not.toBeNull()
+    expect(compact?.[0]).not.toContain('pool-save-row')
+  })
+})
+
 describe('the pool section keeps one spacing and one radius scale', () => {
   // The section used to mix 10/12/14px insets and 10/12/14px radii, one per block,
   // which is exactly what reads as "inconsistent" even when each block looks fine
