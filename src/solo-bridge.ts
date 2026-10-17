@@ -46,6 +46,13 @@ interface TraeFailure {
  *    two different statements, and a user hits the second without touching the
  *    first (issue #33).
  *  - `4023` — the model name is unknown on the route that was asked.
+ *  - `4222` — the ENTERPRISE tenant's allowance is exhausted. Measured
+ *    2026-10-17 on a live tenant account whose enterprise credit ran out: the
+ *    gateway answered HTTP 200 with `{"code":4222,"message":""}` for a model
+ *    that streamed normally moments earlier (and still streams on the consumer
+ *    gateway). Like `4008` it is a billing fact rather than a config one, but
+ *    it is specific to the tenant pool -- the consumer balance is unaffected,
+ *    which is why it must not be folded into the `4008` reading.
  *  - `2001` — the upstream has not published its function config for the route
  *    that was asked. Evidence is issue #39: on a live CN account every SOLO
  *    function's `get_detail_param` answered HTTP 200 with `config_info_list:
@@ -64,6 +71,7 @@ const TRAE_ERROR_HINTS: Readonly<Record<number, string>> = {
   4008: 'Trae reports the account\'s SOLO quota is exhausted for this request',
   4011: 'Trae throttled the SOLO channel for this account (a rate limit, not the credit balance)',
   4023: 'Trae does not recognise this model name on the SOLO route that was asked',
+  4222: 'The enterprise tenant allowance is exhausted (tenant spend is separate from the personal credit balance; the consumer gateway still has its own)',
 }
 
 /** `extra` is a JSON *string* on the wire; unwrap it to read `plan`. */
