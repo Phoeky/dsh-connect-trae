@@ -213,7 +213,10 @@ export function AccountTransfer({ t, region, accounts, onChanged, hideLabel = fa
       : ''
 
   return (
-    <section className="dsm-trae-transfer" aria-label={t('row.transferTitle')}>
+    <section
+      className={hideLabel ? 'dsm-trae-transfer dsm-trae-transfer-flat' : 'dsm-trae-transfer'}
+      aria-label={t('row.transferTitle')}
+    >
       <BusyOverlay visible={busy} message={veilMessage} {...busy ? { hint: t('row.transferVeilHint') } : {}} />
       {hideLabel ? null : <p className="dsm-trae-transfer-label">{t('row.transferTitle')}</p>}
       {phase.kind === 'done'

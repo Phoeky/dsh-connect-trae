@@ -271,6 +271,8 @@ export const TRAE_CARD_CSS = `
    must stay mounted to be clicked. */
 .dsm-trae-transfer{margin-top:12px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2))}
 .dsm-trae-transfer-label{margin:0 0 6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,GrayText)}
+.dsm-trae-transfer-flat{margin-top:0;padding-top:0;border-top:0}
+.dsm-trae-transfer-flat .dsm-trae-transfer-actions{flex-wrap:nowrap}
 .dsm-trae-transfer-actions{display:flex;flex-wrap:wrap;gap:8px}
 .dsm-trae-transfer-file{display:none}
 .dsm-trae-transfer-status{margin:6px 0 0;font-size:11px;line-height:16px}

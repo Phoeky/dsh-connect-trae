@@ -17,6 +17,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 
 import * as React from 'react'
 import { AccountTransfer } from '../src/client/AccountTransfer.tsx'
+import { TRAE_CARD_CSS } from '../src/client/styles.ts'
 import type { TraeSettingsKey } from '../src/client/locales.ts'
 
 const t = ((key: TraeSettingsKey) => key) as (key: TraeSettingsKey) => string
@@ -35,5 +36,14 @@ describe('AccountTransfer heading', () => {
     // The buttons still render, and the section keeps its accessible name.
     expect(screen.getByText('row.transferExport')).toBeTruthy()
     expect(container.querySelector('.dsm-trae-transfer')?.getAttribute('aria-label')).toBe('row.transferTitle')
+  })
+
+  it('drops the divider too, so the two buttons sit in the caller’s row', () => {
+    // Without this the section keeps `border-top` + top margin and the buttons
+    // hang below a stray rule instead of standing beside the row's label.
+    const { container } = render(<AccountTransfer t={t} region="cn" accounts={[]} hideLabel />)
+    expect(container.querySelector('.dsm-trae-transfer-flat')).toBeTruthy()
+    const flat = /\.dsm-trae-transfer-flat\{([^}]*)\}/.exec(TRAE_CARD_CSS)
+    expect(flat?.[1]).toContain('border-top:0')
   })
 })
