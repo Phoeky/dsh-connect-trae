@@ -1363,15 +1363,15 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                 <label className="dsm-trae-pref" title={t('row.followAppLoginHint')}>
                   <input
                     type="checkbox"
+                    className="dsm-trae-pref-check"
                     checked={settingsEdits.followAppLogin}
                     disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
                     aria-describedby={followHintId}
                     onChange={event => { void writePreference('followAppLogin', event.currentTarget.checked) }}
                   />
-                  <span id={followHintId}>
-                    <b id={followLabelId}>{t('row.followAppLogin')}</b>
-                    {' '}
-                    <span className="dsm-trae-pref-hint">{t('row.followAppLoginHint')}</span>
+                  <span className="dsm-trae-pref-copy">
+                    <span className="dsm-trae-pref-label" id={followLabelId}>{t('row.followAppLogin')}</span>
+                    <span className="dsm-trae-pref-hint" id={followHintId}>{t('row.followAppLoginHint')}</span>
                   </span>
                 </label>
                 {/* REGION-AGNOSTIC, both tabs: a readout exists on either side
@@ -1383,15 +1383,15 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                 <label className="dsm-trae-pref" title={t(isCnPool ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}>
                   <input
                     type="checkbox"
+                    className="dsm-trae-pref-check"
                     checked={settingsEdits.showPointsInMainUi}
                     disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
                     aria-describedby={creditsHintId}
                     onChange={event => { void writePreference('showPointsInMainUi', event.currentTarget.checked) }}
                   />
-                  <span id={creditsHintId}>
-                    <b id={creditsLabelId}>{t('row.showPointsInMainUi')}</b>
-                    {' '}
-                    <span className="dsm-trae-pref-hint">
+                  <span className="dsm-trae-pref-copy">
+                    <span className="dsm-trae-pref-label" id={creditsLabelId}>{t('row.showPointsInMainUi')}</span>
+                    <span className="dsm-trae-pref-hint" id={creditsHintId}>
                       {t(isCnPool ? 'row.showPointsInMainUiHint' : 'row.showPointsInMainUiHintAi')}
                     </span>
                   </span>
@@ -1408,21 +1408,22 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     the same source the readout's own gate reads (see
                     `creditPositionOn`). */}
                 <label className="dsm-trae-pref dsm-trae-credit-position-pref" title={t('row.creditPositionHint')}>
-                  <select
-                    className="dsm-trae-credit-position"
-                    value={activeRegionOn ? creditPositionOn(activeRegion) : 'composer'}
-                    disabled={!activeRegionOn || settingsScope?.getSnapshot().writable !== true || savingSettings}
-                    aria-label={t('row.creditPositionAria', { region: activeRegion === 'cn' ? t('row.tabCn') : activeRegion === 'enterprise' ? t('row.tabEnterprise') : t('row.tabAi') })}
-                    onChange={event => {
-                      void changeCreditPosition(activeRegion, event.currentTarget.value === 'stats' ? 'stats' : 'composer')
-                    }}
-                  >
-                    <option value="composer">{t('row.creditPositionComposer')}</option>
-                    <option value="stats">{t('row.creditPositionStats')}</option>
-                  </select>
-                  <span>
-                    <b>{t('row.creditPositionLabel')}</b>
-                    {' '}
+                  <span className="dsm-trae-pref-copy">
+                    <span className="dsm-trae-pref-lead">
+                      <span className="dsm-trae-pref-label">{t('row.creditPositionLabel')}</span>
+                      <select
+                        className="dsm-trae-credit-position"
+                        value={activeRegionOn ? creditPositionOn(activeRegion) : 'composer'}
+                        disabled={!activeRegionOn || settingsScope?.getSnapshot().writable !== true || savingSettings}
+                        aria-label={t('row.creditPositionAria', { region: activeRegion === 'cn' ? t('row.tabCn') : activeRegion === 'enterprise' ? t('row.tabEnterprise') : t('row.tabAi') })}
+                        onChange={event => {
+                          void changeCreditPosition(activeRegion, event.currentTarget.value === 'stats' ? 'stats' : 'composer')
+                        }}
+                      >
+                        <option value="composer">{t('row.creditPositionComposer')}</option>
+                        <option value="stats">{t('row.creditPositionStats')}</option>
+                      </select>
+                    </span>
                     <span className="dsm-trae-pref-hint">{t('row.creditPositionHint')}</span>
                   </span>
                 </label>

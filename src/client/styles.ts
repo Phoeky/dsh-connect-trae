@@ -11,9 +11,9 @@ export const TRAE_CARD_CSS = `
 .dsm-plugin-card-open{background:var(--dsw-alias-bg-layer-2,#25262b);border-color:var(--dsw-alias-label-dimmed,#777)}
 .dsm-plugin-card-header{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:transparent;border:0;border-radius:12px;align-items:center;gap:12px;padding:14px 16px;display:flex}
 .dsm-plugin-card-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:-2px}
-.dsm-plugin-card-head{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
+.dsm-plugin-card-head{flex-direction:column;flex:1;gap:6px;min-width:0;display:flex}
 .dsm-plugin-card-title{color:var(--dsw-alias-label-primary,#e6e6e6);font-size:15px;font-weight:600;line-height:1.4}
-.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:13px;line-height:1.5}
+.dsm-plugin-card-description{color:var(--dsw-alias-label-tertiary,#999);font-size:12.5px;line-height:1.55;max-width:76ch}
 /* Pure-CSS caret: the host primitives' chevron icon names are not part of any
    stable contract across DSH releases, so no static import is used 鈥?a border
    caret in the plugin's own CSS is version-proof. */
@@ -35,18 +35,24 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-mainui-switch-label input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-mainui-switch-label:has(input:disabled){opacity:.6;cursor:default}
 .dsm-trae-usage{display:flex;flex-direction:column;gap:16px;margin:0;padding:16px 0 4px}
-.dsm-trae-tabs{display:flex;gap:6px;padding:4px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
-.dsm-trae-tab-cell{display:flex;align-items:center;gap:2px;flex:1;min-width:0}
-.dsm-trae-tab{appearance:none;font:inherit;cursor:pointer;flex:1;min-width:0;border:0;border-radius:7px;padding:7px 10px;color:var(--dsw-alias-label-tertiary,#999);font-size:13px;font-weight:500;line-height:18px;background:transparent;transition:color .15s,background .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dsm-trae-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.dsm-trae-tab-cell{display:flex;align-items:center;gap:4px;min-width:0;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#2a2c33);transition:border-color .15s,background .15s}
+.dsm-trae-tab-cell:hover{border-color:var(--dsw-alias-label-dimmed,#777)}
+/* The selected tab is marked on its CHIP, not on the button inside it: an
+   inset ring on an inner button, inside a bordered strip, drew two borders
+   a few pixels apart and read as a rendering mistake. The chip carries the
+   accent border, so the switch beside the label stays in the same unit. */
+.dsm-trae-tab-cell:has(.dsm-trae-tab-active){border-color:var(--dsw-alias-brand-primary,#5686fe);background:var(--dsw-alias-bg-layer-2,#232529)}
+.dsm-trae-tab{appearance:none;font:inherit;cursor:pointer;flex:1;min-width:0;border:0;border-radius:7px;padding:0;color:var(--dsw-alias-label-tertiary,#999);font-size:13px;font-weight:600;line-height:20px;background:transparent;text-align:left;transition:color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dsm-trae-tab:hover:not(:disabled):not(.dsm-trae-tab-active){color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
-.dsm-trae-tab-active{color:var(--dsw-alias-label-primary,#e6e6e6);background:var(--dsw-alias-bg-layer-2,#232529);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2,#3a3d45)}
+.dsm-trae-tab-active{color:var(--dsw-alias-label-primary,#e6e6e6)}
 .dsm-trae-tab-off{opacity:.55}
 /* Same checkbox as the settings block (.dsm-trae-switch); only the padding
    differs, so it sits inside the tab cell without crowding the label. */
-.dsm-trae-tab-switch{flex:none;padding:0 8px 0 2px}
-.dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:baseline}
-.dsm-trae-tab-hint{margin:0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
+.dsm-trae-tab-switch{flex:none;margin-left:auto;padding-left:10px;border-left:1px solid var(--dsw-alias-border-l1,rgba(127,127,127,.24))}
+.dsm-trae-tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:baseline}
+.dsm-trae-tab-hint{margin:0;padding:0 2px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px;max-width:76ch}
 .dsm-trae-credits-unavailable{margin:10px 0 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
 .dsm-trae-account-value-muted{color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px}
 .dsm-trae-tab-off-notice{margin:0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:10px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:12px;line-height:18px;background:var(--dsw-alias-bg-layer-3,#2a2c33)}
@@ -72,13 +78,22 @@ export const TRAE_CARD_CSS = `
  * 銆屼繚瀛樸€?銆屾斁寮冦€?footer. That is gone with the draft it existed to serve 鈥?this
  * is the sibling dsh-connect-workbuddy card's shape, where a preference is a
  * checkbox on a line that commits on the click. */
-.dsm-trae-prefs{display:flex;flex-direction:column;gap:8px}
-.dsm-trae-pref{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);cursor:pointer}
-.dsm-trae-pref input{flex:none;margin:2px 0 0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-prefs{display:flex;flex-direction:column;gap:14px;padding:2px 2px 0}
+.dsm-trae-pref{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);cursor:pointer}
+.dsm-trae-pref input{flex:none;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-trae-pref-check{inline-size:15px;block-size:15px;margin:3px 0 0}
+/* The label and its explanation used to run together as one wrapped blob
+   ("跟随 Trae 当前登录的账号 在 Trae 桌面端切换登录后…"), which is what made
+   this block read as a wall of text. They are two lines now: what the switch
+   does, then what it means. */
+.dsm-trae-pref-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dsm-trae-pref-label{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-pref-lead{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+.dsm-trae-pref-lead .dsm-trae-pref-label{flex:1;min-width:0}
 .dsm-trae-pref input:disabled{cursor:default}
 .dsm-trae-pref:has(input:disabled){opacity:.6;cursor:default}
 .dsm-trae-pref b{font-weight:500;color:var(--dsw-alias-label-primary,#e6e6e6)}
-.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-trae-pref-hint{color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;line-height:17px;max-width:76ch}
 .dsm-trae-pref span{min-width:0}
 /* The credit readout's seat picker (learned from workbuddy #62). Its OWN label
    class, deliberately not the plain .dsm-trae-pref the two checkboxes use: a
@@ -87,8 +102,11 @@ export const TRAE_CARD_CSS = `
    would otherwise start asserting about a <select>.
    The select keeps its own class for the same reason, and takes the checkbox
    column's width so it reads as a sibling of the box rather than a stray row. */
-.dsm-trae-credit-position-pref{align-items:flex-start}
-.dsm-trae-credit-position{flex:none;max-width:150px;margin-top:-1px;padding:2px 6px;font-size:12px}
+/* The select row has no checkbox, so it borrows the checkbox's column as
+   padding — its label must start on the same left edge as the two labels
+   above it (15px box + 10px gap). */
+.dsm-trae-credit-position-pref{align-items:flex-start;padding-left:25px}
+.dsm-trae-credit-position{flex:none;max-width:150px;margin-top:0;padding:3px 8px;font-size:12px;line-height:16px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:7px;background:var(--dsw-alias-bg-layer-3,#2a2c33);color:var(--dsw-alias-label-primary,#e6e6e6);cursor:pointer}
 .dsm-trae-credit-position:disabled{cursor:default}
 /* The card's checkboxes are the platform's own, styled only with
    accent-color 鈥?the SAME idiom .dsm-trae-mainui-switch-label above already
