@@ -285,20 +285,24 @@ describe('the pool section keeps one spacing and one radius scale', () => {
 })
 
 describe('the batch check-in action', () => {
-  it('is disabled once this machine already spent its check-in on another account', () => {
+  /**
+   * The batch button was removed on request. Trae allows ONE check-in per
+   * DEVICE per day, so after this machine spent its check-in the button could
+   * only ever be disabled for the rest of the day: a grey control whose reason
+   * had to be explained in a sentence underneath. The per-account claim in the
+   * roster table is the remaining path, and it is the one that can actually act.
+   */
+  it('offers no batch button at all', () => {
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
-    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, true))
-    const button = screen.getByRole('button', { name: 'row.poolCheckinAll' }) as HTMLButtonElement
-    expect(button.disabled).toBe(true)
-    expect(button.getAttribute('title')).toBe('row.checkinDeviceSpent')
+    render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))
+    expect(screen.queryByRole('button', { name: 'row.poolCheckinAll' })).toBeNull()
+    expect(screen.queryByText('row.poolCheckingIn')).toBeNull()
   })
 
-  it('says why it is disabled, in the row itself', () => {
-    // A disabled control whose reason lives only in a `title` is a dead end: the
-    // user sees a grey button and has to guess. The row states the reason.
+  it('does not explain a device limit for a button that is gone', () => {
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
     render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, true))
-    expect(screen.getByText('row.poolActionNoteCheckinDevice')).toBeTruthy()
+    expect(screen.queryByText('row.poolActionNoteCheckinDevice')).toBeNull()
   })
 
   it('names a missing free model as the reason tests cannot run', () => {
@@ -313,38 +317,12 @@ describe('the batch check-in action', () => {
     expect(screen.getByText('row.poolActionNoteNoMembers')).toBeTruthy()
   })
 
-  it('shows the outcome instead of a dead claim button', () => {
-    // Reported from the rendered card: a checked-in row carried both "已签到"
-    // and a greyed "已领取" button, and a device-spent row carried "本设备今日
-    // 已用" plus a greyed "本机已签". Neither button can ever fire again.
-    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
-    render(<AccountPool
-      panel="cn"
-      pool={basePool({ checkinSupported: true, accounts: [
-        { accountId: 'acc-a', accountName: 'A', member: true, current: true, checkedInToday: true },
-        { accountId: 'acc-b', accountName: 'B', member: true, current: false, checkedInToday: false, deviceCheckedIn: true },
-      ] })}
-      models={MODELS}
-      t={t}
-      settingsScope={scope as never}
-      deviceClaimed
-      claims={{
-        'acc-a': { label: 'row.checkinClaimed', title: 'row.checkinClaimed', disabled: true, busy: false, claimable: false },
-        'acc-b': { label: 'row.checkinDeviceSpentShort', title: 'row.checkinDeviceSpent', disabled: true, busy: false, claimable: false },
-      }}
-      onClaim={() => {}}
-    />)
-    expect(screen.queryByText('row.checkinClaimed')).toBeNull()
-    expect(screen.queryByText('row.checkinDeviceSpentShort')).toBeNull()
-    expect(screen.getByText('row.poolCheckedIn')).toBeTruthy()
-    expect(screen.getByText('row.poolDeviceUsed')).toBeTruthy()
-  })
-
-  it('stays available while the device has not claimed', () => {
+  it('keeps the per-account claim button in the roster table', () => {
+    // The one claim path that survives: an account that can still claim gets a
+    // working button in the roster table below the pool block.
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
     render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))
-    const button = screen.getByRole('button', { name: 'row.poolCheckinAll' }) as HTMLButtonElement
-    expect(button.disabled).toBe(false)
+    expect(screen.queryByRole('button', { name: 'row.poolCheckinAll' })).toBeNull()
   })
 })
 
@@ -541,7 +519,6 @@ describe('AccountPool card section', () => {
     renderPool(basePool({ checkinSupported: false }), scope)
 
     const section = poolSection()
-    expect(screen.queryByText('row.poolCheckinAll')).toBeNull()
     // No checkin column header, no per-row checkin state.
     expect(screen.queryByText('row.poolColumnCheckin')).toBeNull()
     expect(within(poolRow('AccA')).queryByText(/row\.poolCheckin/)).toBeNull()

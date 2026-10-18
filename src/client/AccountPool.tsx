@@ -23,7 +23,6 @@ import {
 import type {
   TraePanel,
   TraePoolPreferences,
-  TraePoolCheckinRowView,
   TraePoolTestRowView,
   TraeWebModel,
   TraeWebPool,
@@ -94,7 +93,7 @@ interface AccountPoolProps {
   /** Called after a successful save so the card can re-read the pool document. */
   onChanged?: () => void
   /**
-   * Re-read the region's usage after a remove/checkin/test so rows refresh. The
+   * Re-read the region's usage after a remove/test so rows refresh. The
    * card answers with the fetch promise, so an in-row action can await it and
    * only then clear its own busy state.
    */
@@ -244,7 +243,6 @@ function renderRouteError(t: T, status: number, body: { reason?: unknown } | und
     switch (body?.reason) {
       case 'no-members': return t('row.poolErrNoMembers')
       case 'no-live-members': return t('row.poolErrNoLiveMembers')
-      case 'checkin-unsupported': return t('row.poolErrCheckinUnsupported')
       case 'target-model-stale': return t('row.poolErrTargetStale')
       case 'no-free-model': return t('row.poolErrNoFreeModel')
       default: return t('row.poolErrConflict')
@@ -375,7 +373,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   const [targetModelId, setTargetModelId] = useState(saved.targetModelId ?? '')
   const [probeInputTokens, setProbeInputTokens] = useState(saved.probeInputTokens)
   const [selected, setSelected] = useState(() => new Set(saved.memberAccountIds ?? []))
-  const [busy, setBusy] = useState<'checkin' | 'test' | 'delete' | 'save' | undefined>(undefined)
+  const [busy, setBusy] = useState<'test' | 'delete' | 'save' | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
   const [testing, setTesting] = useState<{ done: number } | undefined>(undefined)
   const [rows, setRows] = useState<Readonly<Record<string, TraePoolTestRowView>>>({})
@@ -502,36 +500,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
       const message = error instanceof Error ? error.message : String(error)
       setSaveError(t('row.poolSaveFailed', { message }))
       pushLog('error', t('row.poolLogSaveFailed'))
-    } finally {
-      if (mountRef.current) setBusy(undefined)
-    }
-  }
-
-  const runCheckin = async (): Promise<void> => {
-    if (busy !== undefined) return
-    const members = [...selected]
-    if (members.length === 0) { pushLog('warn', t('row.poolLogNoMembers')); return }
-    setBusy('checkin')
-    setNow(Date.now())
-    pushLog('info', t('row.poolLogCheckinStart', { count: members.length }))
-    try {
-      const response = await fetch(withTraePoolAction(panel, 'checkin'), { method: 'POST' })
-      const body = await response.json() as { rows?: TraePoolCheckinRowView[]; reason?: string } | undefined
-      if (!response.ok) throw new Error(renderRouteError(t, response.status, body))
-      for (const row of body?.rows ?? []) {
-        switch (row.status) {
-          case 'claimed': pushLog('ok', t('row.poolLogCheckinClaimed', { accountName: row.accountName })); break
-          case 'already':
-          case 'device-already': pushLog('info', t('row.poolLogCheckinAlready', { accountName: row.accountName })); break
-          case 'failed':
-          case 'disabled': pushLog('error', t('row.poolLogCheckinFailed', { accountName: row.accountName, message: row.message ?? '' })); break
-        }
-      }
-      pushLog( members.length > 0 && body?.rows ? 'ok' : 'info', t('row.poolLogCheckinDone'))
-      onRefresh?.()
-      setNow(Date.now())
-    } catch (error: unknown) {
-      pushLog('error', t('row.poolLogBatchFailed', { message: error instanceof Error ? error.message : String(error) }))
     } finally {
       if (mountRef.current) setBusy(undefined)
     }
@@ -764,7 +732,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
    */
   const actionNotes: string[] = []
   if (selected.size === 0) actionNotes.push(t('row.poolActionNoteNoMembers'))
-  if (deviceClaimed) actionNotes.push(t('row.poolActionNoteCheckinDevice'))
   if (pool.targetModelSource === 'none') actionNotes.push(t('row.poolActionNoteTestNone'))
 
   return (
@@ -806,19 +773,12 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           </div>
         : null}
 
-      {/* Action row: check in all + test all + a busy line. */}
+      {/* Action row: test all + a busy line. The batch check-in button was
+          removed on request: Trae allows ONE check-in per DEVICE per day, so
+          after any account claimed from this machine the button could only be
+          disabled for the rest of the day — a permanent dead control. The
+          per-account claim in the roster table is the remaining path. */}
       <div className="dsm-trae-pool-actions">
-        {pool.checkinSupported === true
-          ? <button
-              type="button"
-              className="dsm-btn dsm-btn-outline dsm-trae-pool-action-checkin"
-              disabled={busy !== undefined || !writable || selected.size === 0 || deviceClaimed}
-              title={deviceClaimed ? t('row.checkinDeviceSpent') : undefined}
-              onClick={() => { void runCheckin() }}
-            >
-              {busy === 'checkin' ? t('row.poolCheckingIn') : t('row.poolCheckinAll')}
-            </button>
-          : null}
         <button
           type="button"
           className="dsm-btn dsm-btn-outline dsm-trae-pool-action-test"
@@ -828,7 +788,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
         >
           {busy === 'test' ? t('row.poolTesting') : t('row.poolTestAll')}
         </button>
-        {(busy === 'checkin' || busy === 'test' || testing !== undefined)
+        {(busy === 'test' || testing !== undefined)
           ? <span className="dsm-trae-pool-busy" role="status">{t('row.poolBusyHint')}</span>
           : null}
         {topActions === undefined ? null : <span className="dsm-trae-pool-actions-end">{topActions}</span>}
