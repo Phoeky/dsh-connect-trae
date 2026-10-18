@@ -100,7 +100,7 @@ addEventListener('load', () => {
     box: box(el), padL: cs(el,'padding-left'), padR: cs(el,'padding-right'), padT: cs(el,'padding-top'),
     radius: cs(el,'border-radius'), font: cs(el,'font-size'), line: cs(el,'line-height'),
   } : null }
-  for (const sel of ['.dsm-trae-pool','.dsm-trae-pool-card','.dsm-trae-pool-card-head','.dsm-trae-pool-card-note',
+  for (const sel of ['.dsm-trae-pool','.dsm-trae-pool-card','.dsm-trae-pool-card-head',
     '.dsm-trae-pool-table','.dsm-trae-pool-row-head','.dsm-trae-pool-row','.dsm-trae-pool-settings',
     '.dsm-trae-pool-set','.dsm-trae-pool-tools-dashed','.dsm-trae-pool-save-row']) out[sel] = one(sel)
   // every cell of the first two body rows, plus the head cells

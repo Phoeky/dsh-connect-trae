@@ -250,7 +250,6 @@ describe('the pool section keeps one spacing and one radius scale', () => {
       '.dsm-trae-pool-row',
       '.dsm-trae-pool-row-head',
       '.dsm-trae-pool-card-head',
-      '.dsm-trae-pool-card-note',
       '.dsm-trae-pool-set',
     ]) {
       expect(rule(selector), selector).toContain('var(--dsm-trae-pool-pad-x)')

@@ -650,7 +650,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
             <button type="button" className="dsm-btn dsm-btn-outline" disabled={busy !== undefined} onClick={selectNone}>{t('row.poolSelectNone')}</button>
           </div>
         </div>
-        <p className="dsm-trae-pool-card-note">{t('row.poolCardHint')}</p>
         <div className={pool.checkinSupported ? 'dsm-trae-pool-table' : 'dsm-trae-pool-table dsm-trae-pool-table-no-checkin'} role="table" aria-label={t('row.poolMembersTitle')}>
           <MemberRowHeader t={t} checkinSupported={pool.checkinSupported} />
           {pool.accounts.map(account => (
