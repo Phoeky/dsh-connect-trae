@@ -49,9 +49,16 @@ const here = dirname(fileURLToPath(import.meta.url))
  */
 const IS_WINDOWS = process.platform === 'win32'
 
-/** Quote an argument for `cmd.exe` only when the shell would otherwise split it. */
+/**
+ * Quote EVERY argument for `cmd.exe`, not just the ones with spaces.
+ *
+ * `cmd.exe` treats `^ & | < > %` as metacharacters, and `git rev-parse
+ * v9.9.9^{commit}` loses its `^` (the caret escapes the `{`), which made the
+ * script report "找不到 tag" on a tag that was right there. Double quotes make
+ * those characters literal, so quoting always is the only safe default.
+ */
 function shellArg(value) {
-  return IS_WINDOWS && /\s/.test(value) ? `"${value}"` : value
+  return IS_WINDOWS ? `"${value.replace(/"/g, '""')}"` : value
 }
 
 /**
@@ -151,7 +158,10 @@ const publishedBytes = new Map()
 
 let tagExists = true
 try {
-  await git(['rev-parse', '--verify', `${tag}^{commit}`])
+  // `refs/tags/${tag}` rather than `${tag}^{commit}`: the caret is a cmd.exe
+  // escape character, and dropping it here keeps the check identical on both
+  // platforms. `rev-list -n 1` below peels the annotated tag to its commit.
+  await git(['rev-parse', '--verify', `refs/tags/${tag}`])
 } catch {
   tagExists = false
 }
@@ -166,7 +176,7 @@ if (!tagExists) {
   ])
 }
 
-const tagCommit = await git(['rev-parse', `${tag}^{commit}`])
+const tagCommit = await git(['rev-list', '-n', '1', `refs/tags/${tag}`])
 const headCommit = await git(['rev-parse', 'HEAD'])
 const releaseVersion = JSON.parse(await git(['show', `${tag}:package.json`])).version
 record(
