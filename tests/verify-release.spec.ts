@@ -251,14 +251,20 @@ describe('verify-release: preconditions are distinguished from verdicts', () => 
   it('exits 2 when the version is not on the registry', async () => {
     const { root, env } = await fixtureRepo({ 'README.md': '# ok\n' }, { 'README.md': '# ok\n' })
     // The shim serves only 9.9.9, so any other version is unpublished.
+    //
+    // The override rewrites the SHARED `.mjs`, not the `npm` launcher: on
+    // Windows the launcher is `npm.cmd`, so replacing the POSIX file there left
+    // the original shim answering 9.9.9 and this case silently passed as
+    // "published". Both launchers exec this one file, so overriding it is the
+    // only platform-neutral way to say "the registry does not have it".
     const shimDir = join(root, '.shim')
-    await writeFile(join(shimDir, 'npm'), [
-      '#!/bin/bash',
-      'if [ "$1" = "view" ] && [ "$3" = "versions" ]; then echo \'["9.9.8"]\'; exit 0; fi',
-      'if [ "$1" = "view" ] && [ "$3" = "dist-tags.latest" ]; then echo "9.9.8"; exit 0; fi',
-      'exit 0',
+    await writeFile(join(shimDir, 'npm-shim.mjs'), [
+      'const [hook, ...rest] = process.argv.slice(2)',
+      "if (hook === 'view' && rest[1] === 'versions') { console.log(JSON.stringify(['9.9.8'])); process.exit(0) }",
+      "if (hook === 'view' && rest[1] === 'dist-tags.latest') { console.log('9.9.8'); process.exit(0) }",
+      'process.exit(0)',
+      '',
     ].join('\n'))
-    await chmod(join(shimDir, 'npm'), 0o755)
     const result = await runScript(root, [], env)
     expect(result.stdout).toContain('registry 上没有 9.9.9')
     expect(result.code).toBe(2)
