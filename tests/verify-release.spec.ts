@@ -19,7 +19,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -112,29 +112,62 @@ async function fixtureRepo(
   // temp directory with no node_modules, so a real build either fails slowly or
   // hangs (measured: a 120s timeout before this shim existed). The build step
   // is exercised by the real-repo run documented in RELEASING.md, not here.
+  //
+  // WHY NODE SHIMS AND NOT `#!/bin/bash`：a bash shebang cannot run on a Windows
+  // runner at all — there is no `bash` on PATH and `CreateProcess` does not read
+  // shebangs. The tests passed on ubuntu and failed on windows-latest for that
+  // reason alone, so the logic lives in `.mjs` and the two launchers are one line
+  // each. `scripts/verify-release.mjs` goes through the shell on Windows so these
+  // `.cmd` launchers can be found.
   const npmShim = [
-    '#!/bin/bash',
-    'if [ "$1" = "view" ]; then',
-    '  if [ "$3" = "versions" ]; then echo \'["9.9.9"]\'; exit 0; fi',
-    '  if [ "$3" = "dist-tags.latest" ]; then echo "9.9.9"; exit 0; fi',
-    'fi',
-    'if [ "$1" = "pack" ]; then mkdir -p package; cp -R "$SERVED"/* package/ 2>/dev/null; touch dsh-connect-trae-9.9.9.tgz; exit 0; fi',
-    'if [ "$1" = "run" ]; then exit 0; fi',
-    'exit 0',
+    'const [hook, ...rest] = process.argv.slice(2)',
+    "if (hook === 'view') {",
+    "  if (rest[1] === 'versions') { console.log(JSON.stringify(['9.9.9'])); process.exit(0) }",
+    "  if (rest[1] === 'dist-tags.latest') { console.log('9.9.9'); process.exit(0) }",
+    '}',
+    "if (hook === 'pack') {",
+    "  const version = rest[0].split('@')[1]",
+    "  await cp(process.env.SERVED, 'package', { recursive: true })",
+    "  await writeFile(`dsh-connect-trae-${version}.tgz`, '')",
+    '  process.exit(0)',
+    '}',
+    'process.exit(0)',
+    '',
   ].join('\n')
   const tarShim = [
-    '#!/bin/bash',
+    "import { readdir } from 'node:fs/promises'",
+    "import { join } from 'node:path'",
+    'const entries = []',
+    'async function walk(dir, prefix) {',
+    '  for (const item of await readdir(dir, { withFileTypes: true })) {',
+    "    const rel = prefix === '' ? item.name : `${prefix}/${item.name}`",
+    '    if (item.isDirectory()) await walk(join(dir, item.name), rel)',
+    "    else entries.push(`package/${rel}`)",
+    '  }',
+    '}',
+    "await walk(process.env.SERVED, '')",
     // `-tzf` lists the served tree with the `package/` prefix; extraction is a
     // no-op because `pack` already materialised it in place.
-    'if [ "$1" = "-tzf" ]; then cd "$SERVED" && find . -type f | sed "s|^\\./|package/|"; exit 0; fi',
-    'exit 0',
+    "if (process.argv[2] === '-tzf') console.log(entries.join('\\n'))",
+    'process.exit(0)',
+    '',
   ].join('\n')
-  await writeFile(join(shimDir, 'npm'), npmShim)
-  await writeFile(join(shimDir, 'tar'), tarShim)
-  await chmod(join(shimDir, 'npm'), 0o755)
-  await chmod(join(shimDir, 'tar'), 0o755)
 
-  return { root, env: { PATH: `${shimDir}:${process.env.PATH ?? ''}`, SERVED: servedRoot } }
+  const nodePath = process.execPath
+  const posixLauncher = (script: string): string => `#!/bin/sh\nexec "${nodePath}" "$(dirname "$0")/${script}" "$@"\n`
+  const windowsLauncher = (script: string): string => `@echo off\r\n"${nodePath}" "%~dp0${script}" %*\r\n`
+
+  await writeFile(join(shimDir, 'npm-shim.mjs'), `import { cp, writeFile } from 'node:fs/promises'\n${npmShim}`)
+  await writeFile(join(shimDir, 'tar-shim.mjs'), tarShim)
+  for (const script of ['npm', 'tar'] as const) {
+    await writeFile(join(shimDir, script), posixLauncher(`${script}-shim.mjs`))
+    await writeFile(join(shimDir, `${script}.cmd`), windowsLauncher(`${script}-shim.mjs`))
+    await chmod(join(shimDir, script), 0o755)
+  }
+
+  // `delimiter`, not a hard-coded ':': Windows separates PATH entries with ';',
+  // and a colon-joined PATH there is one unusable entry.
+  return { root, env: { PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}`, SERVED: servedRoot } }
 }
 
 describe('verify-release: a matching release passes', () => {

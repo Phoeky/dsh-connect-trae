@@ -37,9 +37,13 @@ describe('the pool probe store', () => {
   it('round-trips a measurement and keeps it private to the user', async () => {
     await writeTraePoolProbes('cn', { [A]: { outcome: 'ok', atMs: NOW, source: 'test-batch', modelId: 'free' } })
     expect(await readTraePoolProbes('cn')).toMatchObject({ [A]: { outcome: 'ok', atMs: NOW } })
-    const mode = (await stat(join(home, '.trae-pool.cn.json'))).mode & 0o777
-    // The file never holds credentials, but it is still per-user state.
-    expect(mode).toBe(0o600)
+    // File permission bits are POSIX-only; Windows exposes no meaningful mode, so
+    // asserting 0o600 there fails on a property the platform cannot hold.
+    if (process.platform !== 'win32') {
+      const mode = (await stat(join(home, '.trae-pool.cn.json'))).mode & 0o777
+      // The file never holds credentials, but it is still per-user state.
+      expect(mode).toBe(0o600)
+    }
   })
 
   it('merges rather than replaces, so a partial batch cannot erase earlier knowledge', async () => {

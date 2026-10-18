@@ -38,8 +38,32 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-const run = promisify(execFile)
+const execFileAsync = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * Windows cannot launch a `.cmd` shim through `execFile`: `CreateProcess` needs a
+ * real executable, and `npm`/`tar` only exist as `.cmd` wrappers there. Going
+ * through the shell is the documented workaround, and it is scoped to Windows so
+ * POSIX keeps the argv it was given (no shell re-quoting of paths).
+ */
+const IS_WINDOWS = process.platform === 'win32'
+
+/** Quote an argument for `cmd.exe` only when the shell would otherwise split it. */
+function shellArg(value) {
+  return IS_WINDOWS && /\s/.test(value) ? `"${value}"` : value
+}
+
+/**
+ * `execFile`, except on Windows where it goes through the shell so `.cmd`
+ * shims (and npm itself) can be found. Arguments are pre-quoted there because
+ * the shell joins them into one command line.
+ */
+function run(file, args, options = {}) {
+  const argv = IS_WINDOWS ? args.map(shellArg) : args
+  return execFileAsync(file, argv, IS_WINDOWS ? { ...options, shell: true } : options)
+}
+
 const repo = join(here, '..')
 
 /**
@@ -254,14 +278,14 @@ if (!skipNpm) {
     await run('npm', ['pack', `dsh-connect-trae@${version}`], { cwd: tarballDir, maxBuffer: 32 * 1024 * 1024 })
     const tgz = `dsh-connect-trae-${version}.tgz`
     // `tar -t` lists the archive; every entry is prefixed with `package/`.
-    const { stdout: listing } = await run('tar', ['-tzf', join(tarballDir, tgz)], { maxBuffer: 32 * 1024 * 1024 })
+    const { stdout: listing } = await run('tar', ['-tzf', tgz], { cwd: tarballDir, maxBuffer: 32 * 1024 * 1024 })
     for (const raw of listing.split('\n')) {
       const path = raw.trim()
       if (path === '' || path.endsWith('/')) continue
       entries.push(path.replace(/^package\//, ''))
     }
     // `tar -xzf` writes the extracted tree next to the archive.
-    await run('tar', ['-xzf', join(tarballDir, tgz)], { cwd: tarballDir })
+    await run('tar', ['-xzf', tgz], { cwd: tarballDir })
 
     /**
      * Files that live in the package but CANNOT be compared byte-for-byte with
