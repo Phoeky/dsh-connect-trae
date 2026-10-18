@@ -8,20 +8,25 @@
  * check whether a change helped. This turns "does it look consistent" into a
  * command:
  *
- *   CARD_SHOT=1 ./node_modules/.bin/vitest run tests/card-shot.spec.tsx
+ *   pnpm card:shot
  *   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
  *     --headless=new --hide-scrollbars --window-size=1200,900 \
  *     --screenshot=/tmp/card-shot.png file:///tmp/card-preview.html
  *
  * The page also carries an `#audit` <pre> with the geometry of every block
  * (padding, radius, font size, cell boxes, control edges); read it back with
- * `--dump-dom` to prove alignment instead of eyeballing it. Skipped unless
- * CARD_SHOT=1, so CI keeps no side effects.
+ * `--dump-dom` to prove alignment instead of eyeballing it.
+ *
+ * Lives in `tools/` (NOT `tests/`) on purpose: it writes a file and needs a real
+ * browser to measure anything, so it is a manual tool. The default `pnpm test`
+ * used to collect it as a permanently SKIPPED test, which made every run report
+ * "1 skipped" and hid the fact that the rest of the suite was green end to end.
+ * `pnpm card:shot` still runs it through its own vitest config.
  */
 import { describe, it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 
-describe.skipIf(process.env.CARD_SHOT !== '1')('card shot', () => {
+describe('card shot', () => {
   it('writes the html', async () => {
     const { render } = await import('@testing-library/react')
     const React = await import('react')

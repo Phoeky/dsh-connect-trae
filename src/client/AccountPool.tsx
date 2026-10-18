@@ -30,7 +30,7 @@ import type {
   TraeWebPoolAccount,
   TraeWebPoolExclusion,
   TraeWebPoolOutcome,
-  TraeWebPoolRemoveAnswer,
+  TraeWebPoolDeleteAnswer,
 } from '../status-paths.ts'
 import { writeSettingsField } from './TraeUsageCard.tsx'
 import type { TraeSettingsKey } from './locales.ts'
@@ -93,8 +93,12 @@ interface AccountPoolProps {
   } | undefined
   /** Called after a successful save so the card can re-read the pool document. */
   onChanged?: () => void
-  /** Re-read the region's usage after a remove/checkin/test so rows refresh. */
-  onRefresh?: () => void
+  /**
+   * Re-read the region's usage after a remove/checkin/test so rows refresh. The
+   * card answers with the fetch promise, so an in-row action can await it and
+   * only then clear its own busy state.
+   */
+  onRefresh?: (() => void | Promise<unknown>) | undefined
   /**
    * Account management (rescan, import/export), rendered inside the settings
    * block. The pool's table IS this card's account table once `pool` exists, so
@@ -258,35 +262,77 @@ interface TestMediaLine {
 }
 
 /**
- * Consume a `test` NDJSON answer line-by-line so rows render while the batch
- * runs. A non-JSON line is skipped; a `{reason:'pool-failed'}` line reports the
- * failure and counts as "saw something". Returns whether any usable line was
- * seen (a body with nothing parseable is a route bug the caller should surface).
+ * Handle ONE NDJSON line of a `test` answer. A non-JSON line is skipped; a
+ * `{reason:'pool-failed'}` line reports the failure and counts as "saw
+ * something". Returns whether the line was usable, so the caller can tell "the
+ * route answered nothing parseable" (a bug to surface) from "not finished yet".
  */
-function consumeTestNdjson(
-  text: string,
+function applyTestLine(
+  line: string,
   t: T,
   onRow: (row: TraePoolTestRowView) => void,
   onFailure: (message: string) => void,
 ): boolean {
-  let sawAny = false
-  for (const line of text.split(/\r?\n/)) {
-    if (line.trim() === '') continue
-    let parsed: TestMediaLine
-    try { parsed = JSON.parse(line) } catch { continue }
-    if (parsed.row !== undefined) {
-      sawAny = true
-      onRow(parsed.row)
-    } else if (parsed.rows !== undefined) {
-      sawAny = true
-      for (const r of parsed.rows) onRow(r)
-    } else if (parsed.reason === 'pool-failed') {
-      sawAny = true
-      onFailure(parsed.error ?? t('row.poolLogGeneric'))
+  if (line.trim() === '') return false
+  let parsed: TestMediaLine
+  try { parsed = JSON.parse(line) } catch { return false }
+  if (parsed.row !== undefined) {
+    onRow(parsed.row)
+    return true
+  }
+  if (parsed.rows !== undefined) {
+    for (const r of parsed.rows) onRow(r)
+    return true
+  }
+  if (parsed.reason === 'pool-failed') {
+    onFailure(parsed.error ?? t('row.poolLogGeneric'))
+    return true
+  }
+  return false
+}
+
+/**
+ * Read the answer line by line AS IT ARRIVES.
+ *
+ * The Host streams one line per account, but `response.text()` waits for the
+ * whole body: with a slow probe the card sat on "逐个处理账号中…" and looked
+ * frozen (a single member could take half a minute). Reading the body stream
+ * makes each finished account appear immediately, and an empty/failed stream
+ * still ends the loop instead of hanging the busy state forever.
+ */
+async function* testLinesOf(response: Response): AsyncGenerator<string> {
+  const body = response.body
+  if (body === null) {
+    for (const line of (await response.text()).split(/\r?\n/)) yield line
+    return
+  }
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let cut = buffer.indexOf('\n')
+    while (cut >= 0) {
+      yield buffer.slice(0, cut)
+      buffer = buffer.slice(cut + 1)
+      cut = buffer.indexOf('\n')
     }
   }
-  return sawAny
+  buffer += decoder.decode()
+  if (buffer.trim() !== '') yield buffer
 }
+
+/**
+ * How long one `test` request may take before the card gives up.
+ *
+ * A probe has its own upstream deadline, but a stalled connection (a restarting
+ * Host, a dropped keep-alive) has none: without this the run button stays
+ * disabled until the page is reloaded, which reads as "测速卡住了". Sized for a
+ * batch: a few seconds per account plus room for the slowest upstream.
+ */
+const TEST_TIMEOUT_MS = 180_000
 
 export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, onRefresh, tools, topActions, details, claims, onClaim, deviceClaimed = false, onBind, bindingBusy }: AccountPoolProps): ReactElement | null {
   // Re-read saved preferences whenever the settings scope changes (a save here,
@@ -329,11 +375,22 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   const [targetModelId, setTargetModelId] = useState(saved.targetModelId ?? '')
   const [probeInputTokens, setProbeInputTokens] = useState(saved.probeInputTokens)
   const [selected, setSelected] = useState(() => new Set(saved.memberAccountIds ?? []))
-  const [busy, setBusy] = useState<'checkin' | 'test' | 'remove' | 'save' | undefined>(undefined)
+  const [busy, setBusy] = useState<'checkin' | 'test' | 'delete' | 'save' | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
   const [testing, setTesting] = useState<{ done: number } | undefined>(undefined)
   const [rows, setRows] = useState<Readonly<Record<string, TraePoolTestRowView>>>({})
-  const [removed, setRemoved] = useState<Readonly<Record<string, boolean>>>({})
+  // Per-row destructive delete IN FLIGHT (`delete` drops the plugin's credential
+  // copy). Same caveat as every other in-flight flag: it must not double as the
+  // success marker, or a completed delete would leave the removed row showing a
+  // spinner forever — so this is a transient Set cleared in `finally`.
+  const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set())
+  // A transient guidance line telling the user where an account that could not
+  // be erased actually lives (a Trae desktop login the plugin does not own).
+  const [deleteHint, setDeleteHint] = useState<
+    | { kind: 'still-signed-in'; accountId: string; accountName: string; hadCopy: boolean }
+    | { kind: 'app-running'; accountId: string; accountName: string; apps: readonly string[] }
+    | undefined
+  >(undefined)
   const [log, setLog] = useState<LogEntry[]>([])
   const [now, setNow] = useState(Date.now())
   const logId = useRef(0)
@@ -360,7 +417,11 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
     const names = pool.memberNames ?? {}
     const result: { accountId: string; accountName: string }[] = []
     for (const id of saved.memberAccountIds ?? []) {
-      if (!knownIds.has(id)) result.push({ accountId: id, accountName: names[id] ?? id })
+      if (knownIds.has(id)) continue
+      // A blank saved name must not render as an empty row: the row is how the
+      // user finds and deletes the copy, so fall back to the id it is keyed by.
+      const name = names[id]
+      result.push({ accountId: id, accountName: name === undefined || name === '' ? id : name })
     }
     return result
   }, [saved, pool, knownIds])
@@ -374,15 +435,17 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
   const writable = settingsScope?.getSnapshot().writable === true
 
   // Reset the draft when the saved preferences change identity (after a save or
-  // a settings re-read elsewhere).
-  const savedKey = useMemo(() => `${panel}:${saved.enabled}:${saved.targetModelId ?? ''}:${saved.probeInputTokens}:${[...(saved.memberAccountIds ?? [])].sort().join('\u0000')}`, [panel, saved])
-  useEffect(() => {
-    setEnabled(saved.enabled)
-    setTargetModelId(saved.targetModelId ?? '')
-    setProbeInputTokens(saved.probeInputTokens)
-    setSelected(new Set(saved.memberAccountIds ?? []))
-    setSaveError(undefined)
-  }, [savedKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // a settings re-read elsewhere) — but field by field. One effect keyed on the
+  // whole saved value would also fire for the in-row 移除, which writes ONLY the
+  // membership, and would silently revert a switch or target model the user is
+  // still editing but has not saved.
+  const savedMemberKey = useMemo(() => [...(saved.memberAccountIds ?? [])].sort().join('\u0000'), [saved])
+  useEffect(() => { setEnabled(saved.enabled) }, [panel, saved.enabled]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setTargetModelId(saved.targetModelId ?? '') }, [panel, saved.targetModelId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setProbeInputTokens(saved.probeInputTokens) }, [panel, saved.probeInputTokens]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSelected(new Set(saved.memberAccountIds ?? [])) }, [panel, savedMemberKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const savedKey = useMemo(() => `${panel}:${saved.enabled}:${saved.targetModelId ?? ''}:${saved.probeInputTokens}:${savedMemberKey}`, [panel, saved.enabled, saved.targetModelId, saved.probeInputTokens, savedMemberKey])
+  useEffect(() => { setSaveError(undefined) }, [savedKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleMember = (accountId: string) => {
     setSelected(prev => {
@@ -484,25 +547,40 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
     setNow(Date.now())
     const targetLabel = targetModelId === '' ? t('row.poolTargetAutoOption') : (models.find(m => m.id === targetModelId)?.name ?? targetModelId)
     pushLog('info', t('row.poolLogTestStart', { count: members.length, model: targetLabel }))
+    const controller = new AbortController()
+    const timer = setTimeout(() => { controller.abort() }, TEST_TIMEOUT_MS)
     try {
-      const response = await fetch(withTraePoolAction(panel, 'test'), { method: 'POST' })
-      const text = await response.text()
+      const response = await fetch(withTraePoolAction(panel, 'test'), { method: 'POST', signal: controller.signal })
       const seen = new Set<string>()
-      const ok = consumeTestNdjson(text, t, r => {
-        setRows(prev => ({ ...prev, [r.accountId]: r }))
-        seen.add(r.accountId)
-        if (mountRef.current) setTesting({ done: seen.size })
-        pushLog(outcomeTone(r.outcome), t('row.poolLogTestRow', { accountName: r.accountName, outcome: outcomeLabel(r.outcome, t) }))
-      }, errorText => {
-        pushLog('error', t('row.poolLogBatchFailed', { message: errorText }))
-      })
-      if (!ok) throw new Error(t('row.poolLogGeneric'))
+      let sawAny = false
+      // Streamed, so each finished account lands while the rest still run.
+      for await (const line of testLinesOf(response)) {
+        const used = applyTestLine(line, t, r => {
+          // The Host streams a `{row}` per account and then a final `{rows}`
+          // summary that repeats them. Logging both would print every account
+          // twice for ONE click, so the second sighting only refreshes the cell.
+          const fresh = !seen.has(r.accountId)
+          setRows(prev => ({ ...prev, [r.accountId]: r }))
+          if (!fresh) return
+          seen.add(r.accountId)
+          if (mountRef.current) setTesting({ done: seen.size })
+          pushLog(outcomeTone(r.outcome), t('row.poolLogTestRow', { accountName: r.accountName, outcome: outcomeLabel(r.outcome, t) }))
+        }, errorText => {
+          pushLog('error', t('row.poolLogBatchFailed', { message: errorText }))
+        })
+        if (used) sawAny = true
+      }
+      if (!sawAny) throw new Error(t('row.poolLogGeneric'))
       pushLog('ok', t('row.poolLogTestDone'))
       onRefresh?.()
       setNow(Date.now())
     } catch (error: unknown) {
-      pushLog('error', t('row.poolLogBatchFailed', { message: error instanceof Error ? error.message : String(error) }))
+      pushLog('error', t(
+        controller.signal.aborted ? 'row.poolLogTimeout' : 'row.poolLogBatchFailed',
+        { message: error instanceof Error ? error.message : String(error) },
+      ))
     } finally {
+      clearTimeout(timer)
       if (mountRef.current) { setBusy(undefined); setTesting(undefined) }
     }
   }
@@ -513,44 +591,167 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
     setNow(Date.now())
     const targetLabel = targetModelId === '' ? t('row.poolTargetAutoOption') : (models.find(m => m.id === targetModelId)?.name ?? targetModelId)
     pushLog('info', t('row.poolLogRowTesting', { accountName: account.accountName }))
+    const controller = new AbortController()
+    const timer = setTimeout(() => { controller.abort() }, TEST_TIMEOUT_MS)
     try {
-      const response = await fetch(withTraePoolAccount(panel, 'test', account.accountId), { method: 'POST' })
-      const text = await response.text()
-      const ok = consumeTestNdjson(text, t, r => {
-        setRows(prev => ({ ...prev, [r.accountId]: r }))
-        pushLog(outcomeTone(r.outcome), t('row.poolLogTestRow', { accountName: r.accountName, outcome: outcomeLabel(r.outcome, t), model: targetLabel }))
-      }, errorText => {
-        pushLog('error', t('row.poolLogBatchFailed', { message: errorText }))
-      })
-      if (!ok) throw new Error(t('row.poolLogGeneric'))
+      const response = await fetch(withTraePoolAccount(panel, 'test', account.accountId), { method: 'POST', signal: controller.signal })
+      let sawAny = false
+      const logged = new Set<string>()
+      for await (const line of testLinesOf(response)) {
+        const used = applyTestLine(line, t, r => {
+          setRows(prev => ({ ...prev, [r.accountId]: r }))
+          // Same reason as the batch: `{row}` lines and the trailing `{rows}`
+          // summary describe the same account, and one click logs it once.
+          if (logged.has(r.accountId)) return
+          logged.add(r.accountId)
+          pushLog(outcomeTone(r.outcome), t('row.poolLogTestRow', { accountName: r.accountName, outcome: outcomeLabel(r.outcome, t), model: targetLabel }))
+        }, errorText => {
+          pushLog('error', t('row.poolLogBatchFailed', { message: errorText }))
+        })
+        if (used) sawAny = true
+      }
+      if (!sawAny) throw new Error(t('row.poolLogGeneric'))
       onRefresh?.()
       setNow(Date.now())
     } catch (error: unknown) {
-      pushLog('error', t('row.poolLogBatchFailed', { message: error instanceof Error ? error.message : String(error) }))
+      pushLog('error', t(
+        controller.signal.aborted ? 'row.poolLogTimeout' : 'row.poolLogBatchFailed',
+        { message: error instanceof Error ? error.message : String(error) },
+      ))
     } finally {
+      clearTimeout(timer)
       if (mountRef.current) setBusy(undefined)
     }
   }
 
-  const removeAccount = async (account: { accountId: string; accountName: string }): Promise<void> => {
-    if (busy !== undefined) return
-    setBusy('remove')
-    setRemoved(prev => ({ ...prev, [account.accountId]: false }))
+  /**
+   * Persist the removal of ONE account out of this panel's membership.
+   *
+   * The slot written is the SAVED slot with ONLY `memberAccountIds` replaced —
+   * never the draft's switch or target model, because the card's own hint
+   * promises only the in-row actions take effect immediately
+   * (「开关与目标模型是偏好，改完要保存」), and never the DOCUMENT's effective
+   * target model either: that falls back to the free model when the user left
+   * the choice automatic, so writing it back would pin a model they never chose.
+   * The membership written is the DRAFT minus the removed id, so a checkbox the
+   * user already toggled on another row is not silently discarded by the
+   * settings re-read this write triggers.
+   */
+  const persistRemoval = async (accountId: string): Promise<void> => {
+    const scope = settingsScope
+    if (scope === undefined) throw new Error(t('row.poolLogSaveFailed'))
+    const base = regionPoolOf(scope.getSnapshot().value, panel)
+    const next: TraePoolPreferences = {
+      ...base,
+      memberAccountIds: [...selected].filter(id => id !== accountId),
+    }
+    await writeSettingsField(
+      scope,
+      'regions',
+      nextRegionPool(scope.getSnapshot().value, panel, next),
+      readBack => {
+        const readPool = regionPoolOf(readBack, panel)
+        return !readPool.memberAccountIds?.includes(accountId)
+          && sameIds(readPool.memberAccountIds, next.memberAccountIds)
+          && (readPool.enabled ?? false) === (base.enabled ?? false)
+          && (readPool.targetModelId ?? '') === (base.targetModelId ?? '')
+          && (readPool.probeInputTokens ?? 0) === (base.probeInputTokens ?? 0)
+      },
+    )
+  }
+
+  /** Product names for the desktop apps a delete touched or was blocked by. */
+  const appLabels = (editions: readonly string[]): string =>
+    editions
+      .map(edition => t(`row.edition${edition === 'cn' ? 'Cn' : edition === 'sg' ? 'Sg' : edition === 'solo' ? 'Solo' : 'SoloSg'}`))
+      .join('、')
+
+  /**
+   * Delete an account from this machine: drop the plugin's own credential copy,
+   * then erase the account's login from Trae's `storage.json`, then clear every
+   * account-holder this card holds (pool probe, settings membership, draft
+   * selection, the serving binding it may have held).
+   *
+   * The app half is what makes the row actually disappear. It has one failure
+   * mode worth its own message: a RUNNING Trae flushes its in-memory state back
+   * over the file, so the Host refuses and names the app, and the card says to
+   * quit it instead of reporting a generic failure the user cannot act on.
+   */
+  const deleteAccount = async (account: { accountId: string; accountName: string }): Promise<void> => {
+    if (busy !== undefined || deletingIds.has(account.accountId)) return
+    setBusy('delete')
+    setDeletingIds(prev => new Set(prev).add(account.accountId))
+    setDeleteHint(undefined)
     try {
-      const response = await fetch(withTraePoolAccount(panel, 'remove', account.accountId), { method: 'POST' })
-      const body = await response.json() as (TraeWebPoolRemoveAnswer & { reason?: string }) | undefined
+      const response = await fetch(withTraePoolAccount(panel, 'delete', account.accountId), { method: 'POST' })
+      const body = await response.json() as (TraeWebPoolDeleteAnswer & { reason?: string }) | undefined
       if (!response.ok) throw new Error(renderRouteError(t, response.status, body))
-      if (body?.removed !== true) throw new Error(t('row.poolRowRemoveFailed'))
-      if (mountRef.current) setRemoved(prev => ({ ...prev, [account.accountId]: true }))
-      pushLog('ok', t('row.poolRowRemoved', { accountName: account.accountName }))
-      // If it was a ghost not in the rendered list, drop it from the draft too.
+      const blocked = body?.blockedApps ?? []
+      if (blocked.length > 0 && body?.deleted !== true) {
+        // Nothing was changed that a refresh could show; a running app owns the
+        // file we would rewrite, so the honest answer is "quit it and retry".
+        setDeleteHint({ kind: 'app-running', accountId: account.accountId, accountName: account.accountName, apps: blocked })
+        pushLog('warn', t('row.poolRowDeleteAppRunning', { accountName: account.accountName, apps: appLabels(blocked) }))
+        setNow(Date.now())
+        return
+      }
+      if (body?.deleted !== true) throw new Error(t('row.poolRowDeleteFailed'))
+      // Drop the plugin's own membership preference for this account so a stale
+      // `memberAccountIds` entry cannot resurrect it (single-writer rule).
+      const wasMember = (saved.memberAccountIds ?? []).includes(account.accountId)
+      let saveFailed = false
+      if (wasMember) {
+        if (!writable) {
+          saveFailed = true
+          setSaveError(t('row.poolSaveFailed', { message: t('row.poolLogSaveFailed') }))
+          pushLog('error', t('row.poolLogSaveFailed'))
+        } else {
+          try {
+            await persistRemoval(account.accountId)
+          } catch (error: unknown) {
+            saveFailed = true
+            const message = error instanceof Error ? error.message : String(error)
+            setSaveError(t('row.poolSaveFailed', { message }))
+            pushLog('error', t('row.poolLogSaveFailed'))
+          }
+        }
+      }
       setSelected(prev => { const next = new Set(prev); next.delete(account.accountId); return next })
-      onRefresh?.()
+      // A failed membership write is the whole outcome: the plugin copy is gone
+      // but the saved preference still lists the account, so it comes back on the
+      // next read. Logging "deleted" (or the sign-out hint) here would announce a
+      // state the next poll immediately contradicts.
+      if (!saveFailed) {
+        if (body.stillSignedIn === true) {
+          // A partial outcome: something still carries the account (an older Host
+          // that never touches the app login, or a rewrite that did not verify).
+          // Say which case rather than claiming a deletion that did not stick.
+          // `hadCopy === false` means the account lives ONLY in the Trae app.
+          const hadCopy = body.hadCopy !== false
+          setDeleteHint({ kind: 'still-signed-in', accountId: account.accountId, accountName: account.accountName, hadCopy })
+          pushLog('warn', t(hadCopy ? 'row.poolRowDeleteStillSigned' : 'row.poolRowDeleteNoCopy', { accountName: account.accountName }))
+        } else {
+          const signedOut = body.signedOutApps ?? []
+          pushLog('ok', signedOut.length === 0
+            ? t('row.poolRowDeleted', { accountName: account.accountName })
+            : t('row.poolRowDeletedSignedOut', { accountName: account.accountName, apps: appLabels(signedOut) }))
+        }
+      }
       setNow(Date.now())
+      if (!saveFailed) await onRefresh?.()
+      // When the row itself vanished we cannot await a refresh that never comes;
+      // when it stayed (desktop login) the refresh repaints it with the hint.
     } catch (error: unknown) {
-      pushLog('error', t('row.poolRowRemoveError', { message: error instanceof Error ? error.message : String(error) }))
+      pushLog('error', t('row.poolRowDeleteError', { accountName: account.accountName, message: error instanceof Error ? error.message : String(error) }))
     } finally {
-      if (mountRef.current) setBusy(undefined)
+      if (mountRef.current) {
+        setBusy(undefined)
+        setDeletingIds(prev => {
+          const next = new Set(prev)
+          next.delete(account.accountId)
+          return next
+        })
+      }
     }
   }
 
@@ -661,6 +862,7 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               models={models}
               rows={rows}
               checked={selected.has(account.accountId)}
+              poolEnabled={pool.enabled === true}
               detail={details?.[account.accountId]}
               claim={claims?.[account.accountId]}
               onClaim={onClaim}
@@ -668,8 +870,9 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               onTest={() => { void runSingleTest(account) }}
               t={t}
               disabled={busy !== undefined || !writable}
-              removing={removed[account.accountId] === true}
-              onRemove={() => { void removeAccount(account) }}
+              deleting={deletingIds.has(account.accountId)}
+              onDelete={() => { void deleteAccount(account) }}
+              canDelete={pool.deleteSupported === true}
               formatNumber={formatNumber}
               relativeAt={relativeAt}
             />
@@ -683,14 +886,28 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
               onToggle={() => { toggleMember(ghost.accountId) }}
               t={t}
               disabled={busy !== undefined || !writable}
-              removing={removed[ghost.accountId] === true}
-              onRemove={() => { void removeAccount(ghost) }}
+              deleting={deletingIds.has(ghost.accountId)}
+              onDelete={() => { void deleteAccount(ghost) }}
+              canDelete={pool.deleteSupported === true}
             />
           ))}
         </div>
         {ghosts.length > 0
           ? <p className="dsm-trae-pool-ghost-note" role="status">
               {t('row.poolGhostMembers', { count: ghosts.length, names: ghosts.map(g => g.accountName).join('、') })}
+            </p>
+          : null}
+        {deleteHint?.kind === 'still-signed-in'
+          ? <p className="dsm-trae-pool-delete-hint" role="status">
+              {t(
+                deleteHint.hadCopy ? 'row.poolDeleteStillSigned' : 'row.poolDeleteNoCopy',
+                { accountName: deleteHint.accountName },
+              )}
+            </p>
+          : null}
+        {deleteHint?.kind === 'app-running'
+          ? <p className="dsm-trae-pool-delete-hint dsm-trae-pool-delete-hint-action" role="status">
+              {t('row.poolDeleteAppRunning', { accountName: deleteHint.accountName, apps: appLabels(deleteHint.apps) })}
             </p>
           : null}
         {dirty ? <p className="dsm-trae-pool-unsaved" role="status">{t('row.poolUnsavedMembers')}</p> : null}
@@ -706,7 +923,24 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           {dirty ? <span className="dsm-trae-pool-dirty" role="status">{t('row.poolDirty')}</span> : null}
         </div>
         {tools === undefined ? null : <div className="dsm-trae-pool-tools dsm-trae-pool-tools-dashed">{tools}</div>}
+        {/* The workflow rule, above the preference notes: get this wrong and an
+            account is silently lost, so it is a warning box rather than a line
+            of grey text. */}
+        <div className="dsm-trae-pool-warning dsm-trae-pool-warning-workflow" role="note">
+          <span className="dsm-trae-pool-warning-title">{t('row.poolMirrorWorkflowTitle')}</span>
+          <span className="dsm-trae-pool-warning-hint">{t('row.poolMirrorWorkflowHint')}</span>
+        </div>
+        {/* The copy file itself, named. "The plugin keeps a real copy" is a claim;
+            "these two ids live in this file right now" is something the user can
+            open with an editor. Rendered only when the Host reports it, so an
+            older Host simply says nothing instead of showing a stale path. */}
+        {pool.copies === undefined
+          ? null
+          : <p className="dsm-trae-pool-note dsm-trae-pool-copyfile" role="note">
+              {t('row.poolCopyFile', { path: pool.copies.path, count: pool.copies.count })}
+            </p>}
         <p className="dsm-trae-pool-note">{t('row.poolSettingsNote')}</p>
+        <p className="dsm-trae-pool-note">{t('row.poolDeleteHint')}</p>
         <div className="dsm-trae-pool-settings">
         <div className="dsm-trae-pool-set">
           <span className="dsm-trae-pool-set-copy">
@@ -883,6 +1117,18 @@ interface MemberRowProps {
   models: readonly TraeWebModel[]
   rows: Readonly<Record<string, TraePoolTestRowView>>
   checked: boolean
+  /**
+   * Whether the pool is on, which decides what the 「派单中」 pill may claim.
+   *
+   * With the pool ON the Host answers `current` with the account its ROTATION
+   * picked, and falls back to the saved selection when the pool holds no member
+   * to pick. Rendering that fallback in pool colours put 「派单中」 on an account
+   * the user had just removed, while the notice above the table said "no pool
+   * members are selected yet" — two lines contradicting each other on one
+   * screen, and the row looked like a removal that did not take. The pill
+   * therefore only names a row that can actually be the rotation's answer.
+   */
+  poolEnabled: boolean
   detail?: TraePoolRowDetail | undefined
   claim?: TraePoolRowClaim | undefined
   onClaim?: ((accountId: string) => void) | undefined
@@ -890,14 +1136,27 @@ interface MemberRowProps {
   onTest: () => void
   t: T
   disabled: boolean
-  removing: boolean
-  onRemove: () => void
+  deleting: boolean
+  onDelete: () => void
+  canDelete: boolean
   formatNumber: (value: number) => string
   relativeAt: (at: number, now: number, t: T) => string
 }
 
-function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, removing, onRemove, formatNumber, relativeAt, detail, claim, onClaim, showCheckin, deviceClaimed }: MemberRowProps): ReactElement {
-  const isCurrent = account.current === true
+function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabled, deleting, onDelete, canDelete, formatNumber, relativeAt, detail, claim, onClaim, showCheckin, deviceClaimed, poolEnabled }: MemberRowProps): ReactElement {
+  /**
+   * Whether this row is the one billing the next request — and, with the pool on,
+   * whether that claim is the pool's own.
+   *
+   * `account.current` alone is not enough: with an empty (or fully excluded) pool
+   * the Host deliberately falls back to the saved selection, so a removed account
+   * stays `current` and the pill would keep announcing it as the pool's pick.
+   * A row can only be the rotation's answer while it is a member.
+   */
+  const isCurrent = account.current === true && (poolEnabled !== true || account.member === true)
+  // `reachable:false` means this machine holds neither a copy nor a sign-in.
+  // Anything that needs a credential (test, check-in) is a guaranteed failure.
+  const hasCopy = account.reachable
   // NON-NEGOTIABLE #7: show General as the number (what chat spends); never
   // rank/display `available` (the wider sum) as "credits".
   const credit = account.generalAvailable
@@ -929,8 +1188,15 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
           />
         </label>
         <span className="dsm-trae-pool-account-name">
-          <span className={`dsm-trae-pool-dot dsm-trae-pool-dot-${excluded ? 'excluded' : 'ok'}`} aria-hidden="true" />
-          <b>{account.accountName}</b>
+          {/* A row with no local copy must not get the healthy green dot: the
+              dot is the first thing scanned, and green next to 「本机无副本」
+              is a contradiction the label cannot undo. */}
+          <span className={`dsm-trae-pool-dot dsm-trae-pool-dot-${account.reachable === false ? 'ghost' : excluded ? 'excluded' : 'ok'}`} aria-hidden="true" />
+          {/* A row whose name never got measured (a member saved before the
+              plugin recorded names) must NOT render as an empty cell: the id is
+              the only handle the user has on it, and a blank row reads as a
+              broken copy rather than as a stale member to delete. */}
+          <b>{account.accountName !== '' ? account.accountName : account.accountId}</b>
           {/* edition · credential source, and the countdown that ends automatic
               renewal. Both used to live in the roster table this section
               replaces, so leaving them out would have been a silent loss of the
@@ -951,6 +1217,9 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
           <span className={checked ? 'dsm-trae-pool-member' : 'dsm-trae-pool-not-member'}>
             {checked ? t('row.poolMember') : t('row.poolNotMember')}
           </span>
+          {account.reachable === false
+            ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-ghost" role="status">{t('row.poolNoCopyTag')}</span>
+            : null}
           {excluded && !probeOnScreen
             ? <span className="dsm-trae-pool-tag dsm-trae-pool-tag-excluded">{exclusionLabel(excluded, t)}</span>
             : null}
@@ -1011,18 +1280,37 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
             </button>}
       </div> : null}
 
-      {/* Row actions: Test / Remove. */}
+      {/* Row actions: Test / Delete. */}
+      {/* Delete is the ONE destructive action on a row: it erases this plugin's
+          OWN credential copy (Trae's desktop login is left alone). There is no
+          separate 「移除」 any more — a second, softer removal that only edited the
+          membership draft was a fork in the road the user could not read, and it
+          was the one they kept reporting as broken. */}
       <div className="dsm-trae-pool-row-actions">
-        <button type="button" className="dsm-btn dsm-btn-outline" disabled={disabled} onClick={onTest}>{t('row.poolRowTest')}</button>
+        {/* A row with no local copy has nothing to test: the Host answers
+            「no stored credential for this account」, which the card renders as
+            「登录凭据被拒」 — a rejection that never happened. Disable the button
+            and say why instead of offering an action that can only fail. */}
         <button
           type="button"
-          className="dsm-btn dsm-btn-outline dsm-trae-pool-remove"
-          disabled={disabled || removing}
-          aria-label={t('row.poolRowRemoveAria', { accountName: account.accountName })}
-          onClick={onRemove}
-        >
-          {removing ? t('row.poolRowRemoving') : t('row.poolRowRemove')}
-        </button>
+          className="dsm-btn dsm-btn-outline"
+          disabled={disabled || hasCopy === false}
+          title={hasCopy === false ? t('row.poolNoCopyTestHint') : undefined}
+          onClick={onTest}
+        >{t('row.poolRowTest')}</button>
+        {/* A Host that cannot delete (legacy, no deleteAccountOf) must not render
+            a button whose only outcome is a 503; `canDelete` mirrors that. */}
+        {canDelete
+          ? <button
+              type="button"
+              className="dsm-btn dsm-btn-outline-danger dsm-trae-pool-delete"
+              disabled={disabled || deleting}
+              aria-label={t('row.poolRowDeleteAria', { accountName: account.accountName })}
+              onClick={onDelete}
+            >
+              {deleting ? t('row.poolRowDeleting') : t('row.poolRowDelete')}
+            </button>
+          : null}
       </div>
     </div>
   )
@@ -1036,11 +1324,12 @@ interface MemberGhostRowProps {
   onToggle: () => void
   t: T
   disabled: boolean
-  removing: boolean
-  onRemove: () => void
+  deleting: boolean
+  onDelete: () => void
+  canDelete: boolean
 }
 
-function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRemove, showCheckin }: MemberGhostRowProps): ReactElement {
+function MemberGhostRow({ ghost, checked, onToggle, t, disabled, deleting, onDelete, canDelete, showCheckin }: MemberGhostRowProps): ReactElement {
   return (
     <div className="dsm-trae-pool-row dsm-trae-pool-row-ghost" role="row" data-account-id={ghost.accountId}>
       <div className="dsm-trae-pool-account">
@@ -1064,22 +1353,25 @@ function MemberGhostRow({ ghost, checked, onToggle, t, disabled, removing, onRem
           <span className="dsm-trae-pool-tag dsm-trae-pool-tag-ghost">{t('row.poolExcludedUnusable')}</span>
         </span>
       </div>
-      {/* A ghost has no live credit / probe — the removal is the point. */}
+      {/* A ghost has no live credit / probe — deleting it (or the stale
+          membership that keeps it here) is the point. */}
       <div className="dsm-trae-pool-credit"><span className="dsm-trae-pool-credit-num">{t('row.poolCreditNone')}</span></div>
       <div className="dsm-trae-pool-probe"><span className="dsm-trae-pool-probe-none">{t('row.poolNeverTested')}</span></div>
       {showCheckin
         ? <div className="dsm-trae-pool-checkin"><span className="dsm-trae-pool-checkin-state dsm-trae-pool-checkin-unknown">{t('row.poolCheckinUnknown')}</span></div>
         : null}
       <div className="dsm-trae-pool-row-actions">
-        <button
-          type="button"
-          className="dsm-btn dsm-btn-outline dsm-trae-pool-remove"
-          disabled={disabled || removing}
-          aria-label={t('row.poolGhostRemoveAria', { accountName: ghost.accountName })}
-          onClick={onRemove}
-        >
-          {removing ? t('row.poolRowRemoving') : t('row.poolGhostRemove')}
-        </button>
+        {canDelete
+          ? <button
+              type="button"
+              className="dsm-btn dsm-btn-outline-danger dsm-trae-pool-delete"
+              disabled={disabled || deleting}
+              aria-label={t('row.poolGhostDeleteAria', { accountName: ghost.accountName })}
+              onClick={onDelete}
+            >
+              {deleting ? t('row.poolRowDeleting') : t('row.poolRowDelete')}
+            </button>
+          : null}
       </div>
     </div>
   )

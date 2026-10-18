@@ -32,7 +32,7 @@ import type { TraeShim, TraeShimPool, TraeShimRoute } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import type { TraeChatRoute } from './solo.ts'
 import type { TraeChatResult, TraeUpstreamClient, TraeUpstreamErrorKind } from './upstream.ts'
-import { TraeSoloBridge } from './solo-bridge.ts'
+import { TraeSoloBridge, wireTargetsOf } from './solo-bridge.ts'
 import type { TraeWireTarget } from './solo-bridge.ts'
 import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
 import { TraeRawChatUpstreamClient } from './raw-upstream.ts'
@@ -122,7 +122,7 @@ export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS,
 export { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
-export { bridgeTraeSoloStream, describeTraeFailure, TraeSoloBridge, type TraeFailure } from './solo-bridge.ts'
+export { bridgeTraeSoloStream, describeTraeFailure, TraeSoloBridge, wireTargetsOf, type TraeFailure, type TraeWireTarget } from './solo-bridge.ts'
 export { TraeSoloRemoteCatalogClient, TRAE_SOLO_REMOTE_BASE, type TraeSoloRemoteCatalogOptions } from './solo-remote.ts'
 export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 export { TRAE_PAY_BASE, TraeUsageClient, type TraeActivityRule, type TraeCheckinClaim, type TraeCheckinStatus, type TraeUsageOptions, type TraeUsagePack, type TraeUsageSnapshot, type TraeUsageSummary, type TraeUsageView } from './usage.ts'
@@ -681,6 +681,25 @@ export function apply(ctx: Context, config: Config): void {
   for (const panel of TRAE_PANELS) {
     wireState[panel] = { callableKeys: new Set(), resolved: false, byId: new Map(), byName: new Map() }
   }
+  /**
+   * Warm the wire map before anything spends quota.
+   *
+   * The bridge resolves a model's directory function from the wire map,
+   * falling back to the catalog row. Right after a restart neither may be
+   * populated yet — discovery only runs when the host refreshes its model list
+   * — and a probe sent without the function is answered `4001` for every model
+   * that a non-default function serves (`Doubao-Seed-Code` lives on
+   * `solo_agent_remote`). One discovery here is cheaper than telling the user
+   * that a working account is unavailable.
+   */
+  const warmWireMap = async (panel: TraePanel): Promise<void> => {
+    if (wireState[panel].resolved) return
+    try {
+      await stacks[panel].discoverModels()
+    } catch {
+      // Not the probe's failure: it still runs and reports what upstream says.
+    }
+  }
   // Drop dead rows from a (possibly stale) saved directory. No-op when that
   // region's wire map has not been resolved yet, so a transient network
   // failure never hides the whole catalog.
@@ -1120,21 +1139,21 @@ export function apply(ctx: Context, config: Config): void {
         // never appear in `callableKeys`.
         wire.resolved = merged.length > 0
         // Populate the startup wire resolver (display id and display name →
-        // wire config_name) so the chat bridge resolves the real config_name
-        // even when the persisted catalog lacks `wireConfigName` (the settings
-        // schema drops unknown fields on save/load).
-        wire.byId.clear()
-        wire.byName.clear()
-        for (const model of merged) {
-          if (model.wireConfigName !== undefined) {
-            const target = {
-              configName: model.wireConfigName,
-              ...model.wireFunction === undefined ? {} : { function: model.wireFunction },
-            }
-            wire.byId.set(model.id, target)
-            wire.byName.set(model.name.trim().toLowerCase(), target)
-          }
-        }
+        // wire config_name + the directory function it was discovered under) so
+        // the chat bridge resolves the real wire target even when the persisted
+        // catalog lacks the row entirely.
+        //
+        // EVERY merged row is registered, not only the ones whose wire
+        // config_name differs from the display id. A pool can name a target
+        // model the user never enabled for chat: the runtime catalog filters by
+        // `enabledModelIds`, so the bridge then sees no row at all -- and with
+        // no resolver entry it sent the raw id under the DEFAULT function,
+        // which answers `4001 config_name rejected` (Doubao-Seed-Code is
+        // served only by `solo_agent_remote`; `solo_work_lite` rejects it).
+        // The identity mapping is what keeps that function knowledge alive.
+        const wireTargets = wireTargetsOf(merged)
+        wire.byId = wireTargets.byId
+        wire.byName = wireTargets.byName
         // Discovery is a pure data return (workbuddy semantics): the card's
         // "refresh" drafts this list for an explicit save, and the startup
         // seed installs it into the live catalog. Writing it here would leak
@@ -1186,6 +1205,18 @@ export function apply(ctx: Context, config: Config): void {
       routeOf: provider => routeOfTraeProvider(provider) ?? 'solo',
     }
   }
+  /**
+   * Mirror each region's Trae login into the plugin's OWN copy as soon as the
+   * plugin loads.
+   *
+   * `accounts()` performs the mirror, so a card read creates the copy — but only
+   * for the tab the user actually opens. Signing in to Trae and never opening
+   * the panel would leave the copy missing until the next visit, which reads as
+   * "the plugin never made a copy". This fire-and-forget pass makes the copies
+   * exist from start-up. Failures are swallowed on purpose: the next card read
+   * retries, and a read-only file system must not break the plugin load.
+   */
+  for (const panel of TRAE_PANELS) void stacks[panel].store.accounts().catch(() => undefined)
 
   /** This panel's saved pool preferences, unwrapped and defaulted to OFF. */
   const poolPreferencesOf = (panel: TraePanel): TraePoolPreferences =>
@@ -1515,6 +1546,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     /** One account's row, through the same bridge and probe the batch uses. */
     const testWith = async (target: { accountId: string; accountName: string }, modelId: string, probeInputTokens: number): Promise<TraePoolTestRow> => {
+      await warmWireMap(panel)
       const [row] = await testAllAccounts([target], modelId, (chatFor, credential, id) => {
         if (credential === undefined) {
           return Promise.resolve({ id, verdict: 'auth' as const, detail: 'no stored credential for this account' })
@@ -1559,6 +1591,7 @@ export function apply(ctx: Context, config: Config): void {
         return state
       },
       test: async (stored, modelId, onRow) => {
+        await warmWireMap(stored)
         const probeInputTokens = probeInputTokensOf(stored)
         const rows = await testAllAccounts(
           await poolTargetsOf(stored),
@@ -1646,12 +1679,25 @@ export function apply(ctx: Context, config: Config): void {
     enabledModelIds: panel => regionStateOf(current(), panel).enabledModelIds ?? [],
     regionEnabled: panel => regionEnabled(current(), panel),
     discoverModels: (panel, signal) => stacks[panel].discoverModels(signal),
-    probeModels: (panel, ids) => stacks[panel].probeModels(ids),
+    probeModels: async (panel, ids) => {
+      await warmWireMap(panel)
+      return stacks[panel].probeModels(ids)
+    },
     rawDiagnostic: panel => stacks[panel].rawDiagnostic(),
     // CN credit balance of an account that is NOT the bound one, read through a
     // throwaway client so the store's selection (and every in-flight chat
     // request using it) is left alone (issue #25).
     creditsOfAccount: (panel, accountId) => stacks[panel].creditsOfAccount(accountId),
+    // Delete ONE account's plugin-owned credential copy (never Trae's own login);
+    // the store reports whether the account is still signed in to the app, which
+    // the card echoes as a sign-out hint rather than a failed deletion.
+    deleteAccountOf: (panel, accountId) => stacks[panel].store.deleteAccount(accountId),
+    // Name the file that holds this panel's copies, so "the plugin keeps a real
+    // copy" is verifiable instead of a claim in a sentence.
+    copiesOf: async panel => ({
+      path: stacks[panel].store.ownAuthPath(),
+      count: (await stacks[panel].store.accounts()).length,
+    }),
     // Per-account status for one row of the card's account table (check-in /
     // balances / subscription), read without disturbing which account is bound.
     accountStateOf: (panel, accountId) => stacks[panel].accountStateOf(accountId),

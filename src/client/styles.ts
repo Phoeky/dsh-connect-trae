@@ -402,8 +402,11 @@ export const TRAE_CARD_CSS = `
 /* Removing an account from the pool is destructive (it drops THIS panel's saved
    membership), so the hover state takes the error tone rather than the neutral
    one every other outline button gets. */
-.dsm-trae-pool-remove{color:var(--dsw-alias-label-secondary,#c6c9d0)}
-.dsm-trae-pool-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#d92d20);border-color:var(--dsw-alias-state-error-primary,#d92d20)}
+/* The destructive Delete is visually heavier than 移除 from the start (error
+   colour idle), so the row shows two distinct actions instead of two greys. */
+.dsm-trae-pool-delete{color:var(--dsw-alias-state-error-primary,#d92d20)}
+.dsm-trae-pool-delete:hover:not(:disabled){background:rgba(217,45,32,.08)}
+.dsm-trae-pool-delete-hint{margin:0;padding:8px var(--dsm-trae-pool-pad-x);border:1px solid var(--dsw-alias-state-error-primary,#d92d20);border-radius:10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0);background:var(--dsw-alias-bg-layer-3,#2a2c33)}
 .dsm-trae-pool-busy{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-action-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
 .dsm-trae-pool-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:var(--dsm-trae-pool-radius);background:var(--dsw-alias-bg-layer-2,#24262c);overflow:hidden}
@@ -514,6 +517,9 @@ export const TRAE_CARD_CSS = `
 /* "Every member is unusable" is the one case that IS the pool's fault, so it
    keeps the warn tone the base class sets. */
 .dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
+/* The sign-in/refresh workflow sits in the settings block: it keeps the warn
+   tone (getting it wrong loses an account) but is not a fault of the pool. */
+.dsm-trae-pool-warning-workflow{margin:0 0 2px}
 .dsm-trae-pool-save-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
 .dsm-trae-pool-save-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .dsm-trae-pool-save-row .dsm-btn{padding:5px 14px;font-size:13px;line-height:1.5}

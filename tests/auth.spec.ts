@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -215,10 +215,104 @@ describe('TraeCredentialStore', () => {
     const soloId = (await store.accounts()).find(account => account.accountName === 'solo-user')!.id
     store.selectAccount(soloId)
     await expect(store.current()).resolves.toMatchObject({ userId: 'solo-user' })
-    // Remove the selected account's file: selection must NOT silently switch
-    // to the remaining account; it must surface as "not found".
+    // Remove the selected account EVERYWHERE: the app's file and the plugin's
+    // copy of it. Selection must NOT silently switch to the remaining account;
+    // it must surface as "not found".
     await rm(solo)
+    await rm(join(dir, 'own'))
     await expect(store.current()).resolves.toBeUndefined()
+  })
+
+  it('mirrors every local login into its own copy on the first account read', async () => {
+    // The app has ONE sign-in slot, so the plugin cannot count on finding a
+    // previous login there later. Each read of the account list therefore copies
+    // whatever the machine holds right now — the copy is what survives the next
+    // app sign-in.
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const sg = join(dir, 'sg.json'); const own = join(dir, 'own.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(sg, intlStorage('sg-token', Date.now() + 3_600_000, 'sg-user'))
+    const store = new TraeCredentialStore({ ownPath: own, refresh: async () => { throw new Error('unused') } })
+    store.candidates = () => [{ edition: 'cn', path: cn, source: 'desktop' }, { edition: 'sg', path: sg, source: 'desktop' }]
+    await expect(store.accounts()).resolves.toHaveLength(2)
+    const doc = JSON.parse(await readFile(own, 'utf8')) as { version: number; credentials: { userId: string; source: string }[] }
+    expect(doc.version).toBe(2)
+    expect(doc.credentials.map(entry => entry.userId).sort()).toEqual(['cn-user', 'sg-user'])
+    expect(doc.credentials.every(entry => entry.source === 'dsh')).toBe(true)
+    // A second refresh does not duplicate or rewrite anything.
+    await expect(store.accounts()).resolves.toHaveLength(2)
+    expect(JSON.parse(await readFile(own, 'utf8'))).toEqual(doc)
+  })
+
+  it('leaves an existing copy alone instead of overwriting it with the app login', async () => {
+    // A copy may hold a token this plugin refreshed — fresher than the app's.
+    // Re-copying on every refresh would throw that away.
+    const dir = await temp()
+    const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('from-app', Date.now() + 3_600_000, undefined, 'user-a'))
+    await writeFile(own, JSON.stringify({ version: 2, credentials: [
+      { accessToken: 'refreshed', refreshToken: 'rt', userId: 'user-a', host: 'https://api.trae.cn', expiresAtMs: Date.now() + 90_000_000, source: 'dsh', edition: 'cn' },
+    ] }))
+    const store = new TraeCredentialStore({ storagePath: desktop, edition: 'cn', ownPath: own, refresh: async () => { throw new Error('unused') } })
+    await expect(store.accounts()).resolves.toHaveLength(1)
+    expect(await readFile(own, 'utf8')).toContain('refreshed')
+    expect(await readFile(own, 'utf8')).not.toContain('from-app')
+  })
+
+  it('keeps the earlier account when the app signs in to a different one', async () => {
+    // The app has ONE sign-in slot and overwrites it. This is the whole point of
+    // the copy: switching accounts inside Trae must not lose the previous one.
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('a-token', Date.now() + 3_600_000, undefined, 'user-a'))
+    const store = new TraeCredentialStore({
+      storagePath: desktop, edition: 'cn', ownPath: own,
+      refresh: async () => { throw new Error('unused') },
+    })
+    expect((await store.accounts()).map(account => account.accountName)).toEqual(['user-a'])
+    // The user signs in to a SECOND account in Trae; the app file now holds B only.
+    await writeFile(desktop, storage('b-token', Date.now() + 3_600_000, undefined, 'user-b'))
+    const after = await store.accounts()
+    expect(after.map(account => account.accountName).sort()).toEqual(['user-a', 'user-b'])
+    const doc = JSON.parse(await readFile(own, 'utf8')) as { credentials: { userId: string }[] }
+    expect(doc.credentials.map(entry => entry.userId).sort()).toEqual(['user-a', 'user-b'])
+  })
+
+  it('answers copyOf from its own copy even when the app file is fresher', async () => {
+    // Export hands credentials out. It must hand out the COPY this plugin owns
+    // and refreshes, never whatever the Trae app has on disk — even when the
+    // app's happens to be newer.
+    const dir = await temp()
+    const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('from-app', Date.now() + 9_000_000, undefined, 'user-a'))
+    await writeFile(own, JSON.stringify({ version: 2, credentials: [
+      { accessToken: 'copy-token', refreshToken: 'rt', userId: 'user-a', host: 'https://api.trae.cn', expiresAtMs: Date.now() + 3_600_000, source: 'dsh', edition: 'cn' },
+    ] }))
+    const store = new TraeCredentialStore({ storagePath: desktop, edition: 'cn', ownPath: own, refresh: async () => { throw new Error('unused') } })
+    const id = (await store.accounts())[0]?.id
+    expect(id).toBeDefined()
+    // The merged view prefers whichever token is fresher — here the app's.
+    await expect(store.credentialOf(id ?? '')).resolves.toMatchObject({ accessToken: 'from-app' })
+    // Handing the credential out reads the plugin's own copy instead.
+    await expect(store.copyOf(id ?? '')).resolves.toMatchObject({ accessToken: 'copy-token', source: 'dsh' })
+    await expect(store.copyOf('unknown-id')).resolves.toBeUndefined()
+    await expect(store.copyOf('')).resolves.toBeUndefined()
+  })
+
+  it('keeps billing its copy after the app signs that account out', async () => {
+    // The point of the mirror: Trae has ONE sign-in slot, so switching accounts
+    // in the app would otherwise lose the previous one. The copy is what keeps a
+    // multi-account pool alive after the app moves on.
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(solo, storage('solo-token', Date.now() + 3_600_000, undefined, 'solo-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn, source: 'desktop' }, { edition: 'solo', path: solo, source: 'desktop' }]
+    const soloId = (await store.accounts()).find(account => account.accountName === 'solo-user')!.id
+    store.selectAccount(soloId)
+    await rm(solo)
+    await expect(store.current()).resolves.toMatchObject({ userId: 'solo-user' })
+    await expect(store.accounts()).resolves.toHaveLength(2)
   })
 
   it('auto mode discovers every desktop edition but only the CN CLI home', () => {
@@ -329,6 +423,106 @@ describe('TraeCredentialStore', () => {
   })
 })
 
+
+  it('deletes the account from this machine: the copy AND the app login', async () => {
+    // "Delete" has to remove BOTH halves. Dropping only the plugin's copy leaves
+    // the same login in the app's storage.json, where the next read finds it and
+    // the row the user just deleted comes straight back.
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('app-a', Date.now() + 3_600_000, undefined, 'user-a'))
+    await writeFile(own, JSON.stringify({ version: 2, credentials: [{
+      accessToken: 'own-a', refreshToken: 'rt', userId: 'user-a', host: 'https://api.trae.cn',
+      expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn',
+    }] }))
+    const store = new TraeCredentialStore({
+      storagePath: desktop, edition: 'cn', ownPath: own,
+      // The injected storage path is a stand-in for the app's file; the real
+      // process probe would report the machine's own running Trae, which has
+      // nothing to do with this fixture.
+      runningApps: async () => new Set(),
+      refresh: async () => { throw new Error('unused') },
+    })
+    const idA = traeAccountId({ userId: 'user-a', edition: 'cn' })!
+    await expect(store.deleteAccount(idA)).resolves.toMatchObject({
+      deleted: true, stillSignedIn: false, hadCopy: true, signedOutApps: ['cn'], blockedApps: [],
+    })
+    expect(await readFile(own, 'utf8')).not.toContain('own-a')
+    // The app's login is gone too, and the rewrite left a way back beside it.
+    expect(await readFile(desktop, 'utf8')).not.toContain('app-a')
+    expect((await readdir(dir)).filter(name => name.includes('dsh-backup'))).toHaveLength(1)
+    await expect(store.accounts()).resolves.toHaveLength(0)
+    // Signing in again is a NEW login, so it is mirrored again — the tombstone
+    // lapses once the app no longer holds the account.
+    await writeFile(desktop, storage('app-a2', Date.now() + 3_600_000, undefined, 'user-a'))
+    await expect(store.accounts()).resolves.toHaveLength(1)
+    expect(await readFile(own, 'utf8')).toContain('app-a2')
+  })
+
+  it('refuses to sign the app out while it runs, and names the app', async () => {
+    // A running Trae keeps its state in memory and flushes it back over the
+    // file, so rewriting the login under it would be undone (or worse). The
+    // honest outcome is "not deleted, quit this app and retry".
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('app-a', Date.now() + 3_600_000, undefined, 'user-a'))
+    await writeFile(own, JSON.stringify({ version: 2, credentials: [{
+      accessToken: 'own-a', refreshToken: 'rt', userId: 'user-a', host: 'https://api.trae.cn',
+      expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn',
+    }] }))
+    const store = new TraeCredentialStore({
+      storagePath: desktop, edition: 'cn', ownPath: own,
+      runningApps: async () => new Set(['cn']),
+      refresh: async () => { throw new Error('unused') },
+    })
+    await expect(store.deleteAccount(traeAccountId({ userId: 'user-a', edition: 'cn' })!)).resolves.toMatchObject({
+      deleted: false, stillSignedIn: true, signedOutApps: [], blockedApps: ['cn'],
+    })
+    // Nothing of the app's file was touched: no rewrite, so no backup either.
+    expect(await readFile(desktop, 'utf8')).toContain('app-a')
+    expect((await readdir(dir)).filter(name => name.includes('dsh-backup'))).toHaveLength(0)
+    // The plugin's own copy is still dropped — that one it owns.
+    expect(await readFile(own, 'utf8')).not.toContain('own-a')
+  })
+
+  it('remembers one deleted account without blocking the mirror of another', async () => {
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(own, JSON.stringify({ version: 2, credentials: [
+      { accessToken: 'own-a', userId: 'user-a', host: 'https://api.trae.cn', expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn' },
+      { accessToken: 'own-b', userId: 'user-b', host: 'https://api.trae.cn', expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn' },
+    ] }))
+    const store = new TraeCredentialStore({ ownPath: own, refresh: async () => { throw new Error('unused') } })
+    store.candidates = () => [{ edition: 'cn', path: desktop, source: 'desktop' }]
+    await expect(store.deleteAccount(traeAccountId({ userId: 'user-a', edition: 'cn' })!)).resolves.toMatchObject({ deleted: true, hadCopy: true })
+    // A brand-new local login is still mirrored although another id is tombstoned.
+    await writeFile(desktop, storage('app-c', Date.now() + 3_600_000, undefined, 'user-c'))
+    const accounts = await store.accounts()
+    expect(accounts.map(account => account.accountName).sort()).toEqual(['user-b', 'user-c'])
+  })
+
+  it('treats an account it never held a copy of as already deleted', async () => {
+    // A ghost member (saved in settings, no local login) has nothing to erase;
+    // "deleted" answers "does this plugin still hold a copy?", so it is complete
+    // and the caller can drop the membership instead of reporting a failure.
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('app-b', Date.now() + 3_600_000, undefined, 'user-b'))
+    const store = new TraeCredentialStore({ storagePath: desktop, edition: 'cn', ownPath: own, refresh: async () => { throw new Error('unused') } })
+    const ghost = traeAccountId({ userId: 'ghost-user', edition: 'cn' })!
+    await expect(store.deleteAccount(ghost)).resolves.toMatchObject({ deleted: true, stillSignedIn: false, hadCopy: false })
+  })
+
+  it('forgets the selection when the deleted copy was the bound account', async () => {
+    const dir = await temp(); const desktop = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(desktop, storage('app-b', Date.now() + 3_600_000, undefined, 'user-b'))
+    await writeFile(own, JSON.stringify({ version: 1, credential: {
+      accessToken: 'own-a', refreshToken: 'rt', userId: 'user-a', host: 'https://api.trae.cn',
+      expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn',
+    } }))
+    const idA = traeAccountId({ userId: 'user-a', edition: 'cn' })!
+    const store = new TraeCredentialStore({ storagePath: desktop, edition: 'cn', accountId: idA, ownPath: own, refresh: async () => { throw new Error('unused') } })
+    await store.deleteAccount(idA)
+    // The binding no longer points at a credential that is gone: the app login is
+    // the answer now, not a dangling id.
+    await expect(store.current()).resolves.toMatchObject({ userId: 'user-b' })
+  })
 describe('TraeCredentialStore with a CLI-only sign-in', () => {
   it('resolves an account from a CLI token with no storage.json present', async () => {
     // Issue #5 regression: on WSL2 the user signs in with `traecli`, which never
@@ -351,7 +545,10 @@ describe('TraeCredentialStore with a CLI-only sign-in', () => {
     const store = new TraeCredentialStore({ storagePath: token, edition: 'cn', ownPath: join(dir, 'own'), refresh: async () => { throw new Error('unused') } })
     const accounts = await store.accounts()
     expect(accounts).toHaveLength(1)
-    expect(accounts[0]).toMatchObject({ source: 'cli', selected: true })
+    // Listed rows are the plugin's COPIES (the store mirrors a local login into
+    // its own file on this very read), so the row reports `dsh` — the card names
+    // it "plugin copy" rather than implying the app's live login is being billed.
+    expect(accounts[0]).toMatchObject({ source: 'dsh', selected: true })
   })
 
   it('explains why every candidate failed instead of reporting a bare signed-out', async () => {

@@ -409,6 +409,40 @@ export interface TraeWireTarget {
 /** Resolves a display model id to its wire target (config_name + function). */
 export type TraeWireResolver = (displayId: string) => TraeWireTarget | undefined
 
+/**
+ * The startup wire map for one region's merged directory.
+ *
+ * EVERY row is registered, not only the ones whose wire config_name differs
+ * from the display id. The runtime catalog is filtered by `enabledModelIds`, so
+ * a pool that targets a model the user never enabled for chat would otherwise
+ * reach the bridge with no catalog row AND no mapping — and the request would
+ * carry the raw id under the DEFAULT function, which answers `4001 config_name
+ * rejected` (Doubao-Seed-Code is served only by `solo_agent_remote`;
+ * `solo_work_lite` rejects it). The identity mapping is what keeps the
+ * discovered function alive for those ids.
+ *
+ * First row wins a display name: two directory ids can share one (`Seed-Code`),
+ * and overwriting would answer with the later row's config_name. Ids are
+ * unique, so `byId` needs no such guard.
+ */
+export function wireTargetsOf(models: readonly { id: string; name: string; wireConfigName?: string; wireFunction?: string }[]): {
+  byId: Map<string, TraeWireTarget>
+  byName: Map<string, TraeWireTarget>
+} {
+  const byId = new Map<string, TraeWireTarget>()
+  const byName = new Map<string, TraeWireTarget>()
+  for (const model of models) {
+    const target: TraeWireTarget = {
+      configName: model.wireConfigName ?? model.id,
+      ...model.wireFunction === undefined ? {} : { function: model.wireFunction },
+    }
+    byId.set(model.id, target)
+    const nameKey = model.name.trim().toLowerCase()
+    if (!byName.has(nameKey)) byName.set(nameKey, target)
+  }
+  return { byId, byName }
+}
+
 /** Native SOLO client wrapper used by the loopback OpenAI adapter. */
 export class TraeSoloBridge implements TraeUpstreamClient {
   constructor(
@@ -447,7 +481,27 @@ export class TraeSoloBridge implements TraeUpstreamClient {
         ? undefined
         : { configName: entry.wireConfigName, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
       const fromResolver = this.wireResolver?.(model) ?? this.wireResolver?.(entry?.name ?? '')
-      const target = fromCatalog ?? fromResolver
+      /**
+       * The catalog row wins the config_name, but it may not know the function.
+       *
+       * A row persisted by an older build -- or one whose `wireFunction` the
+       * settings schema dropped -- carries the name mapping only, and asking
+       * without the function is a `4001 config_name rejected` for every model
+       * that a non-default function serves (`Doubao-Seed-Code` lives on
+       * `solo_agent_remote` alone). The resolver is built from the same
+       * directory, so borrowing its function is safe exactly when both sources
+       * agree on the wire config_name; a disagreement means the resolver found
+       * a different row and its function would be wrong.
+       */
+      const sameWireConfig = fromCatalog !== undefined && fromResolver !== undefined
+        && fromCatalog.configName.toLowerCase() === fromResolver.configName.toLowerCase()
+      const target = fromCatalog !== undefined && fromCatalog.function === undefined
+        && sameWireConfig && fromResolver !== undefined
+        ? {
+            configName: fromCatalog.configName,
+            ...fromResolver.function === undefined ? {} : { function: fromResolver.function },
+          }
+        : fromCatalog ?? fromResolver
       /**
        * Last line of defence: the discovered row's own id.
        *

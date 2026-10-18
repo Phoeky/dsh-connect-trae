@@ -17,7 +17,7 @@
  *  6. a `test` batch renders rows incrementally from a mocked NDJSON stream;
  *  7. `noCandidate: 'empty'` renders the "choose members" warning.
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Primitives ships browser-only CSS modules (shiki, `anser`, `*.module.css`) that
@@ -99,13 +99,17 @@ const MODELS: TraeWebModel[] = [
 ]
 
 interface PoolOverride {
+  enabled?: boolean
   checkinSupported?: boolean
+  deleteSupported?: boolean
   probeInputTokens?: number
   targetModelId?: string
   staleTargetModelId?: string
   targetModelSource?: TraeWebPool['targetModelSource']
   noCandidate?: TraeWebPool['noCandidate']
   memberAccountIds?: readonly string[]
+  memberNames?: Record<string, string>
+  copies?: { path: string; count: number }
   accounts?: readonly TraeWebPoolAccount[]
 }
 
@@ -133,32 +137,34 @@ function basePool(overrides: PoolOverride = {}): TraeWebPool {
     },
   ]
   return {
-    enabled: true,
+    enabled: overrides.enabled ?? true,
     checkinSupported: overrides.checkinSupported ?? true,
+    ...(overrides.deleteSupported === undefined ? {} : { deleteSupported: overrides.deleteSupported }),
+    ...(overrides.copies === undefined ? {} : { copies: overrides.copies }),
     ...(overrides.targetModelId === undefined ? {} : { targetModelId: overrides.targetModelId }),
     targetModelSource: overrides.targetModelSource ?? 'preferred',
     probeInputTokens: overrides.probeInputTokens ?? 0,
     ...(overrides.staleTargetModelId === undefined ? {} : { staleTargetModelId: overrides.staleTargetModelId }),
     memberAccountIds: overrides.memberAccountIds ?? ['acc-a', 'acc-b'],
     effectiveMemberAccountIds: ['acc-a', 'acc-b'],
-    memberNames: {},
+    memberNames: overrides.memberNames ?? {},
     accounts,
     ...(overrides.noCandidate === undefined ? {} : { noCandidate: overrides.noCandidate }),
   }
 }
 
 /** One real pool-account that OLDS (not reachable locally) yet stays in settings. */
-function ghostPool(): TraeWebPool {
+function ghostPool(overrides: PoolOverride = {}): TraeWebPool {
   return {
-    ...basePool({ memberAccountIds: ['acc-a', 'ghost-1'] }),
+    ...basePool({ memberAccountIds: ['acc-a', 'ghost-1'], ...overrides }),
     accounts: [
       {
         accountId: 'acc-a', accountName: 'AccA', current: true, member: true, reachable: true,
         generalAvailable: 12, workAvailable: 3, checkedInToday: false,
       },
     ],
-    memberAccountIds: ['acc-a', 'ghost-1'],
-    memberNames: { 'ghost-1': 'GhostOne' },
+    memberAccountIds: overrides.memberAccountIds ?? ['acc-a', 'ghost-1'],
+    memberNames: overrides.memberNames ?? { 'ghost-1': 'GhostOne' },
   }
 }
 
@@ -182,7 +188,12 @@ function poolSection(): HTMLElement {
  * this, a `scope.set` (e.g. on save) would never re-render the pool, and the
  * "is anything dirty" read would stay stale.
  */
-function renderPool(pool: TraeWebPool, scope: unknown, models: TraeWebModel[] = MODELS): void {
+function renderPool(
+  pool: TraeWebPool,
+  scope: unknown,
+  models: TraeWebModel[] = MODELS,
+  extra: { onRefresh?: () => void | Promise<unknown>; onChanged?: () => void } = {},
+): void {
   function Harness(): ReactElement {
     const [, force] = React.useState(0)
     React.useEffect(() => {
@@ -192,7 +203,9 @@ function renderPool(pool: TraeWebPool, scope: unknown, models: TraeWebModel[] = 
       if (scopeTyped?.subscribe === undefined) return
       return scopeTyped.subscribe(() => force(v => v + 1))
     }, [scope])
-    return <AccountPool panel="cn" pool={pool} models={models} t={t} settingsScope={scope as never} />
+    return <AccountPool panel="cn" pool={pool} models={models} t={t} settingsScope={scope as never}
+      {...(extra.onRefresh === undefined ? {} : { onRefresh: extra.onRefresh })}
+      {...(extra.onChanged === undefined ? {} : { onChanged: extra.onChanged })} />
   }
   render(<Harness />)
 }
@@ -336,10 +349,10 @@ describe('the batch check-in action', () => {
 })
 
 describe('AccountPool card section', () => {
-  it('renders rows from a pool document, including a ghost member and its removal', () => {
+  it('renders rows from a pool document, including a ghost member and its delete action', () => {
     // Seed the saved cn membership so the DRAFT starts with acc-a AND the ghost.
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'ghost-1'] }))
-    renderPool(ghostPool(), scope)
+    renderPool(ghostPool({ deleteSupported: true }), scope)
 
     const section = poolSection()
     // Real member renders with its name, General credit, probe-NEVER and a Test row action.
@@ -349,10 +362,68 @@ describe('AccountPool card section', () => {
     expect(within(section).getByText('GhostOne')).toBeTruthy()
     const ghostRow = poolRow('GhostOne')
     expect(within(ghostRow).getByText('row.poolExcludedUnusable')).toBeTruthy()
-    expect(within(ghostRow).getByText('row.poolGhostRemove')).toBeTruthy()
-    // Ghost remove aria targets the ghost, not a live account.
-    const remove = within(ghostRow).getByRole('button', { name: /row\.poolGhostRemoveAria/ }) as HTMLButtonElement
+    // Ghost delete aria targets the ghost, not a live account.
+    const remove = within(ghostRow).getByRole('button', { name: /row\.poolGhostDeleteAria/ }) as HTMLButtonElement
     expect(remove).toBeTruthy()
+  })
+
+  it('falls back to the saved id when a ghost member has no stored name', () => {
+    // A blank name must not render as an empty row: the row is the only place
+    // the user can see and delete that legacy copy.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'ghost-blank'] }))
+    renderPool(ghostPool({ memberAccountIds: ['acc-a', 'ghost-blank'], memberNames: { 'ghost-blank': '' } }), scope)
+    const row = poolRow('ghost-blank')
+    expect(within(row).getByText('row.poolExcludedUnusable')).toBeTruthy()
+  })
+
+  it('marks a member row that has no local copy, and keeps the id as its name', () => {
+    // The Host also emits rows for saved members it cannot resolve (the user may
+    // have deleted the copy). Such a row renders through MemberRow, so without
+    // this it showed a green dot and NO explanation — a blank line that read as
+    // "the plugin failed to create the copy".
+    const pool = basePool({
+      accounts: [
+        { accountId: 'acc-a', accountName: 'AccA', current: true, member: true, reachable: true, generalAvailable: 30, workAvailable: 0, checkedInToday: false },
+        { accountId: 'c'.repeat(24), accountName: 'c'.repeat(24), current: false, member: true, reachable: false },
+      ],
+      memberAccountIds: ['acc-a', 'c'.repeat(24)],
+    })
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'c'.repeat(24)] }))
+    renderPool(pool, scope)
+    const row = poolRow('c'.repeat(24))
+    expect(within(row).getByText('row.poolNoCopyTag')).toBeTruthy()
+    // Nothing to test: the Host would answer 「no stored credential」, which the
+    // card renders as a credential rejection that never happened.
+    const test = within(row).getByRole('button', { name: /row\.poolRowTest/ }) as HTMLButtonElement
+    expect(test.disabled).toBe(true)
+    // No green dot: the row is not a live account.
+    expect(row.querySelector('.dsm-trae-pool-dot-ghost')).toBeTruthy()
+  })
+
+  it('names the copy FILE, so "the plugin has a real copy" is checkable', () => {
+    // The recurring complaint is "there is no actual copy file, it just follows
+    // the app". Naming the path and the count is the only answer a user can
+    // verify without trusting the card.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool({ copies: { path: '/Users/x/.dsh/.trae-auth.cn.json', count: 2 } }), scope)
+    const line = within(poolSection()).getByText(/\/Users\/x\/\.dsh\/\.trae-auth\.cn\.json/)
+    expect(line.textContent).toContain('2')
+  })
+
+  it('spells out the sign-in/refresh workflow in the settings block', () => {
+    // Trae keeps ONE sign-in, so an account is only preserved if the card is
+    // refreshed before the next sign-in. Getting that wrong silently loses an
+    // account, so the rule is a warning box in the settings block, not grey text.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool(), scope)
+    const section = poolSection()
+    expect(within(section).getByText('row.poolMirrorWorkflowTitle')).toBeTruthy()
+    expect(within(section).getByText('row.poolMirrorWorkflowHint')).toBeTruthy()
+    // It sits above the preference note, so it is read before the controls.
+    const note = within(section).getByText('row.poolSettingsNote')
+    const warning = within(section).getByText('row.poolMirrorWorkflowTitle').parentElement
+    expect(warning?.className).toContain('dsm-trae-pool-warning')
+    expect(note.compareDocumentPosition(warning!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
   })
 
   it('checkbox toggles the draft and marks dirty; saving writes regions via scope.set and clears dirty', async () => {
@@ -496,6 +567,63 @@ describe('AccountPool card section', () => {
     }
   })
 
+  it('renders a streamed row BEFORE the batch finishes, instead of freezing on a spinner', async () => {
+    // The Host streams one NDJSON line per account, but a card that calls
+    // `response.text()` only renders them after the LAST account finishes — the
+    // whole batch looks frozen on "逐个处理账号中…". This body stays open, so a
+    // row that appears now can only have come from the stream itself.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool(), scope)
+
+    let ctrl!: ReadableStreamDefaultController<Uint8Array>
+    const encoder = new TextEncoder()
+    const body = new ReadableStream<Uint8Array>({ start(controller) { ctrl = controller } })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })))
+
+    fireEvent.click(within(poolSection()).getByRole('button', { name: 'row.poolTestAll' }))
+    ctrl.enqueue(encoder.encode(JSON.stringify({
+      row: { accountId: 'acc-a', accountName: 'AccA', modelId: 'free-1', outcome: 'ok', detail: 'fast' },
+    }) + '\n'))
+
+    // No close, no trailing {rows} line: the cell must be there anyway.
+    await waitFor(() => {
+      expect(within(poolRow('AccA')).getByText('row.poolProbeOk')).toBeTruthy()
+    })
+    // The run is still in flight, so the button must still read as busy.
+    expect(screen.getByRole('button', { name: 'row.poolTesting' }).hasAttribute('disabled')).toBe(true)
+
+    ctrl.close()
+    await waitFor(() => { expect(screen.queryByText('row.poolBusyHint')).toBeNull() })
+  })
+
+  it('cancels a test that never answers, so the button cannot stay locked forever', async () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool(), scope)
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+
+    // A connection that never answers and never errors: only the card's own
+    // deadline can end it. The stub honours the abort signal like real fetch.
+    vi.stubGlobal('fetch', vi.fn((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('The operation was aborted.', 'AbortError'))
+      })
+    })))
+
+    fireEvent.click(within(poolSection()).getByRole('button', { name: 'row.poolTestAll' }))
+    // While the run is in flight the button is relabelled and disabled.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'row.poolTesting' })).toBeTruthy()
+    })
+
+    act(() => { vi.advanceTimersByTime(181_000) })
+
+    // After the deadline the label comes back and the button is usable again.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'row.poolTestAll' }).hasAttribute('disabled')).toBe(false)
+    })
+    vi.useRealTimers()
+  })
+
   it('renders a test batch incrementally from a mocked NDJSON stream', async () => {
     // Seed membership so the "test all" button (disabled with no members) is live.
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
@@ -528,6 +656,13 @@ describe('AccountPool card section', () => {
     // Batch completion clears the busy spinner state and logs done.
     await waitFor(() => { expect(screen.queryByText('row.poolBusyHint')).toBeNull() })
     expect(screen.getByText('row.poolLogTestDone')).toBeTruthy()
+
+    // ONE click, ONE log line per account: the Host streams a `{row}` and then a
+    // final `{rows}` summary repeating it, so logging both printed every account
+    // twice ("LaoDing：正常。" twice for a single click).
+    for (const name of ['AccA', 'AccB']) {
+      expect(screen.getAllByText(new RegExp(`"accountName":"${name}"`))).toHaveLength(1)
+    }
   })
 
   it('renders the "choose members" warning when noCandidate is empty', () => {
@@ -537,6 +672,247 @@ describe('AccountPool card section', () => {
     const section = poolSection()
     expect(within(section).getByText('row.poolNoCandidateEmpty')).toBeTruthy()
     expect(within(section).getByText('row.poolNoCandidateEmptyHint')).toBeTruthy()
+  })
+
+})
+
+describe('the destructive delete action', () => {
+  it('is the only destructive action, and hidden unless the Host supports deleting a copy', () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool(), scope) // basePool: no deleteSupported
+    // No delete button when the Host cannot delete...
+    expect(within(poolRow('AccA')).queryByRole('button', { name: /row\.poolRowDelete/ })).toBeNull()
+    // ...and no 移除 button either: it was folded into delete, so the row has only
+    // its Test action left rather than a softer second removal the user cannot read.
+    expect(within(poolRow('AccA')).queryByRole('button', { name: /row\.poolRowRemoveAria/ })).toBeNull()
+    expect(within(poolRow('AccA')).getByRole('button', { name: 'row.poolRowTest' })).toBeTruthy()
+  })
+
+  it('deletes the plugin credential, persists the membership, logs success and awaits refresh', async () => {
+    // Delete drops the plugin's OWN copy and clears every account-holder this card
+    // holds: settings membership, draft selection, the binding it may have held.
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    const refreshed = vi.fn()
+    renderPool(basePool({ deleteSupported: true }), scope, MODELS, { onRefresh: refreshed })
+
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe(withTraePoolAccount('cn', 'delete', 'acc-a'))
+      return new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: false }), { status: 200 })
+    }))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => { expect(calls.length).toBe(1) })
+    const written = calls[0]!.value as { cn?: { pool?: { enabled?: boolean; memberAccountIds?: string[] } } }
+    expect([...(written.cn?.pool?.memberAccountIds ?? [])].sort()).toEqual(['acc-b'])
+    // The switch is a preference, not part of the delete: written back as SAVED.
+    expect(written.cn?.pool?.enabled).toBe(true)
+    // The row is OUT of the pool and the draft agrees, so no stale 「未保存」 nudge.
+    await waitFor(() => { expect(within(poolRow('AccA')).getByText('row.poolNotMember')).toBeTruthy() })
+    expect(screen.queryByText('row.poolUnsavedMembers')).toBeNull()
+    // Success — and no sign-out hint, because the account is gone from the machine.
+    expect(screen.getByText('row.poolRowDeleted:{"accountName":"AccA"}')).toBeTruthy()
+    expect(screen.queryByText(/row\.poolDeleteStillSigned/)).toBeNull()
+    // The re-read was awaited, and the button returned to idle.
+    expect(refreshed).toHaveBeenCalled()
+    await waitFor(() => {
+      const button = within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }) as HTMLButtonElement
+      expect(button.textContent).toBe('row.poolRowDelete')
+      expect(button.disabled).toBe(false)
+    })
+  })
+
+  it('shows the in-flight caption only while the delete is pending', async () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+
+    let settle: ((value: Response) => void) | undefined
+    const pending = new Promise<Response>(resolve => { settle = resolve })
+    vi.stubGlobal('fetch', vi.fn(() => pending))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    const inflight = within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }) as HTMLButtonElement
+    expect(inflight.textContent).toBe('row.poolRowDeleting')
+    expect(inflight.disabled).toBe(true)
+
+    settle?.(new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: false }), { status: 200 }))
+    await waitFor(() => {
+      const done = within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }) as HTMLButtonElement
+      expect(done.textContent).toBe('row.poolRowDelete')
+      expect(done.disabled).toBe(false)
+    })
+  })
+
+  it('tells the user which app to quit when a running Trae blocks the delete', async () => {
+    // A running Trae holds storage.json in memory and flushes it back on exit, so
+    // the Host refuses rather than rewriting a file that will be reverted. The card
+    // must name the app and NOT log a deletion or touch the settings membership.
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    const refreshed = vi.fn()
+    renderPool(basePool({ deleteSupported: true }), scope, MODELS, { onRefresh: refreshed })
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({
+        accountId: 'acc-a', deleted: false, stillSignedIn: true, hadCopy: true, blockedApps: ['cn'], signedOutApps: [],
+      }), { status: 200 })))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('row.poolRowDeleteAppRunning:{"accountName":"AccA","apps":"row.editionCn"}')).toBeTruthy()
+    })
+    // The actionable sentence is on the card, naming the app the user must quit.
+    expect(screen.getByText('row.poolDeleteAppRunning:{"accountName":"AccA","apps":"row.editionCn"}')).toBeTruthy()
+    // Nothing was deleted, so no success line and no sign-out guidance.
+    expect(screen.queryByText(/row\.poolRowDeleted:/)).toBeNull()
+    expect(screen.queryByText(/row\.poolDeleteStillSigned/)).toBeNull()
+    // The settings membership was not rewritten and no refresh was requested.
+    expect(calls).toHaveLength(0)
+    expect(refreshed).not.toHaveBeenCalled()
+  })
+
+  it('leaves an unsaved switch edit alone when an in-row delete persists the membership', async () => {
+    // The delete writes the settings slot, which re-reads `saved` and resets the
+    // draft. It must reset the MEMBERSHIP it just changed, not revert a switch the
+    // user is still editing — the hint says the switch needs an explicit save.
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: false }), { status: 200 })))
+
+    const enableSwitch = within(poolSection()).getByRole('checkbox', { name: 'row.poolEnabled' }) as HTMLInputElement
+    fireEvent.click(enableSwitch)
+    expect((within(poolSection()).getByRole('checkbox', { name: 'row.poolEnabled' }) as HTMLInputElement).checked).toBe(false)
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => { expect(calls.length).toBe(1) })
+    const written = calls[0]!.value as { cn?: { pool?: { enabled?: boolean; memberAccountIds?: string[] } } }
+    expect(written.cn?.pool?.enabled).toBe(true)
+    expect([...(written.cn?.pool?.memberAccountIds ?? [])].sort()).toEqual(['acc-b'])
+    // The draft switch survived the write.
+    await waitFor(() => {
+      expect((within(poolSection()).getByRole('checkbox', { name: 'row.poolEnabled' }) as HTMLInputElement).checked).toBe(false)
+    })
+  })
+
+  it('drops a ghost row once its saved membership is gone', async () => {
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'ghost-1'] }))
+    renderPool(ghostPool({ deleteSupported: true }), scope)
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe(withTraePoolAccount('cn', 'delete', 'ghost-1'))
+      return new Response(JSON.stringify({ accountId: 'ghost-1', deleted: true, stillSignedIn: false }), { status: 200 })
+    }))
+
+    expect(within(poolSection()).getByText('GhostOne')).toBeTruthy()
+    fireEvent.click(within(poolRow('GhostOne')).getByRole('button', { name: /row\.poolGhostDeleteAria/ }))
+
+    await waitFor(() => { expect(calls.length).toBe(1) })
+    const written = calls[0]!.value as { cn?: { pool?: { memberAccountIds?: string[] } } }
+    expect(written.cn?.pool?.memberAccountIds).toEqual(['acc-a'])
+    await waitFor(() => { expect(within(poolSection()).queryByText('GhostOne')).toBeNull() })
+  })
+
+  it('does not commit the settings draft when the deleted account was not a member', async () => {
+    // AccC is listed but never checked in: there is nothing to remove from
+    // settings, so the click must not commit the user's unsaved draft.
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool({
+      deleteSupported: true,
+      accounts: [
+        { accountId: 'acc-a', accountName: 'AccA', current: true, member: true, reachable: true, generalAvailable: 1, workAvailable: 1, checkedInToday: false },
+        { accountId: 'acc-c', accountName: 'AccC', current: false, member: false, reachable: true, generalAvailable: 2, workAvailable: 2, checkedInToday: false },
+      ],
+      memberAccountIds: ['acc-a'],
+    }), scope)
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-c', deleted: true, stillSignedIn: false }), { status: 200 })))
+
+    fireEvent.click(within(poolRow('AccC')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('row.poolRowDeleted:{"accountName":"AccC"}')).toBeTruthy()
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('reports a delete whose settings write did not land instead of logging success', async () => {
+    const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: false }), { status: 200 })))
+    // A Host that accepts the write but keeps answering the old value.
+    scope.set = async (field: string, value: unknown) => {
+      calls.push({ field, value })
+      return true
+    }
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => { expect(screen.getByText('row.poolLogSaveFailed')).toBeTruthy() })
+    expect(screen.queryByText('row.poolRowDeleted:{"accountName":"AccA"}')).toBeNull()
+    // The button still clears: the failure is reported in the log, not by a spinner.
+    await waitFor(() => {
+      const button = within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }) as HTMLButtonElement
+      expect(button.textContent).toBe('row.poolRowDelete')
+    })
+  })
+
+  it('says there was no copy to delete when the account only lives in the Trae app', async () => {
+    // `hadCopy: false` — the plugin held nothing; the account is the app's own
+    // login. Claiming "已删除副本" here would describe an erasure that never
+    // happened, so the card must say the copy does not exist instead.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: true, hadCopy: false }), { status: 200 })))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('row.poolDeleteNoCopy:{"accountName":"AccA"}')).toBeTruthy()
+    })
+    expect(screen.queryByText('row.poolDeleteStillSigned:{"accountName":"AccA"}')).toBeNull()
+    expect(screen.queryByText('row.poolRowDeleted:{"accountName":"AccA"}')).toBeNull()
+    expect(screen.getByText('row.poolRowDeleteNoCopy:{"accountName":"AccA"}')).toBeTruthy()
+  })
+
+  it('shows a sign-out-in-Trae hint instead of success when the account is still signed in to the app', async () => {
+    // Deleting the plugin's copy of an account that is ALSO a desktop login is a
+    // partial erasure: the row will stay (the app still lists it). Lying "已删除"
+    // would push the user to expect a row that cannot leave.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-a', deleted: true, stillSignedIn: true }), { status: 200 })))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('row.poolDeleteStillSigned:{"accountName":"AccA"}')).toBeTruthy()
+    })
+    expect(screen.queryByText('row.poolRowDeleted:{"accountName":"AccA"}')).toBeNull()
+    // The guidance is a warning, not a claim that the erasure failed.
+    expect(screen.getByText('row.poolRowDeleteStillSigned:{"accountName":"AccA"}')).toBeTruthy()
+    await waitFor(() => {
+      const button = within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }) as HTMLButtonElement
+      expect(button.disabled).toBe(false)
+    })
+  })
+
+  it('reports an unconfirmed delete instead of pretending it landed', async () => {
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
+    renderPool(basePool({ deleteSupported: true }), scope)
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ accountId: 'acc-a', deleted: false, stillSignedIn: true }), { status: 200 })))
+
+    fireEvent.click(within(poolRow('AccA')).getByRole('button', { name: /row\.poolRowDeleteAria/ }))
+
+    await waitFor(() => {
+      expect(screen.getByText('row.poolRowDeleteError:{"accountName":"AccA","message":"row.poolRowDeleteFailed"}')).toBeTruthy()
+    })
+    expect(screen.queryByText('row.poolRowDeleted:{"accountName":"AccA"}')).toBeNull()
   })
 })
 
@@ -618,5 +994,53 @@ describe('the pool section is styled', () => {
     for (const name of ['dsm-trae-pool-log-ok', 'dsm-trae-pool-log-info', 'dsm-trae-pool-log-warn', 'dsm-trae-pool-log-error']) {
       expect(TRAE_CARD_CSS).toContain(`.${name}{`)
     }
+  })
+})
+
+/**
+ * The 「派单中」 pill names the row the Host says is billing the next request.
+ *
+ * That answer is only the POOL's while the pool has a member to pick: with the
+ * pool on and nobody in it the Host deliberately falls back to the saved
+ * selection, so a row the user just removed kept `current: true` and the pill
+ * kept announcing it — next to a notice reading "no pool members are selected
+ * yet". Users read the pill, not the settings file, so a successful removal
+ * looked like a failed one.
+ */
+describe('「派单中」 names only the pool\'s own answer', () => {
+  const currentBadge = (): string => 'row.poolCurrentBadge'
+
+  it('hides the pill on a removed (non-member) row the Host still reports current', () => {
+    const { scope } = makeScope()
+    // Exactly the post-removal shape: the saved list is empty, the Host fell back
+    // to the bound account, so that account is `current` but no longer a member.
+    render(<>{renderPoolAndReturn(basePool({
+      memberAccountIds: [],
+      noCandidate: 'empty',
+      accounts: [
+        { accountId: 'acc-a', accountName: 'AccA', current: true, member: false, reachable: true, generalAvailable: 30 },
+        { accountId: 'acc-b', accountName: 'AccB', current: false, member: false, reachable: true, generalAvailable: 8 },
+      ],
+    }), scope)}</>)
+    expect(within(poolSection()).queryByText(currentBadge())).toBeNull()
+  })
+
+  it('keeps the pill when the pool does have a member to serve', () => {
+    const { scope } = makeScope()
+    render(<>{renderPoolAndReturn(basePool(), scope)}</>)
+    const rows = within(poolSection()).getAllByRole('row').filter(row => row.getAttribute('data-account-id') !== null)
+    const currentRow = rows.find(row => within(row).queryByText(currentBadge()) !== null)
+    expect(currentRow?.getAttribute('data-account-id')).toBe('acc-a')
+  })
+
+  it('still shows the pill in manual mode, where the saved selection IS the answer', () => {
+    const { scope } = makeScope()
+    render(<>{renderPoolAndReturn(basePool({
+      enabled: false,
+      accounts: [
+        { accountId: 'acc-a', accountName: 'AccA', current: true, member: false, reachable: true, generalAvailable: 30 },
+      ],
+    }), scope)}</>)
+    expect(within(poolSection()).getByText(currentBadge())).toBeTruthy()
   })
 })

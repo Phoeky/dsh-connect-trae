@@ -1,8 +1,8 @@
-import { createDecipheriv, createHash } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
 export const TRAE_AUTH_STORAGE_KEY = 'iCubeAuthInfo://icube.cloudide'
 
-type EncryptionType = 'aes' | 'aes-private'
+export type EncryptionType = 'aes' | 'aes-private'
 
 const SALT_A = Uint8Array.from([82,9,106,213,48,54,165,56,191,64,163,158,129,243,215,251,124,227,57,130,155,47,255,135,52,142,67,68,196,222,233,203,84,123,148,50,166,194,35,61,238,76,149,11,66,250,195,78,8,46,161,102,40,217,36,178,118,91,162,73,109,139,209,37])
 const SALT_B = Uint8Array.from([31,221,168,51,136,7,199,49,177,18,16,89,39,128,236,95,96,81,127,169,25,181,74,13,45,229,122,159,147,201,156,239,160,224,59,77,174,42,245,176,200,235,187,60,131,83,153,97,23,43,4,126,186,119,214,38,225,105,20,99,85,33,12,125])
@@ -36,6 +36,38 @@ export function decryptTraeStorageValue(encoded: string): string {
   const actual = createHash('sha512').update(plaintext).digest()
   if (!expected.equals(actual)) throw new Error('Trae auth integrity check failed')
   return plaintext.toString('utf8')
+}
+
+/**
+ * Re-encrypts one `iCubeAuthInfo` value the way Trae itself stores it.
+ *
+ * Needed only to rewrite the app's own `storage.json` after removing an account:
+ * dropping a key from the plaintext JSON is useless unless the result is sealed
+ * again with the same scheme, because Trae will fail to decrypt anything else.
+ * The format is [6-byte header][32-byte random][AES-128-CBC ciphertext], where
+ * the key/IV come from `sha512(sha512(random) || salt)` and the ciphertext holds
+ * `sha512(body) || body`. A fresh random is drawn per call, so encrypting the
+ * same plaintext twice yields different bytes — exactly like the app.
+ *
+ * `aes-private` (SALT_C ^ SALT_D) is supported because a value can be read in
+ * that shape; the default matches every value observed in shipped storage files.
+ */
+export function encryptTraeStorageValue(plaintext: string, type: EncryptionType = 'aes'): string {
+  const body = Buffer.from(plaintext, 'utf8')
+  const digest = createHash('sha512').update(body).digest()
+  const random = randomBytes(32)
+  const salt = type === 'aes-private' ? xor(SALT_C, SALT_D) : xor(SALT_A, SALT_B)
+  const first = createHash('sha512').update(random).digest()
+  const derived = createHash('sha512').update(Buffer.concat([first, salt])).digest()
+  const cipher = createCipheriv('aes-128-cbc', derived.subarray(0, 16), derived.subarray(16, 32))
+  const encrypted = Buffer.concat([cipher.update(Buffer.concat([digest, body])), cipher.final()])
+  const header = type === 'aes-private' ? Buffer.from([18, 57, 32, 32, 2, 3]) : Buffer.from([0x74, 0x63, 0x05, 0x10, 0x00, 0x00])
+  return Buffer.concat([header, random, encrypted]).toString('base64')
+}
+
+/** The encryption family of an encoded value, for a byte-faithful rewrite. */
+export function traeStorageValueType(encoded: string): EncryptionType {
+  return encryptionType(Buffer.from(encoded, 'base64').subarray(0, 6))
 }
 
 export function parseTraeAuthValue(value: string): unknown {

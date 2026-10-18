@@ -16,7 +16,8 @@ export interface TraeStorageCandidate {
   source: TraeCredentialSource
 }
 
-const APP_NAMES: Readonly<Record<TraeEdition, string>> = {
+/** The macOS app-support directory name each edition writes, per edition. */
+export const APP_NAMES: Readonly<Record<TraeEdition, string>> = {
   cn: 'Trae CN',
   sg: 'Trae',
   solo: 'TRAE SOLO CN',

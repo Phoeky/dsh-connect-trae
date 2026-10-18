@@ -80,7 +80,7 @@ interface Harness {
   imported: Omit<TraeCredential, 'source'>[][]
 }
 
-async function mount(credentials: TraeCredential[] = [cnCredential()]): Promise<Harness> {
+async function mount(credentials: TraeCredential[] = [cnCredential()], copies: TraeCredential[] = credentials): Promise<Harness> {
   const imported: Omit<TraeCredential, 'source'>[][] = []
   const store = {
     async accounts() {
@@ -90,6 +90,9 @@ async function mount(credentials: TraeCredential[] = [cnCredential()]): Promise<
       }))
     },
     async credentialOf(id: string) { return credentials.find(credential => credential.userId === id) },
+    // The merged view (`credentialOf`) and the plugin's own copies differ in
+    // exactly one way that matters here: an export must carry the COPY.
+    async copyOf(id: string) { return copies.find(credential => credential.userId === id) },
     async importAccounts(values: Omit<TraeCredential, 'source'>[]) { imported.push([...values]); return values.map(value => value.userId) },
   }
   const deps = {
@@ -192,6 +195,31 @@ describe('transfer route', () => {
     expect(payload.accounts[0]?.['uid']).toBe('user-1')
     // Milliseconds, per the sibling contract (no rescale).
     expect(payload.accounts[0]?.['expiresAt']).toBe(1_893_456_000_000)
+  })
+
+  it("exports the plugin's own copy, not the merged view", async () => {
+    // `credentialOf` answers from the merged view (copies + the app's logins,
+    // whichever is fresher). The export route must not use it: what leaves the
+    // machine is the copy this plugin owns. Here the two disagree on the token,
+    // so the exported value names which one the route read.
+    const harness = await mount(
+      [cnCredential({ accessToken: 'tok-merged' })],
+      [cnCredential({ accessToken: 'tok-copy' })],
+    )
+    const { res, status, body } = response()
+    await harness.handler(request('POST', `${TRAE_TRANSFER_PATH}?region=cn&action=export`, { accountIds: ['user-1'] }), res)
+    expect(status()).toBe(200)
+    const payload = body() as { accounts: Record<string, unknown>[] }
+    expect(payload.accounts).toHaveLength(1)
+    expect(payload.accounts[0]?.['access_token']).toBe('tok-copy')
+  })
+
+  it('skips an account that has no copy to export', async () => {
+    const harness = await mount([cnCredential()], [])
+    const { res, status, body } = response()
+    await harness.handler(request('POST', `${TRAE_TRANSFER_PATH}?region=cn&action=export`, { accountIds: ['user-1'] }), res)
+    expect(status()).toBe(200)
+    expect((body() as { accounts: unknown[] }).accounts).toHaveLength(0)
   })
 
   it('refuses an unknown action, a non-POST, and a non-loopback origin', async () => {

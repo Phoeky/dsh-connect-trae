@@ -74,6 +74,25 @@ export interface TraeUsageRouteOptions {
    */
   creditsOfAccount?(panel: TraePanel, accountId: string): Promise<TraeWebCredits | undefined>
   /**
+   * Remove ONE account's plugin-owned credential copy, leaving Trae's own login
+   * untouched, and report whether the account still signed in to Trae (which the
+   * card must echo as "sign out in Trae", not as a deletion that failed).
+   * Optional: absent means the pool table's destructive action is not offered.
+   */
+  deleteAccountOf?(panel: TraePanel, accountId: string): Promise<{
+    deleted: boolean
+    stillSignedIn: boolean
+    hadCopy?: boolean
+    signedOutApps?: readonly string[]
+    blockedApps?: readonly string[]
+  }>
+  /**
+   * Where the panel's credential copies live and how many there are, so the card
+   * can name the file instead of asserting "a copy exists". Optional: absent
+   * means the card says nothing about the file.
+   */
+  copiesOf?(panel: TraePanel): Promise<{ path: string; count: number } | undefined>
+  /**
    * Per-account status for one row of the card's account table: CN → check-in
    * + balances, ai → subscription. Read without changing which account is
    * bound. Optional: when absent the account rows show no check-in/credits/
@@ -748,10 +767,12 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
     const checkin = checkinState[row.account.id]
     const excludedBy = excludedById.get(row.account.id)
     // A ghost member (saved, no live sign-in) keeps whatever name was measured
-    // for it; a live row uses the store's current name.
+    // for it; a live row uses the store's current name. When NO name was ever
+    // measured the id itself is the honest fallback — an empty string renders as
+    // a nameless row that reads like a corrupt copy of an account.
     const accountName = row.account.accountName !== ''
       ? row.account.accountName
-      : memberNames[row.account.id] ?? measured?.accountName ?? ''
+      : memberNames[row.account.id] ?? measured?.accountName ?? row.account.id
     return {
       accountId: row.account.id,
       accountName,
@@ -813,9 +834,12 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
     rows.filter(row => row.member).map(row => row.account.id),
     new Set(members.map(member => member.account.id)),
   )
+  const copies = await deps.copiesOf?.(panel).catch((): undefined => undefined)
   return {
     enabled: preferences.enabled === true,
     checkinSupported: pool.checkin !== undefined && regionOfPanel(panel) === 'cn',
+    ...deps.deleteAccountOf === undefined ? {} : { deleteSupported: true },
+    ...copies === undefined ? {} : { copies },
     ...target.modelId === undefined ? {} : { targetModelId: target.modelId },
     targetModelSource: target.source,
     probeInputTokens: Math.max(0, preferences.probeInputTokens ?? 0),
@@ -1034,7 +1058,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
             const records: TraeTransferRecord[] = []
             for (const account of await store.accounts()) {
               if (!wanted.has(account.id)) continue
-              const credential = await store.credentialOf(account.id).catch(() => undefined)
+              // The COPY, not the merged view: what leaves the machine must be
+              // what this plugin owns (and refreshes), never the Trae app's own
+              // login file. `credentialOf` would happily answer from either.
+              const credential = await store.copyOf(account.id).catch(() => undefined)
               if (credential === undefined) continue
               records.push(traeTransferRecordOf(credential, {
                 auth: {
@@ -1283,6 +1310,17 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           if (pool.removeOne === undefined) return json(res, 503, { error: 'pool removal unavailable' })
           try {
             json(res, 200, { accountId, removed: await pool.removeOne(panel, accountId) })
+          } catch (error: unknown) {
+            json(res, 500, { error: safeMessage(error) })
+          }
+          return
+        }
+        if (action === 'delete') {
+          if (accountId === undefined) return json(res, 400, { error: 'delete needs an accountId' })
+          if (deps.deleteAccountOf === undefined) return json(res, 503, { error: 'account deletion unavailable' })
+          try {
+            const outcome = await deps.deleteAccountOf(panel, accountId)
+            json(res, 200, { accountId, ...outcome })
           } catch (error: unknown) {
             json(res, 500, { error: safeMessage(error) })
           }

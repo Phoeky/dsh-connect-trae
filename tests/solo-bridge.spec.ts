@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bridgeTraeSoloStream, bridgeTraeSoloStreamOrFail, describeTraeFailure, TraeSoloBridge } from '../src/solo-bridge.ts'
+import { bridgeTraeSoloStream, bridgeTraeSoloStreamOrFail, describeTraeFailure, TraeSoloBridge, wireTargetsOf } from '../src/solo-bridge.ts'
 import type { TraeUpstreamClient } from '../src/upstream.ts'
 
 function traeStream(events: string[]): Response {
@@ -173,6 +173,75 @@ describe('TraeSoloBridge', () => {
     }))
     expect(result.ok).toBe(true)
     expect((JSON.parse(forwarded) as Record<string, unknown>)['model']).toBe('Doubao_1_6')
+  })
+
+  it('borrows the directory function when the catalog row carries only the config_name', async () => {
+    let forwarded = ''
+    const upstream: TraeUpstreamClient = {
+      async chatStream(bodyJson) {
+        forwarded = bodyJson
+        return { ok: true, response: traeStream(['event: done\ndata: {"finish_reason":"stop"}\n\n']) }
+      },
+    }
+    // A row saved by a build whose settings schema kept the name mapping but
+    // dropped `wireFunction`: the id is its own config_name, and the function
+    // (`solo_agent_remote`) is the half that a `4001` is made of.
+    const catalog = {
+      current: () => [{ id: 'Doubao-Seed-Code', name: 'Seed-Code', input: ['text'] as ('text' | 'image')[], wireConfigName: 'Doubao-Seed-Code' }],
+    }
+    const resolver = (id: string): { configName: string; function: string } | undefined =>
+      (id === 'Doubao-Seed-Code' || id === 'Seed-Code' ? { configName: 'Doubao-Seed-Code', function: 'solo_agent_remote' } : undefined)
+    const result = await new TraeSoloBridge(upstream, catalog, resolver).chatStream(JSON.stringify({
+      model: 'Doubao-Seed-Code', messages: [{ role: 'user', content: '1+1' }],
+    }))
+    expect(result.ok).toBe(true)
+    const forwardedBody = JSON.parse(forwarded) as Record<string, unknown>
+    expect(forwardedBody['model']).toBe('Doubao-Seed-Code')
+    expect(forwardedBody['function']).toBe('solo_agent_remote')
+  })
+
+  it('keeps the catalog function when the resolver names a different config_name', async () => {
+    let forwarded = ''
+    const upstream: TraeUpstreamClient = {
+      async chatStream(bodyJson) {
+        forwarded = bodyJson
+        return { ok: true, response: traeStream(['event: done\ndata: {"finish_reason":"stop"}\n\n']) }
+      },
+    }
+    // The resolver matched another row by display name; borrowing its function
+    // would stamp the wrong roster entry, so the catalog's own answer stands.
+    const catalog = {
+      current: () => [{ id: 'Doubao-Seed-Code', name: 'Seed-Code', input: ['text'] as ('text' | 'image')[], wireConfigName: 'Doubao_1_6' }],
+    }
+    const resolver = (): { configName: string; function: string } => ({ configName: 'Doubao-Seed-2.0-Code', function: 'solo_work_remote' })
+    const result = await new TraeSoloBridge(upstream, catalog, resolver).chatStream(JSON.stringify({
+      model: 'Doubao-Seed-Code', messages: [{ role: 'user', content: '1+1' }],
+    }))
+    expect(result.ok).toBe(true)
+    const forwardedBody = JSON.parse(forwarded) as Record<string, unknown>
+    expect(forwardedBody['model']).toBe('Doubao_1_6')
+    expect(forwardedBody).not.toHaveProperty('function')
+  })
+
+  it('registers every discovered row, including the ones whose id is their config_name', () => {
+    const { byId, byName } = wireTargetsOf([
+      // The failing case: the pool targets a model the user never enabled for
+      // chat, so the runtime catalog has no row for it. The function must still
+      // reach the bridge, or the call answers 4001 under the default function.
+      { id: 'Doubao-Seed-Code', name: 'Seed-Code', wireFunction: 'solo_agent_remote' },
+      { id: 'glm-5.3', name: 'GLM-5.3', wireFunction: 'solo_work_remote' },
+      { id: 'Doubao-Seed-Code-2', name: 'Seed-Code', wireFunction: 'solo_work_remote' },
+    ])
+    expect(byId.get('Doubao-Seed-Code')).toEqual({ configName: 'Doubao-Seed-Code', function: 'solo_agent_remote' })
+    expect(byId.get('glm-5.3')).toEqual({ configName: 'glm-5.3', function: 'solo_work_remote' })
+    // The display name is the fallback lookup, so it keeps the FIRST row that
+    // claimed it: answering with a later row's config_name would be a 4001.
+    expect(byName.get('seed-code')).toEqual({ configName: 'Doubao-Seed-Code', function: 'solo_agent_remote' })
+  })
+
+  it('prefers the wire config_name over the identity mapping', () => {
+    const { byId } = wireTargetsOf([{ id: 'Seed-Code', name: 'Seed-Code', wireConfigName: 'Doubao_1_6', wireFunction: 'solo_agent_remote' }])
+    expect(byId.get('Seed-Code')).toEqual({ configName: 'Doubao_1_6', function: 'solo_agent_remote' })
   })
 
   it('preserves only a reasoning effort advertised by the selected model', async () => {

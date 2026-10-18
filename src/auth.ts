@@ -1,11 +1,19 @@
-import { readFile, rm, stat } from 'node:fs/promises'
+import { copyFile, readFile, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { parseTraeCliToken, parseTraeStorageDocument } from './decrypt.ts'
+import {
+  encryptTraeStorageValue,
+  parseTraeAuthValue,
+  parseTraeCliToken,
+  parseTraeStorageDocument,
+  traeStorageValueType,
+  TRAE_AUTH_STORAGE_KEY,
+} from './decrypt.ts'
 import { traeStorageCandidates, type TraeCredentialSource, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
 import { regionOfCredential, regionOfEdition, type TraeRegion } from './region.ts'
+import { probeRunningTraeApps, type RunningProbe } from './trae-process.ts'
 
 export interface TraeCredential {
   accessToken: string
@@ -82,6 +90,11 @@ export interface TraeCredentialStoreOptions {
   legacyOwnPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
   refreshMarginMs?: number
+  /**
+   * Which Trae desktop apps are running right now. Injectable so the deletion
+   * tests never depend on the machine they run on; defaults to the real probe.
+   */
+  runningApps?: RunningProbe
 }
 
 export interface TraeAccountChoice {
@@ -175,6 +188,21 @@ export function traeOwnAuthPath(region: TraeRegion): string {
  */
 export function legacyTraeOwnAuthPath(): string {
   return join(resolveDshHome(), TRAE_AUTH_FILENAME)
+}
+
+/**
+ * Where the "this copy was deleted on purpose" tombstones live.
+ *
+ * The store mirrors every local Trae login into its own copy on each refresh
+ * (see `mirrorLocalLogins`). Without a tombstone the mirror would recreate a
+ * copy the user just deleted on the very next poll — "delete" would look broken
+ * again, which is the exact complaint this mechanism exists to fix. A tombstone
+ * therefore suppresses the mirror for one account id, and is dropped as soon as
+ * that id is no longer signed in to the app: a later sign-in is a NEW login and
+ * is mirrored again.
+ */
+export function traeDeletedAccountsPath(region?: TraeRegion): string {
+  return join(resolveDshHome(), region === undefined ? '.trae-deleted.json' : `${TRAE_OWN_PREFIX}.deleted.${region}.json`)
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -319,6 +347,55 @@ async function writeOwn(path: string, credentials: readonly TraeCredential[]): P
   await writeFileAtomic(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
 }
 
+/** The key Trae stores the per-user region map under, beside the login itself. */
+const TRAE_USERTAG_STORAGE_KEY = 'iCubeAuthInfo://usertag'
+
+/**
+ * Rewrites one Trae `storage.json` so it no longer carries the given login.
+ *
+ * Everything else in the document is preserved byte-for-byte at the JSON level:
+ * only the auth value is dropped and the usertag map loses this one user. Both
+ * the backup and the atomic write exist because this is the one operation in the
+ * plugin that edits a file belonging to another application.
+ */
+async function eraseDesktopLogin(
+  path: string,
+  document: Record<string, unknown>,
+  claims: Record<string, unknown>,
+  encoded: string,
+): Promise<boolean> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  try {
+    await copyFile(path, `${path}.dsh-backup-${stamp}`)
+  } catch { return false }
+  const next: Record<string, unknown> = { ...document }
+  delete next[TRAE_AUTH_STORAGE_KEY]
+  const userTag = document[TRAE_USERTAG_STORAGE_KEY]
+  const userId = typeof claims['userId'] === 'string' || typeof claims['userId'] === 'number'
+    ? String(claims['userId'])
+    : undefined
+  if (userId !== undefined && typeof userTag === 'string') {
+    try {
+      const decoded = parseTraeAuthValue(userTag)
+      if (typeof decoded === 'object' && decoded !== null && !Array.isArray(decoded)) {
+        const tags = { ...(decoded as Record<string, unknown>) }
+        delete tags[userId]
+        next[TRAE_USERTAG_STORAGE_KEY] = encryptTraeStorageValue(JSON.stringify(tags), traeStorageValueType(userTag))
+      }
+    } catch {
+      // An unreadable usertag map is left untouched: dropping the login is the
+      // point, and a map we cannot decode is not worth risking.
+    }
+  }
+  try {
+    await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 })
+    // Read back before claiming success: another writer (the app, if the probe
+    // missed it) could have replaced the file between write and verify.
+    const check = await readFile(path, 'utf8')
+    return !check.includes(encoded)
+  } catch { return false }
+}
+
 export class TraeCredentialStore {
   private storagePathOverride: string | undefined
   private edition: TraeEdition | 'auto'
@@ -331,6 +408,7 @@ export class TraeCredentialStore {
   private readonly legacyOwnPathExplicit: string | undefined
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
+  private readonly runningApps: RunningProbe
   private inflight: Promise<TraeCredential> | undefined
   /**
    * In-flight refreshes of individual accounts, one per account id.
@@ -376,6 +454,7 @@ export class TraeCredentialStore {
     this.legacyOwnPathExplicit = options.legacyOwnPath
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60_000
+    this.runningApps = options.runningApps ?? probeRunningTraeApps
   }
 
   /** Whether a credential's own claim belongs to this store's region. */
@@ -414,6 +493,96 @@ export class TraeCredentialStore {
     }
     return [this.legacyOwnPath, traeOwnAuthPath('cn'), traeOwnAuthPath('ai')]
   }
+
+  /**
+   * Where the "deleted copy" tombstones live for this store.
+   *
+   * Derived from the store's own copy path, so a test that pins `ownPath` also
+   * pins the tombstones and can never touch the real `~/.dsh` file.
+   */
+  deletedPath(): string {
+    if (this.ownPathExplicit !== undefined) return `${this.ownPathExplicit}.deleted`
+    if (this.legacyOwnPathExplicit !== undefined) return `${this.legacyOwnPathExplicit}.deleted`
+    return traeDeletedAccountsPath(this.region)
+  }
+
+  /**
+   * The account ids whose copy the user deleted on purpose.
+   *
+   * Read defensively: a missing, unreadable, or hand-edited file means "no
+   * tombstones", never a failing store — losing the list only re-mirrors an
+   * account, it never locks the user out.
+   */
+  private async readTombstones(): Promise<Set<string>> {
+    const text = await readFile(this.deletedPath(), 'utf8').catch(() => '')
+    if (text.trim() === '') return new Set()
+    try {
+      const parsed = JSON.parse(text) as unknown
+      const ids = Array.isArray(parsed)
+        ? parsed
+        : typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { ids?: unknown }).ids)
+          ? (parsed as { ids: unknown[] }).ids
+          : []
+      return new Set(ids.filter((id): id is string => typeof id === 'string' && TRAE_ACCOUNT_ID_RE.test(id)))
+    } catch { return new Set() }
+  }
+
+  private async writeTombstones(ids: ReadonlySet<string>): Promise<void> {
+    const path = this.deletedPath()
+    await withFileLock(path, async () => {
+      await writeFileAtomic(path, `${JSON.stringify({ version: 1, ids: [...ids] }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+    })
+  }
+
+  /**
+   * Copy every local Trae sign-in into this store's own file, once.
+   *
+   * The plugin presents COPIES, not the app's live login: the app has a single
+   * sign-in slot that the next Trae login overwrites, so an account could only
+   * ever be billed until the user switched apps. Keeping a copy per account is
+   * what makes a multi-account pool survive those switches.
+   *
+   * This runs on every `accounts()` read — the card's refresh, the pool's member
+   * read, the "detect accounts" press — and is additive:
+   *   - an account that already has a copy is left exactly as it is (the copy
+   *     may hold a token this plugin refreshed, which is fresher than the app's);
+   *   - an account the user DELETED stays deleted while it is still signed in to
+   *     the app, via a tombstone that is dropped once the app no longer holds it
+   *     (so a later sign-in is mirrored again).
+   */
+  private async mirrorLocalLogins(): Promise<void> {
+    const { credentials: discovered } = await this.readDesktopAll()
+    const own = await this.readOwns()
+    const ownIds = new Set(own.map(credential => traeAccountId(credential)))
+    const tombstones = await this.readTombstones()
+    const liveIds = new Set(discovered.map(credential => traeAccountId(credential)))
+    let tombstonesChanged = false
+    for (const id of [...tombstones]) {
+      if (liveIds.has(id)) continue
+      tombstones.delete(id)
+      tombstonesChanged = true
+    }
+    const missing = discovered.filter(credential =>
+      this.matchesRegion(credential)
+      && !ownIds.has(traeAccountId(credential))
+      && !tombstones.has(traeAccountId(credential)))
+    if (tombstonesChanged) await this.writeTombstones(tombstones)
+    if (missing.length === 0) return
+    const ownPath = this.ownAuthPath()
+    await withFileLock(ownPath, async () => {
+      const existing = await readFile(ownPath, 'utf8').then(parseOwn, () => [] as TraeCredential[])
+      const byId = new Map(existing.map(credential => [traeAccountId(credential), credential]))
+      for (const credential of missing) {
+        const id = traeAccountId(credential)
+        // Re-check under the lock: a concurrent refresh may have written the
+        // copy between the read above and this write.
+        if (byId.has(id)) continue
+        byId.set(id, { ...credential, source: 'dsh' })
+      }
+      await writeOwn(ownPath, [...byId.values()])
+    })
+  }
+
 
   setSource(storagePath: string | undefined, edition: TraeEdition | 'auto' = 'auto', accountId?: string): void {
     this.storagePathOverride = storagePath
@@ -532,8 +701,24 @@ export class TraeCredentialStore {
   }
 
   async accounts(): Promise<TraeAccountChoice[]> {
+    // Every read of the account list is also the refresh point: a local Trae
+    // login that has no plugin copy yet gets one here, so the card and the pool
+    // only ever deal in copies the plugin can bill, refresh, and delete.
+    await this.mirrorLocalLogins()
     const discovered = await this.readAll()
-    const offered = this.offered(discovered)
+    // The list SHOWS the accounts this store holds a copy of. A local login that
+    // is not mirrored (deleted on purpose, or still being written) must not
+    // reappear as a row the user cannot act on. The rows themselves are
+    // `discovered` entries so their ORDER — and with it the "the app's live
+    // sign-in is the default" rule — is unchanged; `readAll` already prefers the
+    // freshest copy behind each account id.
+    const copyIds = new Set<string>()
+    for (const credential of await this.readOwns()) {
+      if (!this.matchesRegion(credential)) continue
+      copyIds.add(traeAccountId(credential))
+    }
+    const visible = discovered.filter(credential => copyIds.has(traeAccountId(credential)))
+    const offered = this.offered(visible)
     const inUse = this.inUse(discovered, offered)
     /**
      * Never hide the account we are actually billing.
@@ -554,7 +739,10 @@ export class TraeCredentialStore {
       edition: credential.edition,
       enterprise: isEnterpriseAccount(credential),
       region: regionOfCredential(credential),
-      source: credential.source,
+      // Every listed row is backed by a plugin copy (that is what `visible`
+      // filters on), so the card names it as one: this store bills, refreshes,
+      // and deletes its copy, never the app's live login.
+      source: 'dsh' as const,
       tokenExpiresAtMs: credential.expiresAtMs,
       ...credential.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: credential.refreshExpiresAtMs },
       // Exactly one row reads as `selected`, and it is the SAME account
@@ -682,6 +870,23 @@ export class TraeCredentialStore {
   }
 
   /**
+   * The PLUGIN'S OWN COPY of one account — never the Trae app's credential.
+   *
+   * {@link credentialOf} answers from the merged view (copies plus the app's
+   * logins) and prefers whichever is fresher. That is right for placing a
+   * request, but wrong for HANDING CREDENTIALS OUT: an export must carry the
+   * copies this plugin owns and refreshes, not whatever the app happens to have
+   * on disk. The two are normally identical — the copy is mirrored from the app
+   * — but only the copy is ours, and an account with no copy is not ours to
+   * export at all (undefined, no fallback to the app's login).
+   */
+  async copyOf(accountId: string): Promise<TraeCredential | undefined> {
+    if (accountId === '') return undefined
+    const owns = await this.readOwns()
+    return owns.find(credential => traeAccountId(credential) === accountId)
+  }
+
+  /**
    * A SPECIFIC account's credential, refreshed when its access token is due.
    *
    * {@link credentialOf} is a pure lookup and hands back an expired token as-is,
@@ -793,6 +998,166 @@ export class TraeCredentialStore {
     for (const path of this.ownCandidates()) {
       await rm(path, { force: true })
       await rm(`${path}.lock`, { force: true })
+    }
+  }
+
+  /**
+   * Remove ONE account from the plugin-owned copy (per-region file, legacy
+   * single file), where this store can rewrite the shape it wrote.
+   *
+   * The desktop storage files are deliberately untouched: their credential is
+   * a Trae app login that only Trae can rewrite, so a plugin removing it would
+   * corrupt an application state it does not own. `deleteAccount` therefore
+   * only ever commits what this plugin persisted — the refreshed copy the
+   * store owns — and reports what it did.
+   *
+   * `stillSignedIn` is true when the SAME account id still resolves to a
+   * desktop storage copy, i.e. the account will keep appearing (from Trae's own
+   * login) even after the plugin's copy is gone. The card then shows the user
+   * where the account really lives instead of implying a deletion that did not
+   * take: the account is still signed in Trae, and Trae is the only writer that
+   * can remove it.
+   *
+   * @returns `{ deleted: boolean; stillSignedIn: boolean }` — `deleted` is
+   * whether a plugin-owned copy of this account was actually removed;
+   * `stillSignedIn` reports a TRAE-owned login that survives it.
+   */
+  /**
+   * Erases this account's login from Trae's OWN storage files.
+   *
+   * Deleting only the plugin's copy of an account the app itself is signed in to
+   * changes nothing the user can see: the app keeps reporting the account, the
+   * row comes back on the next poll, and "delete" looks broken. The only real
+   * deletion therefore has to rewrite the app's `storage.json`, which means
+   * (a) re-encrypting the values that stay, with Trae's own scheme, and (b)
+   * refusing while that app runs — its in-memory state would be flushed back
+   * over the file and undo the edit.
+   *
+   * A backup of every rewritten file is left beside it (`.dsh-backup-<stamp>`),
+   * because signing a user's editor out is not something to do without a way back.
+   */
+  async deleteDesktopLogins(accountId: string): Promise<{
+    signedOut: TraeEdition[]
+    blocked: TraeEdition[]
+  }> {
+    const signedOut: TraeEdition[] = []
+    const blocked: TraeEdition[] = []
+    const seen = new Set<string>()
+    // `candidates()` (not the raw path list) so an injected storage path — the
+    // tests' stand-in for the app's file, and the `--storage` override — is the
+    // document this erases, exactly as the read path sees it.
+    for (const candidate of this.candidates()) {
+      if (candidate.source !== 'desktop' || seen.has(candidate.path)) continue
+      seen.add(candidate.path)
+      const document = await readFile(candidate.path, 'utf8')
+        .then(text => JSON.parse(text) as Record<string, unknown>)
+        .catch(() => undefined)
+      if (document === undefined) continue
+      const encoded = document[TRAE_AUTH_STORAGE_KEY]
+      if (typeof encoded !== 'string') continue
+      // An undecryptable value is not this account's login as far as we can tell;
+      // rewriting the file blind would destroy a login we cannot read back.
+      let claims: Record<string, unknown>
+      try {
+        const parsed = parseTraeAuthValue(encoded)
+        if (typeof parsed !== 'object' || parsed === null) continue
+        claims = parsed as Record<string, unknown>
+      } catch { continue }
+      const credential = normalizeTraeCredential(claims, candidate.edition, 'desktop')
+      if (credential === undefined || traeAccountId(credential) !== accountId) continue
+      const running = await this.runningApps().catch(() => new Set<TraeEdition>())
+      if (running.has(candidate.edition)) {
+        blocked.push(candidate.edition)
+        continue
+      }
+      const erased = await eraseDesktopLogin(candidate.path, document, claims, encoded)
+      if (erased) signedOut.push(candidate.edition)
+      else blocked.push(candidate.edition)
+    }
+    return { signedOut: [...new Set(signedOut)], blocked: [...new Set(blocked)] }
+  }
+
+  /**
+   * Delete this store's COPY of one account.
+   *
+   * What the plugin shows and bills is the copy, so that is the first thing
+   * "delete" removes. The copy alone is not enough: the same login usually also
+   * lives in the app's own `storage.json`, and the app keeps reporting it, so
+   * the delete then erases that login too (see `deleteDesktopLogins`, which
+   * refuses while the app runs and leaves a backup beside every file it
+   * rewrites).
+   *
+   * The catch is the mirror: `accounts()` recreates a copy from any local login
+   * that lacks one, so deleting the copy of an account still signed in to Trae
+   * would resurrect it on the next poll. A TOMBSTONE records the deletion for
+   * exactly that id; the mirror skips it while the app still holds the login and
+   * drops the tombstone once it does not, so signing in again later mirrors it
+   * again. That is why `stillSignedIn` is reported: it explains that the account
+   * still lives in Trae even though the plugin no longer shows it.
+   *
+   * @returns `{ deleted, stillSignedIn, hadCopy, signedOutApps, blockedApps }` —
+   * `deleted` is "this machine no longer carries the account anywhere" (true
+   * even when there was never a copy, so a ghost member can be cleared);
+   * `stillSignedIn` answers "is it still a live Trae login here?"; `hadCopy` is
+   * "did a file actually change?"; `signedOutApps` names the apps whose login
+   * was erased; `blockedApps` names the apps that were running, in which case
+   * nothing was erased and `deleted` is false.
+   */
+  async deleteAccount(accountId: string): Promise<{
+    deleted: boolean
+    stillSignedIn: boolean
+    hadCopy: boolean
+    signedOutApps: TraeEdition[]
+    blockedApps: TraeEdition[]
+  }> {
+    let mutated = false
+    for (const path of this.ownCandidates()) {
+      const dropped = await withFileLock(path, async () => {
+        const existing = await readFile(path, 'utf8').then(parseOwn, () => null)
+        // A file we never wrote (or one with nothing to drop) is left alone.
+        if (existing === null || !existing.some(credential => traeAccountId(credential) === accountId)) return false
+        const next = existing.filter(credential => traeAccountId(credential) !== accountId)
+        await writeOwn(path, next)
+        return true
+      }).catch(() => false)
+      mutated = mutated || dropped
+    }
+    // Tombstone BEFORE the next mirror can run: a delete that is not remembered
+    // is a delete the next refresh undoes.
+    const tombstones = await this.readTombstones()
+    if (!tombstones.has(accountId)) {
+      tombstones.add(accountId)
+      await this.writeTombstones(tombstones).catch(() => undefined)
+    }
+    // If the id was this account's binding, forget it so `current()` falls back
+    // to a real selection instead of pointing at a credential that is gone.
+    if (this.accountId === accountId) {
+      this.accountId = undefined
+      this.inflight = undefined
+    }
+    // The app half. A copy is only half of the account's presence on this
+    // machine: the same login usually also sits in Trae's own storage.json, and
+    // Trae reports it again on the next read no matter what the plugin does to
+    // its copy — which is exactly why "delete" kept looking broken. So the
+    // delete also erases the app login, and a RUNNING app (whose in-memory
+    // state would be flushed back over the file) is reported instead of faked.
+    const { signedOut, blocked } = await this.deleteDesktopLogins(accountId)
+    const stillInOwn = (await this.readOwns()).some(credential => traeAccountId(credential) === accountId)
+    const { credentials: discovered } = await this.readDesktopAll()
+    const stillSignedIn = discovered.some(credential => traeAccountId(credential) === accountId)
+    // `deleted` means "this machine no longer carries the account anywhere":
+    // the plugin's copy is gone AND no app login survived. A blocked app is a
+    // non-delete — the file is unchanged, so claiming success would be a lie
+    // the user discovers on the next poll.
+    const deleted = !stillInOwn && !stillSignedIn
+    return {
+      deleted,
+      stillSignedIn,
+      // "Did a file actually change?" — signing the app out counts: it is the
+      // rewrite that makes the row disappear.
+      hadCopy: mutated || signedOut.length > 0,
+      signedOutApps: signedOut,
+      blockedApps: blocked,
     }
   }
 

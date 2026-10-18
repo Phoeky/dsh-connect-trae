@@ -3,6 +3,7 @@
  * Mirrors the `dsh-workbuddy-connect` status-route pattern so the plugin card
  * stays consistent with that project's external presentation.
  */
+import type { TraeEdition } from './paths.ts'
 import { TRAE_PANELS, type TraePanel, type TraeRegion } from './region.ts'
 
 /** Plugin-owned usage endpoint consumed by its browser half. */
@@ -68,14 +69,14 @@ export const TRAE_POOL_PATH = '/plugins/dsh-connect-trae/pool'
 export const TRAE_POOL_ACTION_PARAM = 'action'
 /** Query parameter naming ONE pool account a per-row request addresses. */
 export const TRAE_POOL_ACCOUNT_PARAM = 'accountId'
-/** The pool batch actions. `remove` is per-account and never batch-wide. */
-export type TraePoolAction = 'checkin' | 'test' | 'remove'
+/** The pool batch actions. `remove` and `delete` are per-account and never batch-wide. */
+export type TraePoolAction = 'checkin' | 'test' | 'remove' | 'delete'
 /** Read the pool action off a request URL; unknown/absent means undefined. */
 export function poolActionOf(url: string): TraePoolAction | undefined {
   const at = url.indexOf('?')
   if (at === -1) return undefined
   const value = new URLSearchParams(url.slice(at + 1)).get(TRAE_POOL_ACTION_PARAM)
-  return value === 'checkin' || value === 'test' || value === 'remove' ? value : undefined
+  return value === 'checkin' || value === 'test' || value === 'remove' || value === 'delete' ? value : undefined
 }
 /**
  * Read the ONE account a per-row pool request addresses, from the QUERY string.
@@ -292,6 +293,24 @@ export interface TraeWebPool {
    * only outcome is a refusal.
    */
   checkinSupported: boolean
+  /**
+   * Whether this panel offers the destructive per-row Delete at all.
+   *
+   * The client bundle updates on REFRESH but the Host only on RESTART, so a card
+   * shipping before the Host gains `deleteAccountOf` must hide the button rather
+   * than render one whose only outcome is a 503. Absent means the legacy Host
+   * predates the feature, and the destructive Delete is not offered.
+   */
+  deleteSupported?: boolean
+  /**
+   * Where this panel's credential copies live, and how many the plugin holds.
+   *
+   * The user's recurring doubt is "there is no real copy file, it just follows
+   * the app" — which no amount of prose answers. Reporting the path and the count
+   * lets the card show the actual file, so "a copy exists" is something the user
+   * can verify on disk. Absent means a Host that predates this report.
+   */
+  copies?: { path: string; count: number }
   /** The model a test would use right now; absent when none can be resolved. */
   targetModelId?: string
   /**
@@ -375,6 +394,50 @@ export interface TraePoolTestRowView {
 export interface TraeWebPoolRemoveAnswer {
   accountId: string
   removed: boolean
+}
+
+/**
+ * The answer to `?action=delete`: what the Host could remove from its own
+ * credential copy, and whether the account is STILL signed in to the Trae app
+ * (a desktop login the plugin deliberately does not touch). The card renders
+ * `stillSignedIn` as "sign out in Trae", never as a deletion that failed.
+ */
+export interface TraeWebPoolDeleteAnswer {
+  accountId: string
+  /**
+   * Whether the plugin now holds NO copy of this account.
+   *
+   * True also when it held none to begin with (a ghost member): the question is
+   * "does this plugin still carry it?", not "did a file change?".
+   */
+  deleted: boolean
+  /**
+   * Whether the machine STILL carries this account somewhere after the attempt.
+   *
+   * True when the app's own login survived: it was running (see `blockedApps`) or
+   * the rewrite failed. The card must not claim success while this is true.
+   */
+  stillSignedIn: boolean
+  /**
+   * Trae apps whose own login was erased, so the account is really gone from this
+   * machine. The app must be restarted for it to notice.
+   */
+  signedOutApps?: TraeEdition[]
+  /**
+   * Trae apps that still hold the login because the app was running, so its
+   * in-memory state would have reverted the rewrite. The card says which app to
+   * quit instead of reporting a generic failure the user cannot act on.
+   */
+  blockedApps?: TraeEdition[]
+  /**
+   * Whether a plugin-owned copy actually existed and was erased.
+   *
+   * `false` means the account lives ONLY in the Trae app's own login, so nothing
+   * was deleted and the card must say so instead of claiming a copy was removed.
+   * ABSENT for an older Host that predates the field: the card then falls back to
+   * the generic "still signed in" wording rather than guessing.
+   */
+  hadCopy?: boolean
 }
 
 /**

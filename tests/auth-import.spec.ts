@@ -34,7 +34,7 @@ describe('import + refresh coexistence (issue #37 plan B)', () => {
     // Bind the DESKTOP account explicitly so the refresh targets it rather than
     // the (still valid) imported one.
     const all = await store2.accounts()
-    const deskId = all.find(account => account.source === 'desktop')!.id
+    const deskId = all.find(account => account.accountName === 'userDesk')!.id
     store2.selectAccount(deskId)
     await store2.resolve()
     const doc = JSON.parse(await readFile(own,'utf8'))

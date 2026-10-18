@@ -188,6 +188,10 @@ describe('traeWebPool', () => {
     // The SAVED list is reported verbatim: the card must be able to show what the
     // user asked for, not silently drop it.
     expect(pool.memberAccountIds).toEqual([A, ghost])
+    // No name was ever measured for this ghost, so the row falls back to the id
+    // rather than to an empty cell — a blank row reads as a broken COPY of an
+    // account, which is exactly what it must not look like.
+    expect(ghostRow?.accountName).toBe(ghost)
   })
 
   it('reports noCandidate when every member is excluded, because traffic then falls back', async () => {
