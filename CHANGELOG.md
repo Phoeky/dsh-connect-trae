@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.10.1 (2026-10-19)
+
+> 「一键签到所有账号」下线。Trae 限制**每台设备每天只能签到一次**：本机任一账号签过之后，这个按钮
+> 对整批账号在当天剩余时间里只能是灰的——一个永远点不动的控件，还得在下方专门写一句话解释它为什么灰。
+> 单账号签到仍在名册表里，那才是能真正执行的入口。
+
+### 变更
+
+- **移除账号池动作行里的「一键签到所有账号」按钮**，动作行现在只剩「一键测试所有账号」。连带移除
+  批量签到的请求逻辑（`runCheckin`）、`busy` 的 `checkin` 态、签到进行中的状态行，以及只服务于这个
+  按钮的 8 个文案键（中英各一份：`poolCheckinAll` / `poolCheckingIn` / `poolLogCheckinStart` /
+  `poolLogCheckinClaimed` / `poolLogCheckinAlready` / `poolLogCheckinFailed` / `poolLogCheckinDone` /
+  `poolActionNoteCheckinDevice`），并删掉卡片里已不可达的 `checkin-unsupported` 409 分支。
+- **单账号签到不受影响**：名册表（「Trae 账号」表格）的签到列仍按账号逐个签到，签到列的状态文字与
+  本机设备限制提示照旧。
+- Host 侧 `?action=checkin` 路由与 `checkinSupported` 字段保留不删：浏览器里可能还有旧的 client
+  bundle 在调它，删掉会让它们直接 503。新卡片不再调用该 action。
+
+### 测试
+
+- `card-pool` 的批量签到用例改为断言按钮缺席：不再渲染 `poolCheckinAll`、不再出现「本机今日的签到
+  已用掉」提示行；同时保留「成员为空」「面板无免费模型」两条原因断言，确保这次删除没有顺带删掉测试
+  按钮的说明。全仓 **888** 例通过，0 skipped。
+
 ## 3.10.0 (2026-10-18)
 
 > 本版把「账号在本机到底存了几份、删一个账号到底删掉了什么」讲清楚并做对：本机每个 Trae 登录都会
