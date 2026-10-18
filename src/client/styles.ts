@@ -200,6 +200,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-account-checkin{appearance:none;font:inherit;cursor:pointer;white-space:nowrap;border:1px solid rgba(86,134,254,.4);border-radius:7px;padding:2px 9px;font-size:12px;line-height:18px;font-weight:500;color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.08)}
 .dsm-trae-account-checkin:hover:not(:disabled){background:rgba(86,134,254,.16)}
 .dsm-trae-account-checkin:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:1px}
+.dsm-trae-account-checkin-state{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#9aa0a8);white-space:nowrap}
 /* A disabled check-in still STATES something ("claimed", "device used"), so it
    stays readable 鈥?clearly inactive, not invisible. */
 .dsm-trae-account-checkin:disabled{opacity:.55;cursor:default;border-color:transparent;color:var(--dsw-alias-label-tertiary,#9aa0a8);background:transparent}

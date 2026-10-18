@@ -173,14 +173,15 @@ describe('TraeUsageCard daily check-in', () => {
     expect(claim?.body).toContain('account-1')
   })
 
-  it('disables the button once today is claimed', async () => {
+  it('replaces the button with the outcome once today is claimed', async () => {
+    // A disabled "已领取" button can never fire again; it just repeats the
+    // state in grey. The cell says what happened instead.
     stubFetch(usageDocument(), { id: 'account-1', checkin: { checkedIn: true, didCheckedIn: true, credits: 150, enabled: true } })
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const button = rowCheckin('LaoDing')
-    expect(button.disabled).toBe(true)
-    expect(button.textContent).toBe('row.checkinClaimed')
+    expect(within(accountRow('LaoDing')).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
+    expect(within(accountRow('LaoDing')).getByText('row.poolCheckedIn')).toBeTruthy()
   })
 
   it('stops every row once THIS machine spent its check-in on another account', async () => {
@@ -198,10 +199,9 @@ describe('TraeUsageCard daily check-in', () => {
     const { scope } = makeScope()
     await renderOpen(scope)
     await waitFor(() => { expect(screen.getByText('老二')).toBeTruthy() })
-    const spent = rowCheckin('老二')
-    expect(spent.disabled).toBe(true)
-    expect(spent.textContent).toBe('row.checkinDeviceSpentShort')
-    expect(spent.getAttribute('title')).toBe('row.checkinDeviceSpent')
+    const spentRow = accountRow('老二')
+    expect(within(spentRow).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
+    expect(within(spentRow).getByText('row.poolDeviceUsed')).toBeTruthy()
   })
 
   it('does not call a device-spent day "claimed today"', async () => {
@@ -216,12 +216,11 @@ describe('TraeUsageCard daily check-in', () => {
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    const button = rowCheckin('LaoDing')
-    expect(button.disabled).toBe(true)
-    expect(button.textContent).toBe('row.checkinDeviceSpentShort')
-    // The full rule is the button's tooltip. Rendered as a paragraph it swamped
-    // the row and drowned out the account it belongs to.
-    expect(button.title).toBe('row.checkinDeviceSpent')
+    const row = accountRow('LaoDing')
+    expect(within(row).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
+    // Not "已签到": this account was never paid, only the machine was spent.
+    expect(within(row).getByText('row.poolDeviceUsed')).toBeTruthy()
+    expect(within(row).queryByText('row.poolCheckedIn')).toBeNull()
   })
 
   it('shows "claimed today" only when the ACCOUNT was paid', async () => {
@@ -229,10 +228,10 @@ describe('TraeUsageCard daily check-in', () => {
     const { scope } = makeScope()
     await renderOpen(scope)
 
-    expect(rowCheckin('LaoDing').disabled).toBe(true)
-    expect(rowCheckin('LaoDing').textContent).toBe('row.checkinClaimed')
-    // A paid account must never carry the device-spent explanation.
-    expect(rowCheckin('LaoDing').title).not.toBe('row.checkinDeviceSpent')
+    const row = accountRow('LaoDing')
+    expect(within(row).getByText('row.poolCheckedIn')).toBeTruthy()
+    // A paid account must never carry the device-spent wording.
+    expect(within(row).queryByText('row.poolDeviceUsed')).toBeNull()
   })
 
   it('explains a device-spent refusal from the route instead of "failed"', async () => {
@@ -249,8 +248,8 @@ describe('TraeUsageCard daily check-in', () => {
 
     fireEvent.click(rowCheckin('LaoDing'))
 
-    await waitFor(() => { expect(rowCheckin('LaoDing').textContent).toBe('row.checkinDeviceSpentShort') })
-    expect(rowCheckin('LaoDing').title).toBe('row.checkinDeviceSpent')
+    await waitFor(() => { expect(within(accountRow('LaoDing')).getByText('row.poolDeviceUsed')).toBeTruthy() })
+    expect(within(accountRow('LaoDing')).queryByRole('button', { name: /row\.checkin/ })).toBeNull()
     expect(within(accountBlock()).queryByText(/row\.checkinError/)).toBeNull()
   })
 

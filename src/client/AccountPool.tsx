@@ -72,6 +72,12 @@ export interface TraePoolRowClaim {
   disabled: boolean
   title?: string
   busy: boolean
+  /**
+   * Whether the click can still do anything. False once the account is paid or
+   * this machine spent the day's claim: the row then shows the state alone,
+   * without a greyed button repeating it.
+   */
+  claimable?: boolean
 }
 
 interface AccountPoolProps {
@@ -990,7 +996,10 @@ function MemberRow({ account, models, rows, checked, onToggle, onTest, t, disabl
             : checkin ? t('row.poolCheckedIn')
               : device === true || deviceClaimed ? t('row.poolDeviceUsed') : t('row.poolNotCheckedIn')}
         </span>
-        {claim === undefined || onClaim === undefined
+        {/* Only an ACTION belongs here. Once this account is claimed — or this
+            machine already spent the day's check-in — a greyed "already
+            claimed" button is a dead control repeating the line above it. */}
+        {claim === undefined || onClaim === undefined || claim.claimable === false
           ? null
           : <button
               type="button"

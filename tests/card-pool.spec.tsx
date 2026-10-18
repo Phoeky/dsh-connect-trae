@@ -301,6 +301,33 @@ describe('the batch check-in action', () => {
     expect(screen.getByText('row.poolActionNoteNoMembers')).toBeTruthy()
   })
 
+  it('shows the outcome instead of a dead claim button', () => {
+    // Reported from the rendered card: a checked-in row carried both "已签到"
+    // and a greyed "已领取" button, and a device-spent row carried "本设备今日
+    // 已用" plus a greyed "本机已签". Neither button can ever fire again.
+    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
+    render(<AccountPool
+      panel="cn"
+      pool={basePool({ checkinSupported: true, accounts: [
+        { accountId: 'acc-a', accountName: 'A', member: true, current: true, checkedInToday: true },
+        { accountId: 'acc-b', accountName: 'B', member: true, current: false, checkedInToday: false, deviceCheckedIn: true },
+      ] })}
+      models={MODELS}
+      t={t}
+      settingsScope={scope as never}
+      deviceClaimed
+      claims={{
+        'acc-a': { label: 'row.checkinClaimed', title: 'row.checkinClaimed', disabled: true, busy: false, claimable: false },
+        'acc-b': { label: 'row.checkinDeviceSpentShort', title: 'row.checkinDeviceSpent', disabled: true, busy: false, claimable: false },
+      }}
+      onClaim={() => {}}
+    />)
+    expect(screen.queryByText('row.checkinClaimed')).toBeNull()
+    expect(screen.queryByText('row.checkinDeviceSpentShort')).toBeNull()
+    expect(screen.getByText('row.poolCheckedIn')).toBeTruthy()
+    expect(screen.getByText('row.poolDeviceUsed')).toBeTruthy()
+  })
+
   it('stays available while the device has not claimed', () => {
     const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
     render(renderPoolAndReturn(basePool({ checkinSupported: true }), scope, false))

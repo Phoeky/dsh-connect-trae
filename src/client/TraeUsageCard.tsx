@@ -1244,7 +1244,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
       && status.pool.accounts.some(account => account.deviceCheckedIn === true)
   })()
 
-  const claimViewOf = (accountId: string, state: TraeWebAccountState | undefined): { label: string; title: string; disabled: boolean; busy: boolean } => {
+  const claimViewOf = (accountId: string, state: TraeWebAccountState | undefined): { label: string; title: string; disabled: boolean; busy: boolean; claimable: boolean; settled: 'claimed' | 'device' | undefined } => {
     const checkin = state?.checkin
     const reward = checkin === undefined ? undefined : formatNumber(checkin.credits)
     const claimed = checkin?.checkedIn === true
@@ -1273,10 +1273,26 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
       title,
       disabled: !usable || claimed || deviceSpent || spending,
       busy: spending,
+      /**
+       * False when there is nothing left to DO: a disabled "already claimed"
+       * button restates the status line above it, in grey, forever. Callers
+       * drop the control instead of buying it a permanent disabled state.
+       */
+      claimable: !claimed && !deviceSpent,
+      settled: claimed ? 'claimed' : deviceSpent ? 'device' : undefined,
     }
   }
   const checkinControl = (account: TraeWebAccount, state: TraeWebAccountState | undefined): ReactNode => {
     const view = claimViewOf(account.id, state)
+    // Nothing left to do: a disabled "已领取" button is a control that can never
+    // fire again. Say what happened in the cell instead.
+    if (!view.claimable) {
+      return (
+        <span className="dsm-trae-account-checkin-state">
+          {view.settled === 'claimed' ? t('row.poolCheckedIn') : t('row.poolDeviceUsed')}
+        </span>
+      )
+    }
     return (
       <button
         type="button"
