@@ -140,6 +140,12 @@ Trae does not serve this model under the SOLO function the request used
 
 如果你现在就要用这 3 个模型，请直接在 **Trae IDE 本体**中使用。
 
+## 最大输出与上下文预算
+
+模型卡上的「最大输出」来自 Trae `get_detail_param` 的 `model_detail_list[].max_tokens` —— 上游**是**发布这个值的（CN 实测 80/80 config 都带）。4.0.1 起它随目录合并一路带到卡片、`/models/refresh` 与 DSH 模型注册；此前合并层漏传了这个字段，整区模型全部显示空白（issue #42，诊断见 `docs/ISSUE42_DIAGNOSIS.md`）。**仍然空白的行是诚实的**：目录里有、但 SOLO 名单里没有对应 config 的模型（上面那 3 个 TraeCode 通道行）拿不到任何候选值，宁可空白也不编一个上限。这个值是元数据，插件不把它写进请求体（输出上限由 Trae 服务端决定）。
+
+上下文窗口在 Trae 公布的默认（dev）档与 Max 档之间二选一，按面板逐模型存成 `contextBudgets`。想整区一次切换：模型管理区有「**整区切到 Max**」（给每个带 Max 档的行写入其 `maxContextWindow`，没有 Max 档的行不动）和「**全部恢复默认上下文**」（清空本区预算）两个按钮，作用在草稿上、按「保存」生效，与逐行单选落盘的结果完全一致（issue #42 附带需求——CN 有 18 个 Max 模型，以前要点 18 次）。
+
 ## 安装
 
 推荐使用 DSH 插件命令安装 npm 已发布版本：

@@ -1,5 +1,41 @@
 # Changelog
 
+## 4.0.1 (2026-10-19)
+
+> CN 区模型卡「最大输出」整列空白（issue #42）修复：上游**是**发布输出上限的——`get_detail_param` 的
+> CN 80 个 config **80/80** 都带 `model_detail_list[].max_tokens`——但目录合并 `mergeTraeModelSources()`
+> 把 wire 侧的 `maxTokens` 丢掉了。这个字段从合并函数诞生那天（1.1.0）起就没被复制过，卡片、
+> `/models/refresh` 与 DSH 模型注册因此永远收到「未知」。附带落地同一 issue 的批量请求：整区上下文
+> 一键切换两个按钮。
+
+### 修复
+
+- **目录合并带上 wire 的 `max_tokens`**（`fix(catalog)`）。合并时其余字段（contextWindow / maxContextWindow /
+  倍率 / reasoning / multimodal / config_name）一路都复制了，唯独漏了 `maxTokens` 一行。修复后 CN 实测
+  32 行目录 30 行带值；**仍空白的行是诚实的**——`kimi-k2.8-preview`、`qwen3.8-flash` 这类 TraeCode 通道行
+  在 SOLO 名单里没有对应 config，拿不到候选值，宁空白不编造。取值链其余部分不动：`collectModels` 读
+  `model_detail_list[0]` 实测无损（71/80 config 的双项 `__dev`/`__max` 上限恒等）。该值是**元数据**，
+  请求体照旧不下发 `max_tokens`（上限由 Trae 服务端决定），行为无变化。
+- 报告人「想确认的一点」（输出上限是否挂在后面的 detail 项或别的键）已逐项 dump 排除，全文见
+  `docs/ISSUE42_DIAGNOSIS.md`，取证脚本 `scripts/probe-cn-maxtokens.mjs`（只读，随仓库提交）。
+
+### 新增
+
+- **卡片模型管理区两个批量上下文按钮**（`feat(card)`，issue #42 附带需求）：「**整区切到 Max**」给本区
+  每个带 Max 档的模型一次性写入其 `maxContextWindow`（正是 `applyContextBudgets` 认的精确值），
+  没有 Max 档的行不动、已有手动预算保留；「**全部恢复默认上下文**」清空本区预算。二者作用于草稿、
+  按「保存」生效，落盘形状与逐行单选完全一致——因此**没有**新增 `contextBudgetMode` 配置键，
+  运行时零新分支、旧配置零迁移。报告人数的 18 次点击现在是一次。
+- README 新增「最大输出与上下文预算」一节（issue #42 建议 1 换内容采纳：事实已变，文档写明上游发布该值、
+  空白行另有其因）。
+
+### 测试
+
+- 新增合并回归用例（修复前必红：wire 行带 `maxTokens` → 合并行必须保留；join-miss 行必须缺席）与
+  5 例卡片用例（批量按钮的落盘内容、既有手动预算的保留、两按钮各自禁用条件）。
+- 全仓 **901** 例通过，0 skipped；`tsc` 两个工程干净；`build` 通过。修复前后各跑一次实时探针对照
+  （0/32 → 30/32）。
+
 ## 4.0.0 (2026-10-19)
 
 > 移除 issue #29 的「跟随 Trae 桌面端当前登录」整套机制，连同它派生的两处 UI。

@@ -127,6 +127,12 @@ That is the upstream refusal stated plainly, rather than a silent failure or som
 
 To use these three models today, use the **Trae IDE itself**.
 
+## Max output and context budgets
+
+The "最大输出" (max output) on the model card comes from `model_detail_list[].max_tokens` in Trae's `get_detail_param` — upstream **does** publish it (live-verified: 80/80 CN configs carry it). As of 4.0.1 the value travels through the catalog merge all the way to the card, `/models/refresh` and DSH model registration; before that the merge step dropped the field, so the whole region rendered blank (issue #42 — full diagnosis in `docs/ISSUE42_DIAGNOSIS.md`). **Rows that are still blank are being honest**: models the directory lists but the SOLO roster has no config for (the three TraeCode rows above) have no candidate value to show — we prefer a blank over an invented cap. The value is metadata only; the plugin never puts `max_tokens` into request bodies (the server decides the real cap).
+
+Context windows are a per-model choice between Trae's default (dev) window and its Max window, stored per panel as `contextBudgets`. For a whole-region switch, the model section now has two buttons: "**Switch all to Max**" (writes each Max-capable row's `maxContextWindow`, leaves no-Max rows and existing manual budgets alone) and "**Restore default context**" (clears the region's budget dict). Both act on the draft and take effect on Save, producing exactly the same stored shape as the per-row radios (issue #42 side request — 18 Max rows in CN used to mean 18 clicks).
+
 ## Install
 
 ```sh
