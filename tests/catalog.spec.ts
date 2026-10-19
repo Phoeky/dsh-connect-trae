@@ -307,6 +307,30 @@ describe('mergeTraeModelSources', () => {
     expect(merged.some(model => model.wireConfigName === 'deepseek-v4-flash')).toBe(false)
   })
 
+  it('carries the wire max_tokens onto the merged row (issue #42)', () => {
+    // Issue #42: every CN model showed an empty「最大输出」on DSH's model
+    // card. The wire roster DOES publish the output cap — solo.ts's
+    // collectModels parses `model_detail_list[].max_tokens` into
+    // TraeSoloModel.maxTokens (pinned by tests/solo.spec.ts) — but the merge
+    // copied context/credit/reasoning/wire-target and silently dropped
+    // maxTokens, so the value never reached TraeModelInfo, /models/refresh,
+    // the persisted lastCatalog, or toPiModel. The Remote directory has no
+    // output-cap field at all, so the wire is the ONLY source: a dropped
+    // wire value is an empty card, which is exactly what the reporter saw.
+    const remote: TraeDiscoveredModel[] = [
+      { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, contextWindow: 168_000, reasoningSupported: false },
+      // A wire row without max_tokens must not gain an invented one.
+      { id: 'kimi-k3', name: 'Kimi-K3', multimodal: false, contextWindow: 200_000, reasoningSupported: false },
+    ]
+    const wire = [
+      { id: 'glm-5.2', name: 'GLM-5.2', maxTokens: 32_000, function: 'solo_work_remote' },
+      { id: 'kimi-k3', name: 'Kimi-K3', function: 'solo_work_remote' },
+    ]
+    const merged = mergeTraeModelSources(remote, wire)
+    expect(merged.find(model => model.id === 'glm-5.2')?.maxTokens).toBe(32_000)
+    expect(merged.find(model => model.id === 'kimi-k3')?.maxTokens).toBeUndefined()
+  })
+
   it('still resolves a genuine display-name join after the first-wins change', () => {
     // Guard against over-correcting: first-wins must not break the tier-2 join
     // for models whose wire id legitimately differs from the remote id.

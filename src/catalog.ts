@@ -310,6 +310,12 @@ export function mergeTraeModelSources(
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       ...creditMultiplier === undefined ? {} : { creditMultiplier },
       input: ['text'],
+      // The wire's `model_detail_list[].max_tokens` — the ONLY place upstream
+      // publishes the max OUTPUT cap. The Remote directory has no such field, so
+      // a row keeps `maxTokens` absent when it maps to no wire config. Dropped
+      // here until issue #42: every CN model card read as blank "最大输出" even
+      // though all 80 wire configs carry the value.
+      ...wireModel?.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
       // Trae's own answer to "does this model read images". Carried through so
       // `applyImageSelection` can union it with the user's opt-ins (issue #16);
       // `input` stays text here and is decided by that single later pass.
