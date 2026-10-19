@@ -40,7 +40,7 @@ import {
 } from './status-paths.ts'
 import { mergeTransferRecords, parseTransferFile, previewTransferFile, traeTransferRecordOf } from './transfer.ts'
 import type { TraeTransferRecord } from './transfer.ts'
-import type { TraePoolPreferences, TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebAppLogin, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCreditExpiry, TraeWebCredits, TraeWebExpiringCredits, TraeWebPool, TraeWebPoolAccount, TraeWebPoolOutcome, TraeWebUsage, TraeWebPayStatus, TraePoolCheckinRowView, TraePoolTestRowView } from './status-paths.ts'
+import type { TraePoolPreferences, TraeWebAccount, TraeWebAccountCredit, TraeWebAccountState, TraeWebCheckin, TraeWebCreditAlternative, TraeWebCreditExpiry, TraeWebCredits, TraeWebExpiringCredits, TraeWebPool, TraeWebPoolAccount, TraeWebPoolOutcome, TraeWebUsage, TraeWebPayStatus, TraePoolCheckinRowView, TraePoolTestRowView } from './status-paths.ts'
 import type { TraeCheckinClaim, TraeCheckinStatus } from './usage.ts'
 
 export { TRAE_USAGE_PATH, TRAE_ACCOUNT_CREDITS_PATH } from './status-paths.ts'
@@ -106,14 +106,6 @@ export interface TraeUsageRouteOptions {
    * check-in surface simply is not offered).
    */
   claimCheckinOf?(panel: TraePanel, accountId: string): Promise<{ claim: TraeCheckinClaim; checkin: TraeCheckinStatus } | undefined>
-  /**
-   * The account the Trae app is signed in to right now, when it differs from
-   * the bound one (issue #29). Optional: absent means the card's follow hint
-   * simply is not offered (a test harness or a host without the store's scan).
-   * Read-only — the HOST never rebinds from this value; the follow is a
-   * settings write, made by the card or by the host's follow switch.
-   */
-  liveLogin?(panel: TraePanel): Promise<TraeWebAppLogin | undefined>
   /** The requested region's last-refreshed raw directory (one entry per upstream model). */
   displayModels(panel: TraePanel): readonly TraeModelInfo[]
   /** The user's model selection in the requested panel, stored as model id (= Trae name). */
@@ -604,12 +596,6 @@ export async function traeWebUsage(
   // per-panel model directory and selection this document reports, and which
   // usage surface the credits block reads.
   //
-  // `appLogin` is the same class of fact — identity only — read best-effort:
-  // a store whose scan fails must not take the whole document down for a hint.
-  let appLogin: TraeWebAppLogin | undefined
-  try {
-    appLogin = await deps.liveLogin?.(panel)
-  } catch { /* the hint is optional; the document still answers */ }
   const account = {
     accountId: accounts.find(item => item.selected)?.id ?? '',
     accountName: credential.accountName ?? credential.userId,
@@ -621,7 +607,6 @@ export async function traeWebUsage(
     region: regionOfPanel(panel),
     enabled,
     accounts,
-    ...appLogin === undefined ? {} : { appLogin },
     models: deps.displayModels(panel).map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
     enabledModelIds: [...deps.enabledModelIds(panel)],
     ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(panel) },

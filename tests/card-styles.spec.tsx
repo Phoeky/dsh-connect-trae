@@ -339,7 +339,7 @@ describe('the busy veil keeps the selectors its markup depends on', () => {
  * The card's two writers (`saving` from saveModels, `savingSettings` from
  * writePreference) both raise the same veil via `visible={saving ||
  * savingSettings}`. The preference switch is the cheapest to drive: one click on
- * `followAppLogin` calls `writePreference`, which flips `savingSettings` true
+ * `showPointsInMainUi` calls `writePreference`, which flips `savingSettings` true
  * and keeps it true until the settings write resolves. By handing the scope a
  * `set` that stays pending, the veil stays up long enough to assert — in the
  * real renderer, not via CSS.
@@ -362,9 +362,9 @@ describe('the busy veil renders while a save is in flight', () => {
 
     // Expand the card so the preference switches are present.
     fireEvent.click(screen.getByRole('button', { name: /row\.expand/ }))
-    const followSwitch = await screen.findByRole('checkbox', { name: /row\.followAppLogin/ })
+    const creditsSwitch = await screen.findByRole('checkbox', { name: /row\.showPointsInMainUi/ })
 
-    fireEvent.click(followSwitch)
+    fireEvent.click(creditsSwitch)
 
     // The overlay is genuinely in the DOM, live region and all. Queried by the
     // class (like the rest of this file) rather than by `role="status"`, because

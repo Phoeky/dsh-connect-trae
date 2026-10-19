@@ -10,7 +10,6 @@ import type { ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import {
   configuredAccountsOf,
-  followAppLoginEnabled,
   nextRegionEnabled,
   nextRegionCreditPosition,
   nextRegionSlots,
@@ -338,7 +337,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * box back to the Host's value instead of leaving it claiming one that never
    * landed.
    */
-  const optimisticSettings = useRef<{ followAppLogin?: boolean; showPointsInMainUi?: boolean }>({})
+  const optimisticSettings = useRef<{ showPointsInMainUi?: boolean | undefined }>({})
   /** True while a preference is crossing the wire; serializes both writers. */
   const [savingSettings, setSavingSettings] = useState(false)
   /**
@@ -394,7 +393,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * then shows up here instead of being shadowed by a stale copy.
    */
   const committedSettings = {
-    followAppLogin: followAppLoginEnabled(settingsScope?.getSnapshot().value),
     showPointsInMainUi: (unwrapVolatileDeep(settingsScope?.getSnapshot().value) as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === true,
   }
   /**
@@ -409,12 +407,9 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * it never has to write into component state that a Host refresh would fight.
    */
   const settingsEdits = {
-    followAppLogin: optimisticSettings.current.followAppLogin ?? committedSettings.followAppLogin,
     showPointsInMainUi: optimisticSettings.current.showPointsInMainUi ?? committedSettings.showPointsInMainUi,
   }
   const settingsIds = useId()
-  const followLabelId = `${settingsIds}-follow`
-  const followHintId = `${settingsIds}-follow-hint`
   const creditsLabelId = `${settingsIds}-credits`
   const creditsHintId = `${settingsIds}-credits-hint`
 
@@ -432,7 +427,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
    * snaps it back instead of leaving the box claiming a value that never landed.
    */
   const writePreference = async (
-    field: 'followAppLogin' | 'showPointsInMainUi',
+    field: 'showPointsInMainUi',
     value: boolean,
   ): Promise<void> => {
     if (settingsScope === undefined || settingsScope.getSnapshot().writable !== true) return
@@ -442,9 +437,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
     setSettingsRevision(revision => revision + 1)
     try {
       await writeSettingsField(settingsScope, field, value,
-        readBack => field === 'followAppLogin'
-          ? followAppLoginEnabled(readBack) === value
-          : (unwrapVolatileDeep(readBack) as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === value)
+        readBack => (unwrapVolatileDeep(readBack) as { showPointsInMainUi?: unknown } | null)?.showPointsInMainUi === value)
     } catch (error: unknown) {
       if (mounted.current) setWriteError(error instanceof Error ? error.message : t('row.requestFailed'))
     } finally {
@@ -754,21 +747,7 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
     }
   }
 
-  /**
-   * Follow the Trae app's current sign-in from the hint row (issue #29).
-   *
-   * One click, and it goes through the SAME `switchAccount` write the account
-   * dropdown uses — so the card has exactly one writer for `accounts`, the Host
-   * sees the change through `loader/volatile-update` like every other card
-   * write, and there is no second settings path to keep in sync. The app's
-   * sign-in is `status.appLogin`, which the Host only reports when it differs
-   * from the bound account, so a click here always moves the binding to what
-   * the app is actually logged into.
-   */
-  const followAppLogin = async (): Promise<void> => {
-    if (status.status !== 'signed-in' || status.appLogin === undefined) return
-    await switchAccount(status.appLogin.id)
-  }
+
 
   /**
    * Load one account row's per-account state (check-in / balances /
@@ -1455,51 +1434,27 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
               {regionOn(activeRegion)
                 ? null
                 : <p className="dsm-trae-tab-off-notice" role="status">{t('row.tabOffNotice')}</p>}
-              {/* The preference switches, as BARE LINES — no bordered box, no
+              {/* The preference switch, as a BARE LINE — no bordered box, no
                   heading, no 「保存」/「放弃」 footer.
                   
                   That is the sibling dsh-connect-workbuddy card's shape, and the
-                  reason it is the better one here: there are TWO booleans, and a
-                  card that asks the user to press Save for two booleans is
-                  asking them to remember something with no reason to need
-                  remembering. Each box now writes on its own click (see
-                  `writePreference`), exactly like the region on/off boxes in the
-                  tab bar above it — so the whole card has ONE commit model
-                  instead of two.
+                  reason it is the better one here: a card that asks the user to
+                  press Save for a boolean is asking them to remember something
+                  with no reason to need remembering. The box now writes on its
+                  own click (see `writePreference`), exactly like the region
+                  on/off boxes in the tab bar above it — so the whole card has
+                  ONE commit model instead of two.
                   
                   The label IS the checkbox's own <label>, so the text is a
                   larger click target and the accessible name needs no ARIA.
                   
-                  ONE of the two booleans is on this tab, and which one is DERIVED
-                  from the region rather than a second switch:
-                  `followAppLogin` is region-agnostic (both tabs bind an account
-                  of their own), while `showPointsInMainUi` describes a CN BALANCE
-                  readout. The international tab's readout is its plan, which the
-                  account row below already names — so the switch is carried in
-                  BOTH regions instead of hidden on the international one, where
-                  turning it on is what makes that readout appear at all (see the
+                  `showPointsInMainUi` describes a CN BALANCE readout. The
+                  international tab's readout is its plan, which the account row
+                  below already names — so the switch is carried in BOTH regions
+                  instead of hidden on the international one, where turning it on
+                  is what makes that readout appear at all (see the
                   `activeRegion !== 'cn'` guard that used to drop it). */}
               <div className="dsm-trae-prefs">
-                {/* Follow the Trae app's sign-in (issue #29). Region-agnostic:
-                    both tabs bind an account of their own, so this line applies
-                    to whichever tab it is ticked on. Same opt-in semantics as
-                    the schema: OFF for an existing config, because an automatic
-                    rebind of the billing account is something a user must ask
-                    for. */}
-                <label className="dsm-trae-pref" title={t('row.followAppLoginHint')}>
-                  <input
-                    type="checkbox"
-                    className="dsm-trae-pref-check"
-                    checked={settingsEdits.followAppLogin}
-                    disabled={settingsScope?.getSnapshot().writable !== true || savingSettings}
-                    aria-describedby={followHintId}
-                    onChange={event => { void writePreference('followAppLogin', event.currentTarget.checked) }}
-                  />
-                  <span className="dsm-trae-pref-copy">
-                    <span className="dsm-trae-pref-label" id={followLabelId}>{t('row.followAppLogin')}</span>
-                    <span className="dsm-trae-pref-hint" id={followHintId}>{t('row.followAppLoginHint')}</span>
-                  </span>
-                </label>
                 {/* REGION-AGNOSTIC, both tabs: a readout exists on either side
                     (CN credits, international plan), so the switch that turns it
                     on belongs on either side. The hint below names whichever
@@ -1783,27 +1738,6 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     formatNumber={formatNumber}
                     formatDateTime={formatDateTime}
                   />
-                : null}
-              {/* The app signed in to a DIFFERENT account than this plugin is
-                  bound to (issue #29). Reported by the Host only on that
-                  mismatch, so the row exists exactly when the binding is stale
-                  — the failure that used to require hunting the account list
-                  after every Trae sign-out. Goes through the same
-                  `switchAccount` write as the table's own buttons. */}
-              {status.status === 'signed-in' && status.appLogin !== undefined
-                ? <div className="dsm-trae-usage-alternative" role="status">
-                  <p className="dsm-trae-usage-alternative-text">
-                    {t('row.appLoginMismatch', { account: status.appLogin.accountName, bound: status.accountName })}
-                  </p>
-                  <button
-                    type="button"
-                    className="dsm-trae-usage-switch-button"
-                    disabled={switchingAccount || settingsScope?.getSnapshot()?.writable !== true}
-                    onClick={() => { void followAppLogin() }}
-                  >
-                    {t('row.appLoginFollow', { account: status.appLogin.accountName })}
-                  </button>
-                </div>
                 : null}
               {rescanNote === undefined ? null : <p className="dsm-trae-usage-note" role="status">{rescanNote}</p>}
               {status.status === 'signed-in'

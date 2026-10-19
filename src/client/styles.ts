@@ -83,7 +83,7 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-pref input{flex:none;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-pref-check{inline-size:15px;block-size:15px;margin:3px 0 0}
 /* The label and its explanation used to run together as one wrapped blob
-   ("跟随 Trae 当前登录的账号 在 Trae 桌面端切换登录后…"), which is what made
+   ("在输入框工具栏显示积分读数 在输入框工具栏显示可点击读数…"), which is what made
    this block read as a wall of text. They are two lines now: what the switch
    does, then what it means. */
 .dsm-trae-pref-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -517,9 +517,6 @@ export const TRAE_CARD_CSS = `
 /* "Every member is unusable" is the one case that IS the pool's fault, so it
    keeps the warn tone the base class sets. */
 .dsm-trae-pool-warning-unusable{border-color:var(--dsw-alias-state-warn-secondary,#fbbf24);background:var(--dsw-alias-state-warn-tertiary,#fef3c7);color:var(--dsw-alias-state-warn-primary,#b45309)}
-/* The sign-in/refresh workflow sits in the settings block: it keeps the warn
-   tone (getting it wrong loses an account) but is not a fault of the pool. */
-.dsm-trae-pool-warning-workflow{margin:0 0 2px}
 .dsm-trae-pool-save-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
 .dsm-trae-pool-save-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .dsm-trae-pool-save-row .dsm-btn{padding:5px 14px;font-size:13px;line-height:1.5}

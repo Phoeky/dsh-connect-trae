@@ -21,7 +21,7 @@ function liveOf<T>(field: () => T): { get: () => T } {
  * The plugin's schema marks exactly these fields volatile — the only fields
  * the 0.1.7 settings write gate accepts (matches `asVolatile` in `src/index.ts`).
  */
-const VOLATILE_FIELDS = new Set(['authFile', 'edition', 'accounts', 'regions', 'showPointsInMainUi', 'followAppLogin'])
+const VOLATILE_FIELDS = new Set(['authFile', 'edition', 'accounts', 'regions', 'showPointsInMainUi'])
 
 /**
  * 0.1.7-shaped in-memory settings service.
@@ -97,13 +97,11 @@ async function isolatedPlugin(ctx: Context, config: Partial<Trae.Config> = {}): 
   document.edition = config.edition ?? 'auto'
   document.accounts = config.accounts
   document.regions = config.regions
-  document.followAppLogin = config.followAppLogin
   const pluginConfig = {
     authFile: liveOf(() => document.authFile),
     edition: liveOf(() => document.edition),
     accounts: liveOf(() => document.accounts),
     regions: liveOf(() => document.regions),
-    followAppLogin: liveOf(() => document.followAppLogin),
     accountId: config.accountId,
     lastCatalog: config.lastCatalog,
     enabledModelIds: config.enabledModelIds,

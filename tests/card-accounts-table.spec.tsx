@@ -266,33 +266,6 @@ describe('the stale-binding hint', () => {
    * "in use" (the plugin's binding) no longer competes with "signed in" (the
    * app's login) because each is attached to a named account.
    */
-  it('names BOTH accounts, so the sentence is not a riddle', async () => {
-    stubFetch(usageDocument({
-      accountName: 'LaoDing',
-      appLogin: { id: 'account-2', accountName: 'SecondCN', edition: 'solo', region: 'cn' },
-    }))
-    const { scope } = makeScope()
-    await renderOpen(scope)
-
-    const hint = screen.getByText(/^row\.appLoginMismatch/)
-    // The bound one is the fact the old copy left out.
-    expect(hint.textContent).toContain('LaoDing')
-    expect(hint.textContent).toContain('SecondCN')
-  })
-
-  it('points its button at the account it switches to', async () => {
-    stubFetch(usageDocument({
-      accountName: 'LaoDing',
-      appLogin: { id: 'account-2', accountName: 'SecondCN', edition: 'solo', region: 'cn' },
-    }))
-    const { scope } = makeScope()
-    await renderOpen(scope)
-
-    // "Switch over" had no referent once the sentence named two accounts.
-    const button = screen.getByRole('button', { name: /^row\.appLoginFollow/ })
-    expect(button.textContent).toContain('SecondCN')
-  })
-
   /**
    * A signed-out panel is NOT an empty panel.
    *

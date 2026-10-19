@@ -883,13 +883,6 @@ export function AccountPool({ panel, pool, models, t, settingsScope, onChanged, 
           {dirty ? <span className="dsm-trae-pool-dirty" role="status">{t('row.poolDirty')}</span> : null}
         </div>
         {tools === undefined ? null : <div className="dsm-trae-pool-tools dsm-trae-pool-tools-dashed">{tools}</div>}
-        {/* The workflow rule, above the preference notes: get this wrong and an
-            account is silently lost, so it is a warning box rather than a line
-            of grey text. */}
-        <div className="dsm-trae-pool-warning dsm-trae-pool-warning-workflow" role="note">
-          <span className="dsm-trae-pool-warning-title">{t('row.poolMirrorWorkflowTitle')}</span>
-          <span className="dsm-trae-pool-warning-hint">{t('row.poolMirrorWorkflowHint')}</span>
-        </div>
         {/* The copy file itself, named. "The plugin keeps a real copy" is a claim;
             "these two ids live in this file right now" is something the user can
             open with an editor. Rendered only when the Host reports it, so an

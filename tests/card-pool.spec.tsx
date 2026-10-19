@@ -388,22 +388,6 @@ describe('AccountPool card section', () => {
     expect(line.textContent).toContain('2')
   })
 
-  it('spells out the sign-in/refresh workflow in the settings block', () => {
-    // Trae keeps ONE sign-in, so an account is only preserved if the card is
-    // refreshed before the next sign-in. Getting that wrong silently loses an
-    // account, so the rule is a warning box in the settings block, not grey text.
-    const { scope } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a'] }))
-    renderPool(basePool(), scope)
-    const section = poolSection()
-    expect(within(section).getByText('row.poolMirrorWorkflowTitle')).toBeTruthy()
-    expect(within(section).getByText('row.poolMirrorWorkflowHint')).toBeTruthy()
-    // It sits above the preference note, so it is read before the controls.
-    const note = within(section).getByText('row.poolSettingsNote')
-    const warning = within(section).getByText('row.poolMirrorWorkflowTitle').parentElement
-    expect(warning?.className).toContain('dsm-trae-pool-warning')
-    expect(note.compareDocumentPosition(warning!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
-  })
-
   it('checkbox toggles the draft and marks dirty; saving writes regions via scope.set and clears dirty', async () => {
     const { scope, calls } = makeScope(pooledInitial({ enabled: true, memberAccountIds: ['acc-a', 'acc-b'] }))
     renderPool(basePool(), scope)

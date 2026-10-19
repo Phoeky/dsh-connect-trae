@@ -169,10 +169,6 @@ export const en = {
   'row.expiryWarningWeek': '{total} credit lapses within 7 days ({packs} packs)',
   'row.expiryWarningLapsed': '{total} credit has already lapsed but is still counted in the balance ({packs} packs)',
   'row.expiryEarliest': 'Earliest: {time}',
-  'row.appLoginMismatch': 'Trae is signed in to {account}, but this plugin is bound to {bound}.',
-  'row.appLoginFollow': 'Use {account}',
-  'row.followAppLogin': 'Follow the account Trae is signed in to',
-  'row.followAppLoginHint': 'Rebind automatically when you switch accounts in the Trae desktop app. Off by default, so the current binding is kept.',
   // The 设置 block's own chrome: it commits on save, so both the draft state and
   // the way back out have to be visible.
   'row.settingsDirty': 'Unsaved changes',
@@ -226,8 +222,6 @@ export const en = {
   // The one workflow rule a two-slot app forces: Trae keeps ONE sign-in, so a
   // login is only preserved if the card is refreshed (and therefore mirrored)
   // before the next sign-in overwrites it.
-  'row.poolMirrorWorkflowTitle': 'Sign in one account, then refresh',
-  'row.poolMirrorWorkflowHint': 'The Trae app holds only one sign-in. After signing in to an account, refresh this card (or click “Detect accounts again”) so the plugin saves that login as its own copy. Switch accounts without refreshing and the previous login is not saved — the new one overwrites it in Trae.',
   'row.poolSettingsNote': 'Preferences below take effect when you save; test results are written by the plugin and are not affected by that button.',
   'row.poolSelectedCount': 'Selected {count} / {total}',
   'row.poolNoCopyTag': 'no copy here',
@@ -511,10 +505,6 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.expiryWarningWeek': '有 {total} 积分将在 7 天内过期（{packs} 个套餐）',
   'row.expiryWarningLapsed': '有 {total} 积分已过期但仍计入余额（{packs} 个套餐）',
   'row.expiryEarliest': '最早到期：{time}',
-  'row.appLoginMismatch': 'Trae 已登录 {account}，但本插件绑定的是 {bound}。',
-  'row.appLoginFollow': '改用 {account}',
-  'row.followAppLogin': '跟随 Trae 当前登录的账号',
-  'row.followAppLoginHint': '在 Trae 桌面端切换登录后自动换绑到新账号。默认关闭，已有绑定保持不变。',
   'row.settingsDirty': '有未保存的修改',
   'row.modelsTestEmpty': '请先启用至少一个模型。',
   'row.modelsTestError': '测试失败：{message}',
@@ -563,8 +553,6 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.poolCreditExpiry': '{when} 过期',
   'row.poolProbeMeasured': '测得 {when}',
   'row.poolProbeAt': '测试于 {when}',
-  'row.poolMirrorWorkflowTitle': '每登录一个账号，就刷新一次',
-  'row.poolMirrorWorkflowHint': 'Trae 应用只有一个登录位：每登录一个账号，就回到这里刷新一次（打开卡片或点「重新检测账号」），插件会把这次登录保存成一份自己的副本。没刷新就换号，上一个账号不会被保存——它会被 Trae 里的新登录覆盖。',
   'row.poolSettingsNote': '下面是偏好设置：点保存才生效；测试结果由插件自动写入，不受这个保存按钮影响。',
   'row.poolSelectedCount': '已选 {count} / {total}',
   'row.poolNoCopyTag': '本机无副本',

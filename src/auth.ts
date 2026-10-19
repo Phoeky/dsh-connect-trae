@@ -646,39 +646,6 @@ export class TraeCredentialStore {
   }
 
   /**
-   * The account the Trae app is signed in to right now, when that differs from
-   * the account this store is bound to (issue #29).
-   *
-   * This is a READ, not a rebind: `current()` keeps resolving the bound
-   * account verbatim so billing never moves without a decision — the store
-   * only reports the mismatch, and the card (hint row) or the host (follow
-   * switch) turns it into a settings write the user can see and undo. Absent
-   * when nothing is live, when the live account IS the bound one, or when the
-   * binding itself already fell through to the live account.
-   */
-  async liveLogin(): Promise<TraeAccountChoice | undefined> {
-    // No explicit bind: the default (`preferred`) already IS the live login,
-    // so `current()` resolves it — there is no mismatch to report.
-    if (this.accountId === undefined || this.accountId === '') return undefined
-    const credentials = await this.readAll()
-    const live = this.preferred(credentials)
-    if (live === undefined) return undefined
-    const liveId = traeAccountId(live)
-    if (liveId === this.accountId) return undefined
-    return {
-      id: liveId,
-      accountName: live.accountName ?? (live.userId || `${live.edition} account`),
-      edition: live.edition,
-      enterprise: isEnterpriseAccount(live),
-      region: regionOfCredential(live),
-      source: live.source,
-      tokenExpiresAtMs: live.expiresAtMs,
-      ...live.refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs: live.refreshExpiresAtMs },
-      selected: false,
-    }
-  }
-
-  /**
    * The accounts this store is willing to OFFER.
    *
    * Scoped to who this store may bill:

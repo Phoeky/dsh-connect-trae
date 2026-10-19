@@ -75,13 +75,6 @@ function creditsSwitch(): HTMLInputElement {
   return box
 }
 
-/** The follow-the-app checkbox, by its own label. */
-function followSwitch(): HTMLInputElement {
-  const [box] = screen.getAllByRole('checkbox', { name: /^row\.followAppLogin\b/ }) as HTMLInputElement[]
-  if (box === undefined) throw new Error('the follow-the-app checkbox is missing from the card')
-  return box
-}
-
 /**
  * Wait for one preference write to reach the recorded document.
  *
@@ -129,13 +122,12 @@ describe('the composer-credits switch in the card', () => {
     expect(composerPointsEnabledOf(holder.scope as never)).toBe(false)
   })
 
-  it('writes ONLY the switch that was clicked, never its sibling', async () => {
-    // `followAppLogin` is already true in the document. An immediate write must
-    // still name exactly one field: sending both would let this click clobber a
-    // change made elsewhere with the value this card happened to read.
-    const holder = makeScope({ followAppLogin: true })
+  it('writes ONLY the switch that was clicked, never anything else', async () => {
+    // An immediate write must name exactly one field: sending more would let
+    // this click clobber a change made elsewhere with the value this card
+    // happened to read.
+    const holder = makeScope({})
     renderOpen(holder.scope)
-    expect(followSwitch().checked).toBe(true)
     fireEvent.click(creditsSwitch())
     await waitForWrite(holder.writes)
     expect(holder.writes).toEqual([{ field: 'showPointsInMainUi', value: true }])
