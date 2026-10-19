@@ -173,6 +173,13 @@ export const en = {
   // the way back out have to be visible.
   'row.settingsDirty': 'Unsaved changes',
   'row.modelsTestEmpty': 'Enable at least one model first.',
+  // Bulk context-budget switch (issue #42 side request): the per-model radios stay;
+  // these two act on the whole region draft at once, replacing the reporter's
+  // 18-clicks-to-Max workflow with one button.
+  'row.contextAllMax': 'Switch all to Max',
+  'row.contextAllMaxHint': 'Sets the DSH context budget of every model in this region that has a Max window to its Max window at once. Still a draft — press Save to apply. Models without a Max window are left alone.',
+  'row.contextAllDefault': 'Restore default context',
+  'row.contextAllDefaultHint': 'Clears every context-budget override in this region, so all models go back to Trae\'s default window. Still a draft — press Save to apply.',
   'row.modelsTestError': 'Test failed: {message}',
   'row.modelsTestDone': '{available} of {total} answered.',
   'row.probeAvailable': 'works',
@@ -507,6 +514,12 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.expiryEarliest': '最早到期：{time}',
   'row.settingsDirty': '有未保存的修改',
   'row.modelsTestEmpty': '请先启用至少一个模型。',
+  // 整区上下文批量切换（issue #42 附带需求）：每行的单选照旧，这两个按钮一次作用于
+  // 整个面板的草稿——报告者数了 18 个 Max 模型要点 18 次，现在一次搞定。
+  'row.contextAllMax': '整区切到 Max',
+  'row.contextAllMaxHint': '把本区所有带 Max 档的模型的 DSH 上下文预算一次性设为各自的 Max 档。这只是草稿——要按「保存」才生效。没有 Max 档的模型不会被改动。',
+  'row.contextAllDefault': '全部恢复默认上下文',
+  'row.contextAllDefaultHint': '清掉本区所有上下文预算覆盖，让每个模型都回到 Trae 的默认窗口。这只是草稿——要按「保存」才生效。',
   'row.modelsTestError': '测试失败：{message}',
   'row.modelsTestDone': '{total} 个里有 {available} 个正常应答。',
   'row.probeAvailable': '可用',

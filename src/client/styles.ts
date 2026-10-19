@@ -295,6 +295,10 @@ export const TRAE_CARD_CSS = `
   color:var(--dsw-alias-brand-primary,#2563eb);font-size:11px;line-height:16px;
 }
 .dsm-trae-models-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
+/* Bulk context-budget row (issue #42): under the model list, above the
+   capability note. Wraps on narrow cards; keeps the two buttons visually a
+   pair and distinct from the save footer below. */
+.dsm-trae-context-bulk{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 /* Verdict badge. Only a real refusal is coloured as a warning; an unknown
    verdict stays neutral because an inconclusive probe is not evidence against
    the model. */

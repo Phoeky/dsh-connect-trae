@@ -1142,6 +1142,37 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
     })
   }
 
+  /**
+   * Bulk context-budget switch (issue #42 side request). The per-model radios
+   * stay exactly as they are; these two act on the whole region draft at once.
+   * The reporter counted 18 CN models whose Max window differs from the
+   * default and described clicking 18 times per region — 「整区切到 Max」 is
+   * those 18 clicks as one button. It writes `maxContextWindow` per row, which
+   * is precisely the spelling `applyContextBudgets` recognizes (a budget equal
+   * to the native Max window widens the effective window), so bulk and per-row
+   * paths land on identical saved state. Models without a Max window are left
+   * untouched — inventing a budget for them would be filtered out anyway.
+   */
+  const setAllContextMax = (): void => {
+    editDraft(current => {
+      const next = { ...current.contextBudgets }
+      for (const model of current.models) {
+        if (model.maxContextWindow !== undefined) next[model.id] = model.maxContextWindow
+      }
+      return { ...current, contextBudgets: next }
+    })
+  }
+
+  /**
+   * 「恢复默认上下文」 clears every override in this region's draft. Empty
+   * dict = every row falls back to its default window (the same state as a
+   * region that was never configured), and clearing is what makes the bulk
+   * action reversible without 18 more clicks.
+   */
+  const resetAllContextBudgets = (): void => {
+    editDraft(current => ({ ...current, contextBudgets: {} }))
+  }
+
   const discardModels = (): void => {
     setDrafts(prev => {
       const next = { ...prev }
@@ -1919,6 +1950,29 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                             </div>
                           </div>
                         ))}
+                      </div>
+                      {/* Bulk context switch (issue #42): sits directly under the
+                          per-row budget radios it replaces a click-walk through,
+                          so the affordance is next to what it acts on. */}
+                      <div className="dsm-trae-context-bulk">
+                        <button
+                          type="button"
+                          className="dsm-btn dsm-btn-outline"
+                          disabled={busy || saving || settingsScope?.getSnapshot().writable !== true || !visibleModels.some(model => model.maxContextWindow !== undefined)}
+                          title={t('row.contextAllMaxHint')}
+                          onClick={setAllContextMax}
+                        >
+                          {t('row.contextAllMax')}
+                        </button>
+                        <button
+                          type="button"
+                          className="dsm-btn dsm-btn-outline"
+                          disabled={busy || saving || settingsScope?.getSnapshot().writable !== true || Object.keys(activeContextBudgets).length === 0}
+                          title={t('row.contextAllDefaultHint')}
+                          onClick={resetAllContextBudgets}
+                        >
+                          {t('row.contextAllDefault')}
+                        </button>
                       </div>
                       <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
                       <div className="dsm-trae-model-actions">
