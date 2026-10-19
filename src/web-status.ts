@@ -35,6 +35,7 @@ import {
   TRAE_REGION_PARAM,
   TRAE_TRANSFER_PATH,
   TRAE_USAGE_PATH,
+  fastDetailOf,
   transferActionOf,
 } from './status-paths.ts'
 import { mergeTransferRecords, parseTransferFile, previewTransferFile, traeTransferRecordOf } from './transfer.ts'
@@ -161,6 +162,31 @@ export interface TraePoolDeps {
    */
   members(panel: TraePanel): Promise<readonly TraePoolMember[]>
   /**
+   * One panel's pool membership from LOCAL state only — the first-paint source
+   * (issue #77).
+   *
+   * Cheap by contract in the strongest sense: no upstream read at all, so the
+   * account table can be painted before any billing endpoint answers. A member
+   * whose credit total has never been measured carries no `credits`, which the
+   * card already renders as `—` rather than as a wrong figure; the follow-up
+   * full document fills the real numbers in.
+   *
+   * A Host built without it degrades to omitting the pool block from a
+   * first-paint document rather than paying {@link members} there — the card
+   * then shows its single-account view for one refresh cycle.
+   */
+  localMembers?(panel: TraePanel): Promise<readonly TraePoolMember[]>
+  /**
+   * The panel's saved member names, from a local scan only.
+   *
+   * The first-paint counterpart of {@link memberNames}. The full document builds
+   * these by walking {@link members} (which reads every balance), which is a
+   * second full membership pass for a map of names; the fast document must not
+   * pay that, and it does not need to: the saved-list rows it renders are the
+   * ones {@link localMembers} already names.
+   */
+  localMemberNames?(panel: TraePanel): Promise<Record<string, string>>
+  /**
    * The checked ids that still resolve to a local sign-in, from a local scan only.
    * The batch route's empty-pool guard runs this on every request, so it must not
    * cost an upstream call — {@link members} is not suitable there.
@@ -183,6 +209,16 @@ export interface TraePoolDeps {
    * TODAY because this machine already spent its claim on another account.
    */
   checkinState?(panel: TraePanel): Promise<Record<string, TraePoolCheckinState>>
+  /**
+   * Today's check-in state from the cells already measured this process — the
+   * first-paint counterpart (issue #77) of {@link checkinState}.
+   *
+   * Synchronous by contract: it reads the Host's measurement cache and nothing
+   * else, so it must never start a request. A Host without it degrades to an
+   * unknown check-in column in the first paint, which the card already renders
+   * as unknown; the full document fills the column in.
+   */
+  cachedCheckinState?(panel: TraePanel): Readonly<Record<string, TraePoolCheckinState>>
   /** Run the check-in batch. Persists nothing to settings; drops its own caches. */
   checkin?(panel: TraePanel): Promise<readonly TraePoolCheckinRow[]>
   /** Run the model-availability batch and persist its measurements. */
@@ -202,6 +238,20 @@ export interface TraePoolCheckinState {
   /** Whether this account is offered the reward at all; false renders `disabled`. */
   enabled?: boolean
 }
+
+/**
+ * Which usage document a request asked for (issue #77).
+ *
+ * `full` is the document every earlier caller has always received: live credit
+ * figures, fresh check-in state, the ranked pool. `fast` is the same document
+ * built from LOCAL state only — no upstream read at all — so the card can paint
+ * the account table immediately and then upgrade it with the full document.
+ *
+ * The distinction lives in ONE optional query parameter (`detail`) so an old
+ * caller, a hand-written curl and a browser refresh all keep working: an absent
+ * or unrecognised value is `full`.
+ */
+export type TraeStatusDetail = 'full' | 'fast'
 
 /** Redact token-like content before it crosses to the browser. */
 function safeMessage(error: unknown): string {
@@ -490,7 +540,12 @@ export function toCheckin(status: {
  * Sign-in state is read-only; credit is a live billing answer whose failure
  * degrades to `creditsError` rather than failing the whole document.
  */
-export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<TraeWebUsage> {
+export async function traeWebUsage(
+  deps: TraeUsageRouteOptions,
+  panel: TraePanel,
+  options: { detail?: TraeStatusDetail } = {},
+): Promise<TraeWebUsage> {
+  const fast = options.detail === 'fast'
   const store = deps.store(panel)
   const enabled = deps.regionEnabled(panel)
   /**
@@ -527,7 +582,17 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
   }
   let credential
   try {
-    credential = await store.resolve()
+    // The first paint reads the credential that is ALREADY known locally.
+    // `resolve()` is the right call for the full document — it makes sure the
+    // tokens handed to the upstream are usable — but it can refresh them over
+    // the network, and no token refresh may decide when the account list
+    // appears. An expired token is fine here: the card only needs identity and
+    // expiry to paint, and the follow-up full document still validates it.
+    credential = fast ? await store.current() : await store.resolve()
+    // With nothing known locally there is nothing to paint either; `resolve()`
+    // then only classifies WHY (it makes no network call without a credential),
+    // so the first paint still gets the same diagnosis as the full document.
+    if (credential === undefined) credential = await store.resolve()
   } catch (error: unknown) {
     // Account selection must remain available even when the selected token is
     // expired or its refresh request fails. Report that as account-level status
@@ -564,7 +629,26 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions, panel: TraePanel
   // The pool is assembled LAST and never allowed to fail this document: it is
   // the one section whose own reads touch every member account, and a member
   // with a broken balance must not take the sign-in panel down with it.
-  const poolSection = await poolSectionOf(deps, panel)
+  //
+  // ISSUE #77: on the first paint the pool comes from LOCAL state only, and the
+  // live figures are skipped entirely. That is the whole point of this branch —
+  // the account table used to wait on a billing read per account (several times
+  // over, through the pool's member/name/other-account deps) before it could
+  // appear, which is the 30–60 s the issue reports. Identity, expiry, the model
+  // list and the pool rows are all known locally, so they are enough to paint.
+  if (fast) {
+    const poolSection = await poolSectionOf(deps, panel, true)
+    return {
+      status: 'signed-in',
+      ...account,
+      ...poolSection,
+      // A CONSTANT, not a measurement: this panel has no reachable credit figure
+      // by design, so saying so costs no upstream read and must not be withheld
+      // from the first paint (the card explains where the real number lives).
+      ...panel === 'enterprise' ? { creditsUnavailable: 'enterprise' as const } : {},
+    }
+  }
+  const poolSection = await poolSectionOf(deps, panel, false)
   const client = deps.client(panel)
   if (regionOfPanel(panel) === 'ai') {
     // The international panel is subscription-based: read its pay status
@@ -676,10 +760,14 @@ async function creditAlternatives(
  * BOUND account, which `traeWebUsage` reports as `status: error` before the pool
  * is even assembled.
  */
-export async function poolSectionOf(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<{ pool?: TraeWebPool }> {
+export async function poolSectionOf(
+  deps: TraeUsageRouteOptions,
+  panel: TraePanel,
+  fast = false,
+): Promise<{ pool?: TraeWebPool }> {
   if (deps.pool === undefined) return {}
   try {
-    const pool = await traeWebPool(deps, panel)
+    const pool = await traeWebPool(deps, panel, fast)
     return pool === undefined ? {} : { pool }
   } catch {
     // The document is worth more than the section: the card then renders its
@@ -701,11 +789,19 @@ export async function poolSectionOf(deps: TraeUsageRouteOptions, panel: TraePane
  * Every per-row read is failure-tolerant on purpose: one account whose balance
  * read throws must not remove the other members from the table.
  */
-export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel): Promise<TraeWebPool | undefined> {
+export async function traeWebPool(
+  deps: TraeUsageRouteOptions,
+  panel: TraePanel,
+  fast = false,
+): Promise<TraeWebPool | undefined> {
   const pool = deps.pool
   if (pool === undefined) return undefined
   const preferences = pool.preferences(panel)
-  const members = await pool.members(panel)
+  // ISSUE #77: the first paint must not read every member's balance. `localMembers`
+  // is the same roster from local state only; a Host without it omits the pool
+  // block here rather than silently paying the expensive read it was told to skip.
+  const members = fast ? await pool.localMembers?.(panel) : await pool.members(panel)
+  if (members === undefined) return undefined
   const nowMs = Date.now()
   const ranked = rankPool(members, nowMs)
   const catalog = pool.catalog?.(panel) ?? []
@@ -713,9 +809,31 @@ export async function traeWebPool(deps: TraeUsageRouteOptions, panel: TraePanel)
   const byId = new Map(members.map(member => [member.account.id, member]))
   const excludedById = new Map(ranked.flatMap(row => row.excludedBy === undefined ? [] : [[row.account.id, row.excludedBy] as const]))
   const rankedIds = new Set(ranked.map(row => row.account.id))
-  const others = (await pool.otherAccounts?.(panel) ?? []).filter(account => !rankedIds.has(account.id))
-  const checkinState = await pool.checkinState?.(panel).catch((): Record<string, TraePoolCheckinState> => ({})) ?? {}
-  const memberNames = await pool.memberNames?.(panel).catch((): Record<string, string> => ({})) ?? {}
+  /**
+   * ISSUE #77: every dep below is shaped so the first paint can avoid the
+   * upstream. `otherAccounts`, `memberNames` and `checkinState` are all derived
+   * from a FULL membership pass on this Host (one balance read per account), and
+   * three of them in a row is most of the reported wait. The fast document
+   * answers the same questions from the roster it already has:
+   *
+   * - `otherAccounts`: the local roster minus the members already ranked. The
+   *   saved-but-unreachable ghosts are added below from `preferences` anyway, so
+   *   nothing a row is built from goes missing.
+   * - `memberNames`: only consulted for ghosts, whose rows the fast document
+   *   carries from `localMemberNames` when the Host offers it.
+   * - `checkinState`: the measurement cache, read synchronously.
+   */
+  const others = fast
+    ? members
+        .filter(member => !rankedIds.has(member.account.id))
+        .map(member => member.account)
+    : (await pool.otherAccounts?.(panel) ?? []).filter(account => !rankedIds.has(account.id))
+  const checkinState: Record<string, TraePoolCheckinState> = fast
+    ? { ...pool.cachedCheckinState?.(panel) ?? {} }
+    : await pool.checkinState?.(panel).catch((): Record<string, TraePoolCheckinState> => ({})) ?? {}
+  const memberNames: Record<string, string> = fast
+    ? await pool.localMemberNames?.(panel).catch((): Record<string, string> => ({})) ?? {}
+    : await pool.memberNames?.(panel).catch((): Record<string, string> => ({})) ?? {}
   const currentAccountId = await pool.currentAccountId?.(panel).catch((): undefined => undefined)
   /**
    * A row per listed account, members first.
@@ -957,8 +1075,12 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
         const panel = requestRegion(req, res)
         if (panel === undefined) return
+        // ISSUE #77: `detail=fast` asks for the first-paint document (local state
+        // only, no upstream read). Absent or unrecognised values mean the FULL
+        // document, so an old client — or a typo — never gets a thinner panel.
+        const detail: TraeStatusDetail = fastDetailOf(req.url ?? '') ? 'fast' : 'full'
         try {
-          json(res, 200, await traeWebUsage(deps, panel))
+          json(res, 200, await traeWebUsage(deps, panel, { detail }))
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }

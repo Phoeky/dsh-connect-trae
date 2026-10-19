@@ -560,6 +560,39 @@ export function regionOfTraeStatusUrl(url: string): TraePanel | undefined {
   return (TRAE_PANELS as readonly string[]).includes(value) ? value as TraePanel : undefined
 }
 
+/** Query parameter asking for a thinner first-paint document (issue #77). */
+export const TRAE_DETAIL_PARAM = 'detail'
+
+/** The only recognised `detail` value: local state only, no upstream read. */
+export const TRAE_DETAIL_FAST = 'fast'
+
+/**
+ * Address one panel's usage route asking for the FAST document, e.g.
+ * `/plugins/dsh-connect-trae/usage?region=cn&detail=fast`.
+ *
+ * Kept beside {@link withTraeRegion} for the same reason as
+ * {@link withTraeTransferAction}: the region is already a parameter, so a caller
+ * appending `&detail=` by hand is one typo away from a request that silently
+ * asks for the wrong document.
+ */
+export function withTraeRegionFastDetail(path: string, panel: TraePanel): string {
+  return `${withTraeRegion(path, panel)}&${TRAE_DETAIL_PARAM}=${TRAE_DETAIL_FAST}`
+}
+
+/**
+ * Whether a request URL asks for the fast document.
+ *
+ * Only the exact value counts — a typo (`fastest`, `FAST`) degrades to the FULL
+ * document, because a thinner panel is a worse failure than a slower one: the
+ * caller that made the mistake is asking about an optimisation, so the safe
+ * answer is the truthful one.
+ */
+export function fastDetailOf(url: string): boolean {
+  const at = url.indexOf('?')
+  if (at === -1) return false
+  return new URLSearchParams(url.slice(at + 1)).get(TRAE_DETAIL_PARAM) === TRAE_DETAIL_FAST
+}
+
 /** One credit pack and its remaining credit. */
 export interface TraeWebCreditAccount {
   displayDesc: string

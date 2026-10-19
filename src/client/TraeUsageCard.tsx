@@ -25,6 +25,7 @@ import {
   TRAE_USAGE_PATH,
   unwrapVolatileDeep,
   withTraeRegion,
+  withTraeRegionFastDetail,
 } from '../status-paths.ts'
 import type { TraeModelProbeVerdict, TraeModelsTestResponse, TraeWebAccount, TraeWebAccountState, TraeWebCheckinClaim, TraeWebCreditExpiry, TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import type { TraeCreditPosition } from '../status-paths.ts'
@@ -281,12 +282,18 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
   const [open, setOpen] = useState(view === 'page')
   /** The region whose tab is on screen; each tab is its own provider stack. */
   const [activeRegion, setActiveRegion] = useState<TraePanel>('cn')
-  /** Last-known usage per region, so tab dots survive tab switches. */
-  const [statusByRegion, setStatusByRegion] = useState<Partial<Record<TraePanel, TraeWebUsage>>>({
-    cn: { status: 'signed-out', accounts: [] },
-    enterprise: { status: 'signed-out', accounts: [] },
-    ai: { status: 'signed-out', accounts: [] },
-  })
+  /**
+   * Last-known usage per region, so tab dots survive tab switches.
+   *
+   * A region is ABSENT until something has been read for it (issue #77). It used
+   * to be seeded with a signed-out document, which meant the whole wait for the
+   * first paint rendered as "not signed in — sign in again / scan for accounts"
+   * to a user who was perfectly signed in. The difference between "nothing known
+   * yet" and "known to be signed out" is the difference between a loading line
+   * and a wrong instruction, so the map starts empty and the render below says
+   * which one it is.
+   */
+  const [statusByRegion, setStatusByRegion] = useState<Partial<Record<TraePanel, TraeWebUsage>>>({})
   const [busy, setBusy] = useState(false)
   /**
    * Availability verdicts from the one-click test, per region, keyed by model
@@ -564,14 +571,77 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
     }
   }, [t])
 
+  /**
+   * Paint the fast document (issue #77).
+   *
+   * The full document above cannot answer before the Host has read every member's
+   * balance — one upstream round-trip per account, and this panel's pool assembly
+   * happens to walk the membership more than once. That is the wait the issue
+   * reports: tens of seconds in which the card used to show nothing at all.
+   *
+   * The fast document is built from local state only (no upstream read at all), so
+   * it answers in milliseconds and carries everything needed to DRAW: the bound
+   * account, its expiry, the model list and the pool rows. The live figures it
+   * omits (credits, check-in column) are exactly the values that need the round
+   * trip, and the card already renders their absence as `—` / unknown.
+   *
+   * Deliberately separate from {@link refreshUsage} rather than a parameter of it:
+   * a first paint never writes an error state (a slow upstream is not the user's
+   * problem until the full document says so), and it must never downgrade a region
+   * that has already been painted in full.
+   */
+  const refreshUsageFast = useCallback(async (
+    region: TraePanel,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    try {
+      const response = await fetch(withTraeRegionFastDetail(TRAE_USAGE_PATH, region), {
+        headers: { accept: 'application/json' },
+        credentials: 'same-origin',
+        ...signal === undefined ? {} : { signal },
+      })
+      if (!response.ok) return
+      const value: unknown = await response.json().catch(() => undefined)
+      const usage = value as TraeWebUsage | undefined
+      if (usage === undefined) return
+      if (!mounted.current || signal?.aborted === true) return
+      setStatusByRegion(prev => {
+        const previous = prev[region]
+        // A full document already on screen wins: repainting it from a thinner one
+        // would make credits and check-in marks flicker away for no reason.
+        if (previous !== undefined && previous.status === 'signed-in') return prev
+        return { ...prev, [region]: usage }
+      })
+    } catch {
+      // A failed first paint is simply no paint yet — the full document (or its
+      // error state) is the one that reports failures.
+    }
+  }, [])
+
   useEffect(() => {
     if (!open || !activeRegionOn) return
     const controller = new AbortController()
-    void refreshUsage(activeRegion, controller.signal)
+    void (async () => {
+      // Paint first, then pay for the live figures. Sequential on purpose: the full
+      // request must not race the fast one into the same region's state.
+      await refreshUsageFast(activeRegion, controller.signal)
+      if (controller.signal.aborted) return
+      void refreshUsage(activeRegion, controller.signal)
+    })()
     return () => { controller.abort() }
-  }, [open, activeRegion, activeRegionOn, refreshUsage])
+  }, [open, activeRegion, activeRegionOn, refreshUsage, refreshUsageFast])
 
-  const status: TraeWebUsage = statusByRegion[activeRegion] ?? { status: 'signed-out', accounts: [] }
+  /**
+   * The document actually on screen for this region, and whether one has arrived.
+   *
+   * `loaded === undefined` is the only state that may render the loading line: a
+   * signed-out document is a real answer (the user must sign in), never a stand-in
+   * for "still fetching".
+   */
+  const loaded: TraeWebUsage | undefined = statusByRegion[activeRegion]
+  const loading = loaded === undefined
+
+  const status: TraeWebUsage = loaded ?? { status: 'signed-out', accounts: [] }
 
   /**
    * Clear in-flight claim state when the tab changes. `activeRegion` is a single
@@ -1305,11 +1375,16 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
       </button>
     )
   }
-  const label = status.status === 'signed-in'
-    ? t('row.signedIn', { accountName: status.accountName })
-    : status.status === 'error'
-      ? t('row.requestFailed')
-      : t('row.signedOut')
+  // `loading` outranks the document's own status: before anything has answered,
+  // the only true word is "loading" (issue #77 — a signed-out label over a slow
+  // fetch is a claim about a user who may well be signed in).
+  const label = loading
+    ? t('row.accountsLoading')
+    : status.status === 'signed-in'
+      ? t('row.signedIn', { accountName: status.accountName })
+      : status.status === 'error'
+        ? t('row.requestFailed')
+        : t('row.signedOut')
 
   return (
     <li className={`dsm-plugin-card${open ? ' dsm-plugin-card-open' : ''}`}>
@@ -1934,7 +2009,15 @@ export function TraeUsageCard({ t, settingsScope, view }: TraeUsageCardProps) {
                     </section>
                   </>
                 : null}
-              {status.status === 'signed-out'
+              {status.status === 'signed-out' && loading
+                ? <>
+                  {/* Nothing has answered yet. Saying "not signed in" here would be a
+                      claim, not a placeholder — issue #77 is exactly the case of a
+                      signed-in user reading it for a minute. */}
+                  <p className="dsm-trae-usage-text" role="status">{t('row.accountsLoading')}</p>
+                </>
+                : null}
+              {status.status === 'signed-out' && !loading
                 ? <>
                   <p className="dsm-trae-usage-text">{status.message ?? t('row.signedOutHint')}</p>
                   {status.searched && status.searched.length > 0

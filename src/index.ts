@@ -533,6 +533,16 @@ export const Config: z<Config> = z.object({
 const REGION_KEYS: readonly TraeRegion[] = ['cn', 'ai']
 
 /**
+ * How long a measured check-in state stays usable (issue #77).
+ *
+ * The upstream rewards ONE check-in per device per day, so a figure measured
+ * minutes ago cannot have changed; re-reading it is a pure upstream round-trip.
+ * Ten minutes matches the sibling plugin's cache and is comfortably shorter than
+ * a day, so a genuine second check-in still shows up on the next poll after it.
+ */
+const CHECKIN_CACHE_MS = 10 * 60_000
+
+/**
  * What ONE failed real request means for the account that served it (issue #44).
  *
  * The shim only reports account-scoped kinds here, so this table never has to
@@ -1250,6 +1260,25 @@ export function apply(ctx: Context, config: Config): void {
     ai: new Map(),
   }
 
+  /**
+   * Today's check-in state per account, measured by the LAST full read.
+   *
+   * Issue #77: the check-in column used to be an upstream call per account with
+   * no memory at all, so every open of the card paid for every member twice (the
+   * pool's own membership pass plus one `checkinStatus()` each). The first-paint
+   * document may not wait for any of that, and re-measuring what was measured
+   * minutes ago buys nothing: a check-in happens at most once per device per day.
+   *
+   * Entries older than {@link CHECKIN_CACHE_MS} are treated as absent rather than
+   * as stale truth, so a document never claims "already checked in" off yesterday's
+   * measurement. A cold cache means "not read", which the card renders as unknown.
+   */
+  const checkinStateCache: Record<TraePanel, Record<string, { state: TraePoolCheckinState; atMs: number }>> = {
+    cn: {},
+    enterprise: {},
+    ai: {},
+  }
+
   const poolCreditsOfAccount = async (panel: TraePanel, accountId: string): Promise<TraePoolCredits | undefined> => {
     const credits = await stacks[panel].creditsOfAccount(accountId)
     if (credits === undefined) return undefined
@@ -1328,6 +1357,25 @@ export function apply(ctx: Context, config: Config): void {
     const names = await poolMemberNamesOf(panel)
     return effectiveMembersOf(saved, new Set(Object.keys(names)))
       .map(accountId => ({ accountId, accountName: names[accountId] ?? '' }))
+  }
+
+  /**
+   * Today's check-in state from the cells already measured — the first-paint read
+   * (issue #77).
+   *
+   * Synchronous and local by contract: it never starts a request, so the card's
+   * first paint cannot be held by the upstream. Only FRESH cells are returned; an
+   * expired entry is dropped rather than reported, because "checked in" from four
+   * hours ago is a claim about a day that may already be over.
+   */
+  function cachedCheckinStateOf(panel: TraePanel): Record<string, TraePoolCheckinState> {
+    const nowMs = Date.now()
+    const state: Record<string, TraePoolCheckinState> = {}
+    for (const [accountId, entry] of Object.entries(checkinStateCache[panel])) {
+      if (nowMs - entry.atMs >= CHECKIN_CACHE_MS) continue
+      state[accountId] = entry.state
+    }
+    return state
   }
 
   /**
@@ -1576,20 +1624,26 @@ export function apply(ctx: Context, config: Config): void {
       checkinSupported: stored => regionOfPanel(stored) === 'cn',
       checkin: async stored => checkinAllAccounts(await poolTargetsOf(stored), probeDeps()),
       checkinState: async stored => {
-        const state: Record<string, TraePoolCheckinState> = {}
+        const state = cachedCheckinStateOf(stored)
+        const nowMs = Date.now()
         for (const target of await poolTargetsOf(stored)) {
           const credential = await stacks[stored].store.resolveCredentialOf(target.accountId)
           if (credential === undefined) continue
           const client = new TraeUsageClient({ credential: async () => credential, deviceId: async () => (await stacks[stored].identity()).deviceId })
           try {
             const status = await client.checkinStatus()
-            state[target.accountId] = { checkedIn: status.checkedIn, deviceCheckedIn: status.didCheckedIn, enabled: status.enabled }
+            const measured: TraePoolCheckinState = { checkedIn: status.checkedIn, deviceCheckedIn: status.didCheckedIn, enabled: status.enabled }
+            state[target.accountId] = measured
+            // Shared with the first-paint read below: a measurement is worth the
+            // same whether somebody watched it happen or found it here.
+            checkinStateCache[stored][target.accountId] = { state: measured, atMs: nowMs }
           } catch {
             // An unreadable row simply carries no check-in figure.
           }
         }
         return state
       },
+      cachedCheckinState: stored => cachedCheckinStateOf(stored),
       test: async (stored, modelId, onRow) => {
         await warmWireMap(stored)
         const probeInputTokens = probeInputTokensOf(stored)
@@ -1713,6 +1767,16 @@ export function apply(ctx: Context, config: Config): void {
     pool: {
       preferences: panel => poolPreferencesOf(panel),
       members: panel => poolMembersOf(panel),
+      // Issue #77: the first-paint source. Same roster, without the per-account
+      // balance read — a member whose credits were never measured simply carries
+      // none, which the card renders as `—` and the next full document corrects.
+      localMembers: panel => localPoolMembers(panel),
+      // The fast pool's name map, from the same local membership (no balance read).
+      localMemberNames: async panel => {
+        const names: Record<string, string> = {}
+        for (const member of await localPoolMembers(panel)) names[member.account.id] = member.account.accountName
+        return names
+      },
       effectiveMemberAccountIds: async panel => {
         const saved = poolPreferencesOf(panel).memberAccountIds ?? []
         return effectiveMembersOf(saved, new Set((await poolMembersOf(panel)).map(member => member.account.id)))
@@ -1731,6 +1795,9 @@ export function apply(ctx: Context, config: Config): void {
       checkinSupported: panel => regionOfPanel(panel) === 'cn',
       checkin: panel => poolDepsOf(panel).checkin?.(panel) ?? Promise.resolve([]),
       checkinState: panel => poolDepsOf(panel).checkinState?.(panel) ?? Promise.resolve({}),
+      // Issue #77: the first paint reads the measurement cache the line above
+      // fills, instead of paying one upstream read per account.
+      cachedCheckinState: panel => cachedCheckinStateOf(panel),
       test: (panel, modelId, onRow) => poolDepsOf(panel).test?.(panel, modelId, onRow) ?? Promise.resolve([]),
       testOne: (panel, accountId) => poolDepsOf(panel).testOne?.(panel, accountId) ?? Promise.resolve(undefined),
       removeOne: (panel, accountId) => poolDepsOf(panel).removeOne?.(panel, accountId) ?? Promise.resolve(false),

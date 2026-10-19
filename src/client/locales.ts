@@ -96,6 +96,9 @@ export const en = {
   'row.transferNoToken': 'no token, will be skipped',
   'row.accountsRescan': 'Detect accounts again',
   'row.accountsScanning': 'Detecting…',
+  // Issue #77: shown while NOTHING has been read yet. Deliberately not the
+  // signed-out copy — the user is very likely signed in already.
+  'row.accountsLoading': 'Loading your accounts…',
   // The account rows. One per locally detected sign-in, with the action that
   // matters on a multi-account machine (bind this one) at its end. The action
   // is per ACCOUNT and never a sweep: Trae allows one check-in per device per
@@ -446,6 +449,7 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.transferNoToken': '无 Token，将被跳过',
   'row.accountsRescan': '重新检测账号',
   'row.accountsScanning': '正在检测…',
+  'row.accountsLoading': '正在加载账号…',
   'row.accountsNone': '该区域没有可列出的账号。',
   'row.accountCurrentBadge': '当前使用',
   'row.accountSwitch': '切换',
