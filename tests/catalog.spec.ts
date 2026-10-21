@@ -3,7 +3,7 @@ import type { TraeDiscoveredModel } from '../src/model-metadata.ts'
 import {
   applyContextBudgets,
   applyImageSelection,
-  chatCallableModels,
+  withChatCallableFunctions,
   deriveCatalog,
   discoveredCatalog,
   FALLBACK_TRAE_MODELS,
@@ -374,8 +374,9 @@ describe('directory group function backs up the wire function', () => {
     const wire = [{ id: 'glm-5.3', name: 'GLM-5.3', function: 'solo_work_lite' }]
     const merged = mergeTraeModelSources(remote, wire)
     expect(merged.find(model => model.id === 'glm-5.3')?.wireFunction).toBe('solo_work_lite')
-    // A model with no wire row keeps its (non-chat) directory attribution, which
-    // chatCallableModels then drops.
+    // A model with no wire row keeps its (non-chat) directory attribution at
+    // the merge layer; `withChatCallableFunctions` later CLEARS it (it does not
+    // drop the row) so the bridge uses the default chat function.
     expect(merged.find(model => model.id === 'kimi-k2.8-preview')?.wireFunction).toBe('solo_agent')
   })
 
@@ -387,8 +388,12 @@ describe('directory group function backs up the wire function', () => {
   })
 })
 
-describe('chatCallableModels', () => {
-  it('keeps chat-function rows and functionless rows, drops IDE/agent roster rows', () => {
+describe('withChatCallableFunctions', () => {
+  it('keeps chat-function rows and functionless rows, and CLEARS a non-chat function instead of dropping the row', () => {
+    // Dropping the row was a regression: the directory lists exactly these
+    // models under `solo_agent` ALONE (docs/ISSUE19_DIAGNOSIS.md) and they DO
+    // answer under the default chat function, so hiding them re-undoes issue
+    // #19 on the restricted networks the fallback exists for.
     const rows = [
       { id: 'glm-5.3', name: 'GLM-5.3', wireFunction: 'solo_work_remote' },
       { id: 'glm-5.2', name: 'GLM-5.2' },
@@ -396,14 +401,18 @@ describe('chatCallableModels', () => {
       { id: 'studio-agent', name: 'Studio Agent', wireFunction: 'builder_v3' },
       { id: 'chat-only', name: 'Chat Only', wireFunction: 'chat_v3' },
     ]
-    const callable = chatCallableModels(rows, TRAE_DIRECTORY_FUNCTIONS['cn'])
-    expect(callable.map(model => model.id)).toEqual(['glm-5.3', 'glm-5.2', 'chat-only'])
+    const callable = withChatCallableFunctions(rows, TRAE_DIRECTORY_FUNCTIONS['cn'])
+    // Every row survives -- no model is silently hidden.
+    expect(callable.map(model => model.id)).toEqual(['glm-5.3', 'glm-5.2', 'kimi-k2.8-preview', 'studio-agent', 'chat-only'])
+    // Chat functions are untouched; the non-chat pin is cleared so the bridge
+    // sends the region's DEFAULT chat function instead of a roster that 4011s.
+    expect(callable.map(model => model.wireFunction)).toEqual(['solo_work_remote', undefined, undefined, undefined, 'chat_v3'])
   })
 
   it('respects the region list (solo_coder is chat for cn but not for ai)', () => {
     const rows = [{ id: 'glm-5', name: 'GLM-5', wireFunction: 'solo_coder' }]
-    expect(chatCallableModels(rows, TRAE_DIRECTORY_FUNCTIONS['cn'])).toHaveLength(1)
-    expect(chatCallableModels(rows, TRAE_DIRECTORY_FUNCTIONS['ai'])).toHaveLength(0)
+    expect(withChatCallableFunctions(rows, TRAE_DIRECTORY_FUNCTIONS['cn'])[0]?.wireFunction).toBe('solo_coder')
+    expect(withChatCallableFunctions(rows, TRAE_DIRECTORY_FUNCTIONS['ai'])[0]?.wireFunction).toBeUndefined()
   })
 })
 

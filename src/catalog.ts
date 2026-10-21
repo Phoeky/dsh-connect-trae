@@ -343,22 +343,37 @@ export function mergeTraeModelSources(
 }
 
 /**
- * Keep only rows that can be called through a chat-capable function.
+ * Demote a NON-chat `wireFunction` to "no function", keeping the row.
  *
- * A row whose `wireFunction` is a NON-chat roster — `solo_agent`, `builder_v3`
- * — is not callable through `llm_utils_chat` at all: those are IDE/Remote-agent
- * rosters and asking answers 4011/4001 (measured). Such a model must not be
- * surfaced as callable, or the user clicks a model that can only ever fail.
- * Rows with NO known function keep status quo: the bridge falls back to the
- * default function, and an upstream refusal comes back as a readable message
- * rather than a silent absence. `chatFunctions` must be the region's own
- * `TRAE_DIRECTORY_FUNCTIONS` list — the functions `llm_utils_chat` accepts.
+ * A row pinned to an IDE/Remote-agent roster — `solo_agent`, `builder_v3` — is
+ * not callable through `llm_utils_chat` by THAT function: asking answers
+ * 4011/4001 (measured 2026-10-01, issue #19). Dropping the row is not the fix,
+ * though, and was a regression: a model can carry a non-chat function for a
+ * reason that says nothing about its chat availability. The directory lists
+ * `gpt-5.5`, `gpt-5.6-*`, `gpt-6-astra`, `glm-5.2`, `kimi-k2.7-code`,
+ * `Dola-Seed-2.0-Code` and `deepseek-v4-flash-0731` under `solo_agent` ALONE
+ * (docs/ISSUE19_DIAGNOSIS.md), yet the same models answer normally under
+ * `solo_work_remote` / `solo_work_lite` / `solo_agent_remote` — they are
+ * exactly the models issue #19's fix was opened to expose. Dropping them
+ * re-hid the whole set on the restricted networks this fallback targets, where
+ * the wire roster is empty and the directory group is the only attribution.
  *
- * Callers should log the dropped rows: "why is my model missing" deserves an
- * answer, and the drop reason is the function it was pinned to.
+ * Keeping the row with the function CLEARED preserves both facts: the model
+ * stays visible (issue #19), and the bridge sends the region's DEFAULT chat
+ * function instead of one that is guaranteed to refuse. That is the pre-change
+ * behaviour for these rows — a genuinely unreachable model still fails with a
+ * readable upstream message rather than a silent absence.
+ *
+ * `chatFunctions` must be the region's own `TRAE_DIRECTORY_FUNCTIONS` list —
+ * the functions `llm_utils_chat` accepts. Callers should log the demoted rows:
+ * "which function did it lose, and why" deserves an answer.
  */
-export function chatCallableModels(rows: readonly TraeModelInfo[], chatFunctions: readonly string[]): TraeModelInfo[] {
-  return rows.filter(model => model.wireFunction === undefined || chatFunctions.includes(model.wireFunction))
+export function withChatCallableFunctions(rows: readonly TraeModelInfo[], chatFunctions: readonly string[]): TraeModelInfo[] {
+  return rows.map(model => {
+    if (model.wireFunction === undefined || chatFunctions.includes(model.wireFunction)) return model
+    const { wireFunction: _demoted, ...withoutFunction } = model
+    return withoutFunction
+  })
 }
 
 /** Local DSH context budget per model; a value may only select an advertised window. */

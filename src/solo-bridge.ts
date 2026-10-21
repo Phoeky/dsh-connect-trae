@@ -483,9 +483,18 @@ export class TraeSoloBridge implements TraeUpstreamClient {
       // reach the request: without it the call goes out under the DEFAULT
       // function and every model a non-default function serves answers
       // `4001 config_name rejected`.
-      const fromCatalog = entry === undefined || (entry.wireConfigName === undefined && entry.wireFunction === undefined)
+      //
+      // The row's own id is only the DISPLAY id, and the gateway is
+      // CASE-SENSITIVE about the `config_name` it accepts: the directory
+      // spells `deepseek-v4.1-flash` while the wire publishes
+      // `DeepSeek-V4.1-Flash` (issue #38 — the lowercase spelling answers
+      // `4001 param is invalid`). So a row WITHOUT a `wireConfigName` must
+      // NOT be treated as knowing its own wire spelling; the resolver is the
+      // only source that does, and it is consulted below.
+      const catalogConfigName = entry?.wireConfigName
+      const fromCatalog = entry === undefined || (catalogConfigName === undefined && entry.wireFunction === undefined)
         ? undefined
-        : { configName: entry.wireConfigName ?? entry.id, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
+        : { configName: catalogConfigName ?? entry.id, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
       const fromResolver = this.wireResolver?.(model) ?? this.wireResolver?.(entry?.name ?? '')
       /**
        * The catalog row wins the config_name, but it may not know the function.
@@ -498,14 +507,36 @@ export class TraeSoloBridge implements TraeUpstreamClient {
        * directory, so borrowing its function is safe exactly when both sources
        * agree on the wire config_name; a disagreement means the resolver found
        * a different row and its function would be wrong.
+       *
+       * The MIRROR case is equally load-bearing and is the reason the row's own
+       * id is not accepted as its wire spelling: a row that carries only the
+       * FUNCTION (`wireConfigName` absent) has no config_name of its own, and
+       * its display id is the wrong-cased spelling of the wire name in exactly
+       * the cases issue #38 is about. The resolver's config_name is then the
+       * only correct one, so it must win for the NAME while the row keeps
+       * winning for the FUNCTION.
        */
       const sameWireConfig = fromCatalog !== undefined && fromResolver !== undefined
         && fromCatalog.configName.toLowerCase() === fromResolver.configName.toLowerCase()
+      /**
+       * Whether the catalog row knows its own wire `config_name` (as opposed to
+       * only carrying the display id plus a function). Only such a row may
+       * decide the name on its own.
+       */
+      const catalogKnowsConfigName = catalogConfigName !== undefined
       const target = fromCatalog !== undefined && fromCatalog.function === undefined
         && sameWireConfig && fromResolver !== undefined
         ? {
             configName: fromCatalog.configName,
             ...fromResolver.function === undefined ? {} : { function: fromResolver.function },
+          }
+        // The row knows the function but not the name: the resolver's
+        // config_name is authoritative (issue #38's casing), and the row's
+        // function is authoritative (the directory group it was found under).
+        : fromCatalog !== undefined && !catalogKnowsConfigName && fromResolver !== undefined
+        ? {
+            configName: fromResolver.configName,
+            ...fromCatalog.function === undefined ? {} : { function: fromCatalog.function },
           }
         : fromCatalog ?? fromResolver
       /**

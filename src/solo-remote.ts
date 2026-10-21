@@ -145,13 +145,34 @@ export class TraeSoloRemoteCatalogClient {
   private readonly fetchImpl: typeof fetch
   private readonly baseUrl: string | undefined
   /**
-   * The last base that answered the directory in this process. A proxy-blocked
-   * network pays the failing official attempt on EVERY refresh otherwise; once
-   * a backup has served the catalog it is tried first on later refreshes, with
-   * the official base kept as the second candidate so it is re-attempted every
-   * refresh (and takes over again the moment the network heals).
+   * The last base that answered the directory with a NON-EMPTY catalog in this
+   * process.
+   *
+   * A proxy-blocked network pays the failing official attempt on EVERY refresh
+   * otherwise, so a backup that has served the catalog is tried first on later
+   * refreshes. Putting the official base "second" is NOT enough to re-probe it:
+   * the loop returns on the first success, so a backup that keeps answering
+   * means the official base is never asked again. The official host is
+   * therefore re-probed on a COOLDOWN instead (see {@link OFFICIAL_RETRY_MS}):
+   * while the cooldown runs the backup is used and the official host is
+   * skipped; when it expires the official host is tried FIRST again, so a
+   * healed network takes over within one cooldown window rather than never.
    */
   private lastSuccessfulBase: string | undefined
+  /**
+   * When the official base may be probed again after a transport/5xx failure,
+   * as epoch milliseconds (0 = probe it on the next refresh).
+   */
+  private officialRetryAtMs = 0
+  /**
+   * How long a failing official host is skipped before it is re-probed.
+   *
+   * Long enough that a blocked network stops paying the failing attempt on
+   * every refresh (the point of the fallback), short enough that a healed
+   * network takes over without a restart. Each probe costs one connect timeout
+   * (30 s) in the worst case, so 5 minutes bounds that to ~1 attempt per 5 min.
+   */
+  private static readonly OFFICIAL_RETRY_MS = 5 * 60_000
 
   constructor(private readonly options: TraeSoloRemoteCatalogOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch
@@ -185,12 +206,19 @@ export class TraeSoloRemoteCatalogClient {
     // gateway's mirrored /api/remote/v1 base. Fallback happens ONLY when the
     // attempt failed to connect or answered 5xx — a 401/403/404/429 is a
     // semantic verdict of the host being tried (token problem, proxy policy,
-    // missing route) and must not be re-issued against another base. The last
-    // successful base is remembered in-process and tried FIRST on later
-    // refreshes (official second), so a restricted network stops paying the
-    // failing attempt on every refresh while still re-probing the official
-    // host each time.
+    // missing route) and must not be re-issued against another base.
+    //
+    // A 200 with an EMPTY catalog is NOT a host failure, but it is not the end
+    // of the chain either: it is a statement about THAT host. Treating it as
+    // final let a backup that answers 200-but-empty (a mirror that has not
+    // synced, a proxy that strips the body) permanently shadow the official
+    // host — the empty answer was remembered as "successful", the backup was
+    // then tried first on every later refresh, and its empty answer aborted
+    // before the official host was ever reached again. The chain therefore
+    // continues past an empty answer, and a base is only remembered once it has
+    // actually produced models.
     let lastError: unknown
+    let emptyError: Error | undefined
     for (const base of this.candidateBases(region, officialBase)) {
       let response: Response
       try {
@@ -201,49 +229,73 @@ export class TraeSoloRemoteCatalogClient {
         // caller-aborted signal must propagate, though: that is the caller's
         // decision, not a host failure.
         if (signal?.aborted) throw error
+        if (base === officialBase) this.officialRetryAtMs = Date.now() + TraeSoloRemoteCatalogClient.OFFICIAL_RETRY_MS
         lastError = error
         continue
       }
       if (!response.ok) {
         if (response.status < 500) throw new Error(`SOLO remote models returned HTTP ${response.status}`)
+        if (base === officialBase) this.officialRetryAtMs = Date.now() + TraeSoloRemoteCatalogClient.OFFICIAL_RETRY_MS
         lastError = new Error(`SOLO remote models returned HTTP ${response.status}`)
         continue
       }
-      if (base !== officialBase && this.lastSuccessfulBase !== base) {
-        this.options.log?.(`model directory served by fallback host ${base}; the official host (${officialBase}) failed this refresh`, { officialBase })
-      }
-      this.lastSuccessfulBase = base
       const json = await response.json() as { code?: number; data?: { list?: { function?: string; models?: unknown[] }[] } }
       const models = this.collectModels(region, json.data?.list ?? [])
-      // An empty catalog is a semantic answer ("nothing to serve"), not a host
-      // failure — no fallback for it.
-      if (models.length === 0) throw new Error('SOLO remote models response contained no models')
+      if (models.length === 0) {
+        // This host answered, but with nothing to serve: not a success (do not
+        // remember it) and not a failure of the chain (try the next base).
+        emptyError = new Error('SOLO remote models response contained no models')
+        lastError = emptyError
+        continue
+      }
+      if (base !== officialBase) {
+        this.options.log?.(
+          this.lastSuccessfulBase === base
+            ? `model directory served by the remembered fallback host ${base}; the official host (${officialBase}) is re-probed every ${TraeSoloRemoteCatalogClient.OFFICIAL_RETRY_MS / 60_000} minutes`
+            : `model directory served by fallback host ${base}; the official host (${officialBase}) failed this refresh`,
+          { officialBase },
+        )
+      } else {
+        // The official host answered: leave the cooldown state.
+        this.officialRetryAtMs = 0
+      }
+      this.lastSuccessfulBase = base
       return models
     }
+    // An empty answer is the more informative reason when every base that
+    // answered said "nothing here"; otherwise report the transport/HTTP error.
+    if (emptyError !== undefined) throw emptyError
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
   }
 
-  /** Bases to try for one refresh, in order (see the field note on {@link lastSuccessfulBase}). */
+  /**
+   * Bases to try for one refresh, in order.
+   *
+   * While the official host is in its post-failure cooldown the backup hosts go
+   * first and the official base is kept LAST as a final chance (so a still-down
+   * backup does not fail the whole refresh while the official host happens to
+   * be reachable). Once the cooldown expires the official base is first again:
+   * that is what lets a healed network take over — the loop returns on the
+   * first success, so simply placing the official base second never re-probes
+   * it while a backup keeps answering.
+   */
   private candidateBases(region: TraeRegion, officialBase: string): string[] {
     // An explicit baseUrl (tests, diagnostics) pins the endpoint: no fallback
     // chain, exactly the pre-fallback behavior.
     if (this.baseUrl !== undefined) return [officialBase]
-    if (this.lastSuccessfulBase === undefined || this.lastSuccessfulBase === officialBase) {
-      return [officialBase, ...traeSoloRemoteFallbackBases(region, officialBase)]
-    }
-    // The remembered host is a backup: try it first, but keep the official base
-    // SECOND so it is re-attempted on this very refresh — a healed network
-    // takes over immediately, and a still-blocked one costs one extra attempt.
+    const fallbacks = traeSoloRemoteFallbackBases(region, officialBase)
+    if (this.officialRetryAtMs <= Date.now()) return [officialBase, ...fallbacks]
+    const remembered = this.lastSuccessfulBase
     return [
-      this.lastSuccessfulBase,
+      ...remembered === undefined ? [] : [remembered],
+      ...fallbacks.filter(base => base !== remembered),
       officialBase,
-      ...traeSoloRemoteFallbackBases(region, officialBase).filter(base => base !== this.lastSuccessfulBase),
     ]
   }
 
   /**
    * Union every returned group into one deduplicated list, attributing each
-   * model to the directory function it was FIRST seen under.
+   * model to the CHAT function the directory listed it under.
    *
    * Each group is a roster the gateway is willing to serve; a model listed by
    * any of them is a model the IDE can offer, and the wire join downstream (see
@@ -251,21 +303,40 @@ export class TraeSoloRemoteCatalogClient {
    * Restricting this to `solo_agent_remote` dropped the nine models issue #19
    * was opened about.
    *
-   * FUNCTION ATTRIBUTION (2026-10-20): the group is the authoritative statement
-   * of which SOLO function the model belongs to — the accepted `config_name`
-   * is isolated per function (glm-5.3 answers `solo_work_remote` and 4001s
-   * under `solo_work_lite`). The wire join prefers its own `get_detail_param`
+   * FUNCTION ATTRIBUTION (2026-10-20): a group is the authoritative statement
+   * of which SOLO function a model belongs to — the accepted `config_name` is
+   * isolated per function (glm-5.3 answers `solo_work_remote` and 4001s under
+   * `solo_work_lite`). The wire join prefers its own `get_detail_param`
    * function and falls back to this one when the roster says nothing, which
    * restricted networks often do (measured: an empty `config_info_list` for
-   * every chat function but `chat_v3`). Chat-capable groups are walked FIRST,
-   * in the request's `functions=` order, then the IDE/agent rosters: a model a
-   * chat function lists must be attributed to that chat function even when a
-   * non-chat group (`solo_agent`, `builder_v3`) appeared EARLIER in the request
-   * — those rosters answer 4011/4001 for `llm_utils_chat`, so a plain
-   * request-order first-wins would attribute `solo_agent` to models that ARE
-   * callable (Doubao-Seed-Code lives on `solo_agent_remote`) and turn working
-   * chats into 4001s. A model that only a non-chat group lists keeps that
-   * attribution so the caller can exclude it (see `chatCallableModels`).
+   * every chat function but `chat_v3`).
+   *
+   * ONLY CHAT-CAPABLE GROUPS ARE ATTRIBUTED. `solo_agent` and `builder_v3` are
+   * IDE/Remote-agent rosters: asking `llm_utils_chat` with either answers
+   * 4011/4001 (measured 2026-10-01 on a live credential, issue #19). A model
+   * that appears ONLY there is still not uncallable, though — the SAME models
+   * answered normally under `solo_work_remote` / `solo_work_lite` /
+   * `solo_agent_remote` (measured the same day, see `TRAE_DIRECTORY_FUNCTIONS`
+   * in solo.ts), and the default function is what has always reached them:
+   * they are exactly the nine models issue #19's fix exposes (`gpt-5.5`,
+   * `gpt-5.6-*`, `gpt-6-astra`, `glm-5.2`, `kimi-k2.7-code`,
+   * `Dola-Seed-2.0-Code`, `deepseek-v4-flash-0731` — docs/ISSUE19_DIAGNOSIS.md).
+   * Stamping `solo_agent` onto such a row makes every call 4011; DROPPING it
+   * undoes issue #19 for exactly the restricted-network users this fallback
+   * exists for. It therefore keeps NO function, the bridge falls back to the
+   * default chat function exactly as before this change, and a refusal (if the
+   * model really is unreachable) comes back as a readable upstream message
+   * instead of a silent absence.
+   *
+   * CHAT GROUPS ARE WALKED IN `TRAE_DIRECTORY_FUNCTIONS` ORDER, not in the
+   * request's `functions=` order. That list is the measured precedence of which
+   * function serves a shared config, and it is the order the wire roster itself
+   * collects in (`solo.ts`) — walking a different order would attribute the
+   * same model differently depending on whether the roster answered, and the
+   * difference is not cosmetic: `solo_agent_remote` sits after the two
+   * `solo_work_*` functions because it is behind the Remote plan gate, so
+   * preferring it can turn a free-tier model into a `1005 requires a paid
+   * plan` refusal.
    *
    * A model appears in SEVERAL groups and the groups disagree about its
    * capacity, so dedupe keeps the MOST CAPABLE row rather than the first one
@@ -295,34 +366,53 @@ export class TraeSoloRemoteCatalogClient {
     // separately because preferStrongerRow may replace the row with one from a
     // LATER group.
     const attributedFunction = new Map<string, string>()
+    /**
+     * The function a row may be stamped with: only a CHAT function. A non-chat
+     * roster is not "the function this model belongs to" in any sense the chat
+     * route can use (see the method note above), so it is not recorded at all.
+     */
+    const chatFunctions = new Set(TRAE_DIRECTORY_FUNCTIONS[region])
+    const attribution = (groupFunction: string | undefined): string | undefined =>
+      groupFunction !== undefined && chatFunctions.has(groupFunction) ? groupFunction : undefined
     const addGroup = (groupFunction: string | undefined, raws: readonly unknown[]): void => {
+      const fn = attribution(groupFunction)
       for (const raw of raws) {
-        const model = parseTraeRemoteModel(raw, groupFunction)
+        const model = parseTraeRemoteModel(raw, fn)
         if (model === undefined) continue
-        if (groupFunction !== undefined && !attributedFunction.has(model.id)) attributedFunction.set(model.id, groupFunction)
+        if (fn !== undefined && !attributedFunction.has(model.id)) attributedFunction.set(model.id, fn)
         byId.set(model.id, preferStrongerRow(model, byId.get(model.id)))
       }
     }
-    const requested = TRAE_REMOTE_DIRECTORY_FUNCTIONS[region]
-    const byName = new Map<string, { function?: string; models?: unknown[] } | undefined>()
-    for (const group of groups) byName.set(group.function ?? '', group)
-    const chatFunctions = new Set(TRAE_DIRECTORY_FUNCTIONS[region])
-    // Pass 1: chat-capable groups only, in the request's functions= order.
-    for (const name of requested) {
-      if (!chatFunctions.has(name)) continue
-      const group = byName.get(name)
-      if (group !== undefined) addGroup(name, group.models ?? [])
-    }
-    // Pass 2: the remaining requested groups (IDE/agent rosters), same order.
-    for (const name of requested) {
-      if (chatFunctions.has(name)) continue
-      const group = byName.get(name)
-      if (group !== undefined) addGroup(name, group.models ?? [])
-    }
-    // Pass 3: groups the gateway returned that the request did not name.
+    /**
+     * Every group the gateway sent, bucketed BY FUNCTION NAME and kept as a
+     * LIST.
+     *
+     * A name→group `Map` would keep only the LAST group of a name and silently
+     * drop the models of every earlier one: nothing documents that the gateway
+     * sends a function at most once, and the pre-change code unioned every
+     * element of `data.list`, so a repeated name lost real models. Bucketing
+     * keeps that union while the walk below still imposes a deterministic
+     * order.
+     */
+    const byFunction = new Map<string, { function?: string; models?: unknown[] }[]>()
     for (const group of groups) {
-      if (requested.includes(group.function ?? '')) continue
-      addGroup(group.function, group.models ?? [])
+      const key = group.function ?? ''
+      const bucket = byFunction.get(key)
+      if (bucket === undefined) byFunction.set(key, [group])
+      else bucket.push(group)
+    }
+    // Pass 1: the chat-capable groups, in the wire roster's own precedence
+    // order (see `TRAE_DIRECTORY_FUNCTIONS`), each bucket in response order.
+    for (const name of TRAE_DIRECTORY_FUNCTIONS[region]) {
+      for (const group of byFunction.get(name) ?? []) addGroup(name, group.models ?? [])
+    }
+    // Pass 2: every remaining group (IDE/agent rosters and anything the request
+    // did not name). Their models are still unioned — "the IDE shows it" is a
+    // fact about the account — but they carry no function, so the bridge asks
+    // through the default chat function as it always has.
+    for (const [name, bucket] of byFunction) {
+      if (chatFunctions.has(name)) continue
+      for (const group of bucket) addGroup(name, group.models ?? [])
     }
     return [...byId.values()].map(model => {
       const fn = attributedFunction.get(model.id)

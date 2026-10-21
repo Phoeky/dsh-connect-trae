@@ -22,7 +22,7 @@ import { configuredAccountsOf, unwrapVolatile, unwrapVolatileDeep } from './stat
 import type { TraeAdapter } from './adapter.ts'
 import { isTraeAccountId, traeAccountId, TraeCredentialStore } from './auth.ts'
 import { piAiRuntimeInfo } from './pi-ai-runtime.ts'
-import { applyImageSelection, chatCallableModels, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, withChatCallableFunctions, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { readTraeIdentity, resolveTraeIdentity, type TraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
@@ -1113,17 +1113,20 @@ export function apply(ctx: Context, config: Config): void {
         const wireModels = await solo.fetchModels(signal)
         const merged = mergeTraeModelSources(remote, wireModels)
         // A row whose function is a NON-chat roster (solo_agent, builder_v3) is
-        // not callable through llm_utils_chat at all — asking answers 4011/4001
-        // — so it must not surface as a callable model. The attribution reaches
-        // the merge when the wire roster had no row for the model (restricted
-        // networks often return an empty config_info_list), so the rows dropped
-        // here are exactly the ones a working roster would also exclude; each
-        // one is logged with its function as the reason.
-        const callable = chatCallableModels(merged, TRAE_DIRECTORY_FUNCTIONS[region])
-        const callableSet = new Set(callable)
+        // not callable through llm_utils_chat BY THAT FUNCTION — asking answers
+        // 4011/4001. The row is KEPT and only the function is cleared, so the
+        // bridge falls back to the default chat function. Dropping it would
+        // re-hide the nine `solo_agent`-only models issue #19 was opened about
+        // (gpt-5.5, gpt-5.6-*, gpt-6-astra, glm-5.2, kimi-k2.7-code,
+        // Dola-Seed-2.0-Code, deepseek-v4-flash-0731) precisely on a restricted
+        // network, where the directory group is the only attribution there is —
+        // and those models DO answer under the default function (measured). See
+        // `withChatCallableFunctions` for the full trail.
+        const callable = withChatCallableFunctions(merged, TRAE_DIRECTORY_FUNCTIONS[region])
+        const chatFunctions = TRAE_DIRECTORY_FUNCTIONS[region]
         for (const model of merged) {
-          if (callableSet.has(model)) continue
-          ctx.logger.warn(`model directory row is not callable through any chat function and was dropped: ${model.id} (pinned to function ${model.wireFunction})`)
+          if (model.wireFunction === undefined || chatFunctions.includes(model.wireFunction)) continue
+          ctx.logger.warn(`model directory row is pinned to a non-chat function and will be called through the default chat function instead: ${model.id} (pinned to function ${model.wireFunction})`)
         }
         // Record every callable display key (id and name) so stale saved
         // catalogs are filtered against the live wire map and dead
