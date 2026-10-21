@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### 修复
+
+- **受限网络下模型目录走聊天网关备用 host，目录分组 function 兜底 `wireFunction`**（`fix(cn)`）。企业网只放行
+  少数域名时，`solo.trae.cn` 的 CONNECT 被代理拒绝（403）→「刷新模型」500 fetch failed → 目录行拿不到
+  `get_detail_param` 的 function（可聊 function 的 `config_info_list` 为空）→ 聊天按默认 `solo_work_lite`
+  发请求 → 模型不在该 function 的 config 名单里就 4001（`config_name rejected`）。修复分三层：
+  - **目录 host 回退**：官方 remote host 网络错误 / 超时 / 5xx 时，按序尝试聊天网关的同一路径
+    （CN 为 `trae-api-cn.mchost.guru/api/remote/v1`，实测同路径同响应结构）；401/403/404 等语义性拒绝**不回退**。
+    进程内记住最近一次成功的 host，后续刷新先走它，官方 host 仍是首选（下次刷新重试）。回退只作用于
+    remote/v1 目录这一个 base；`get_detail_param`、`llm_utils_chat` 照旧走各自原有 host。
+  - **目录分组 function 归因**：`fetchModels` 不再丢弃 `data.list[].function`——解析时把分组 function 附到每个
+    模型（同一模型出现于多个分组时，可聊分组优先、请求顺序先到先得）；`mergeTraeModelSources` 的 `wireFunction`
+    优先取 `get_detail_param` 的结论，目录分组兜底（roster 知道账号的付费/可用状态，目录不知道）。
+  - **只暴露可聊 function 下的模型**：`solo_work_remote / solo_work_lite / solo_agent_remote / chat_v3 / solo_coder`
+    之外的目录行（`solo_agent`、`builder_v3` 是 IDE/Remote-agent roster，聊天通道实测 4011/4001）不再以
+    「可调用」状态出现，被过滤并记日志；仅带 `wireFunction`（无 `wireConfigName`）的目录行，聊天请求也会带上
+    该 function（`config_name` 退回模型 id）。默认 function 与 fallback 模型常量未动。
+  - 回归用例：host 回退（官方网络错误 → 备用 host 同路径同查询；401 不回退；5xx 回退；空目录不回退；
+    记忆最近成功 host；显式 baseUrl 钉住单 host）、分组 function 归因（可聊分组优先；容量来自后分组时保留
+    先到先得的 function）、合并兜底与 `chatCallableModels` 过滤、bridge 对 wireFunction-only 目录行的处理。
+  - 全仓 **917** 例通过，0 skipped；`tsc` 两个工程干净；`build` 通过。
+
 ## 4.0.1 (2026-10-19)
 
 > CN 区模型卡「最大输出」整列空白（issue #42）修复：上游**是**发布输出上限的——`get_detail_param` 的

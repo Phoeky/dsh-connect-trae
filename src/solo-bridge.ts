@@ -476,10 +476,16 @@ export class TraeSoloBridge implements TraeUpstreamClient {
       const entryKey = model.trim().toLowerCase()
       const entry = this.catalog?.current().find(item => item.id === model || item.id.trim().toLowerCase() === entryKey)
       // The catalog row carries both halves once discovery has run; the
-      // resolver covers ids that came from elsewhere (startup wire map).
-      const fromCatalog = entry?.wireConfigName === undefined
+      // resolver covers ids that came from elsewhere (startup wire map). A row
+      // may carry ONLY the function — a restricted network whose
+      // `get_detail_param` roster came back empty, plus the directory-group
+      // fallback in mergeTraeModelSources — and that half alone must still
+      // reach the request: without it the call goes out under the DEFAULT
+      // function and every model a non-default function serves answers
+      // `4001 config_name rejected`.
+      const fromCatalog = entry === undefined || (entry.wireConfigName === undefined && entry.wireFunction === undefined)
         ? undefined
-        : { configName: entry.wireConfigName, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
+        : { configName: entry.wireConfigName ?? entry.id, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
       const fromResolver = this.wireResolver?.(model) ?? this.wireResolver?.(entry?.name ?? '')
       /**
        * The catalog row wins the config_name, but it may not know the function.

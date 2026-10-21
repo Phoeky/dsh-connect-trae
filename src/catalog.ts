@@ -303,6 +303,16 @@ export function mergeTraeModelSources(
     // directory's own `consumption_rate` can report up to 10x the undiscounted
     // value under a live promotion (e.g. 0.80 vs the IDE's 0.08).
     const creditMultiplier = wireModel?.creditMultiplier ?? model.creditMultiplier
+    // The function `llm_utils_chat` must be asked through. The wire function
+    // (`get_detail_param`'s opinion) wins whenever present; the Remote
+    // directory's OWN group function backs it up. A restricted network often
+    // returns an empty `config_info_list` for the chat functions, so without
+    // the directory fallback every row would carry no `wireFunction` and the
+    // bridge would send the default `solo_work_lite` — which 4001s for any
+    // model that a non-default function serves (glm-5.3 lives on
+    // `solo_work_remote`). Directory attribution itself never overrides a wire
+    // answer: the roster knows the paid/entitled state the directory cannot.
+    const wireFunction = wireModel?.function ?? model.function
     result.push({
       id: model.id,
       name: model.name,
@@ -326,10 +336,29 @@ export function mergeTraeModelSources(
         reasoningEfforts: Object.fromEntries(model.reasoning.supported.map(effort => [effort, effort === 'low' ? 'light' : effort === 'xhigh' ? 'extra_high' : 'high'])) as Partial<Record<TraeReasoningEffort, string>>,
       },
       ...wireModel !== undefined && wireModel.id !== '' && wireModel.id !== model.id ? { wireConfigName: wireModel.id } : {},
-      ...wireModel?.function === undefined ? {} : { wireFunction: wireModel.function },
+      ...wireFunction === undefined ? {} : { wireFunction },
     })
   }
   return result
+}
+
+/**
+ * Keep only rows that can be called through a chat-capable function.
+ *
+ * A row whose `wireFunction` is a NON-chat roster — `solo_agent`, `builder_v3`
+ * — is not callable through `llm_utils_chat` at all: those are IDE/Remote-agent
+ * rosters and asking answers 4011/4001 (measured). Such a model must not be
+ * surfaced as callable, or the user clicks a model that can only ever fail.
+ * Rows with NO known function keep status quo: the bridge falls back to the
+ * default function, and an upstream refusal comes back as a readable message
+ * rather than a silent absence. `chatFunctions` must be the region's own
+ * `TRAE_DIRECTORY_FUNCTIONS` list — the functions `llm_utils_chat` accepts.
+ *
+ * Callers should log the dropped rows: "why is my model missing" deserves an
+ * answer, and the drop reason is the function it was pinned to.
+ */
+export function chatCallableModels(rows: readonly TraeModelInfo[], chatFunctions: readonly string[]): TraeModelInfo[] {
+  return rows.filter(model => model.wireFunction === undefined || chatFunctions.includes(model.wireFunction))
 }
 
 /** Local DSH context budget per model; a value may only select an advertised window. */
@@ -366,6 +395,10 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeM
       // See mergeTraeModelSources: the upstream flag travels with the row so the
       // one later image pass can union it with the user's explicit opt-ins.
       ...model.multimodal === undefined ? {} : { multimodal: model.multimodal },
+      // The directory group the model was discovered under (see
+      // TraeDiscoveredModel.function) — carried as `wireFunction` so the bridge
+      // replays the model's own function even without a wire roster.
+      ...model.function === undefined ? {} : { wireFunction: model.function },
       reasoningSupported: model.reasoningSupported,
       ...model.reasoning === undefined ? {} : {
         reasoning: model.reasoning,
